@@ -19,3 +19,13 @@ linters:
               desc: singleflight is hand-written in internal/cache
             - pkg: github.com/go-redis/redis_rate
               desc: rate limiting is hand-written in internal/limiter
+
+        # The mock upstream is test infrastructure; production code must
+        # not import it (experiments talk to it over HTTP).
+        mockllm-stays-test-harness:
+          files:
+            - "!**/cmd/mockllm/**"
+            - "!**/internal/mockllm/**"
+          deny:
+            - pkg: github.com/daftpunkwav/breakwater/internal/mockllm
+              desc: mock upstream is test infrastructure, only cmd/mockllm may import it
