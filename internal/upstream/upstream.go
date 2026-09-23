@@ -3,15 +3,25 @@
  * @description The upstream port implemented by every provider adapter.
  *
  * Responsibilities:
- * - Define the single surface governance layers see: forwarding, health
- *   probing and identity
- * - Nothing else: protocol differences (payload normalization, usage
- *   extraction) belong to each adapter
+ * - Define the single surface governance layers see: forwarding, stream
+ *   decoding, usage extraction and health probing
+ * - Nothing else: protocol differences (payload translation, provider
+ *   quirks) belong to each adapter
  *
  * Adding a provider means adding an implementation of this port; the
  * governance layers must not change (frozen architectural decision).
- * The forwarding surface will be refined when streaming semantics are
- * implemented and must not grow provider-specific members.
+ *
+ * Result convention (frozen):
+ * - Forward reports every completed HTTP exchange — including 4xx and
+ *   5xx responses — as a non-nil Response. A non-nil error means the
+ *   exchange did not complete (connection failure, timeout, context
+ *   cancellation).
+ * - Callers classify retryability from the pair (retry layer) and
+ *   health from the exchange alone (circuit layer); the port does not
+ *   classify on their behalf.
+ *
+ * The usage extraction surface joins with the streaming implementation
+ * and must stay provider-neutral.
  */
 package upstream
 
@@ -27,12 +37,16 @@ type Request struct {
 	Model string
 	// Stream reports whether a streaming (SSE) response is expected.
 	Stream bool
-	// Payload is the request body, already normalized for the provider.
-	Payload []byte
+	// Body is the neutral, OpenAI-format request body. Translating it to
+	// the provider's wire format is the adapter's job, so failover can
+	// re-translate the same body for a different provider.
+	Body []byte
 }
 
 // Response is an upstream reply. Body is streamed and must be closed by
 // the caller; for SSE responses the caller consumes it chunk by chunk.
+// Header must be treated as read-only by callers; implementations that
+// reuse internal buffers must return a private copy.
 type Response struct {
 	StatusCode int
 	Header     http.Header
@@ -43,8 +57,9 @@ type Response struct {
 type Upstream interface {
 	// ID identifies the upstream instance for routing and breaker state.
 	ID() string
-	// Forward performs exactly one attempt; attempt timeout and
-	// cancellation are owned by the retry layer through ctx.
+	// Forward performs exactly one attempt under the result convention
+	// in the file header; attempt timeout and cancellation are owned by
+	// the retry layer through ctx.
 	Forward(ctx context.Context, req Request) (*Response, error)
 	// Probe reports whether the upstream currently accepts traffic.
 	Probe(ctx context.Context) error
