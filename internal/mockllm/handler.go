@@ -15,6 +15,7 @@ package mockllm
 
 import (
 	"encoding/json"
+	"errors"
 	"math/rand/v2"
 	"net/http"
 	"time"
@@ -60,9 +61,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "health probe requires GET")
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
+		handleHealth(w, r)
 	case "/v1/chat/completions":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "completions require POST")
@@ -99,6 +98,11 @@ func (h *Handler) handleCompletion(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxRequestBytes)
 	var req completionRequest
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the accepted size")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid_request", "malformed JSON body")
 		return
 	}

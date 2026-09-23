@@ -377,3 +377,20 @@ func TestRouting(t *testing.T) {
 		t.Errorf("malformed body status = %d, want 400", resp.StatusCode)
 	}
 }
+
+func TestBodyTooLarge(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(New(Options{}))
+	t.Cleanup(srv.Close)
+
+	huge := strings.Repeat("a", maxRequestBytes+1024)
+	body := `{"model":"mock-gpt","messages":[{"role":"user","content":"` + huge + `"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}
