@@ -16,7 +16,7 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: breakwater
-      POSTGRES_PASSWORD: breakwater
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-breakwater}
       POSTGRES_DB: breakwater
     ports:
       - "127.0.0.1:5432:5432"
