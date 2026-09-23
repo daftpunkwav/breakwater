@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # Project discipline: reliability mechanisms are hand-written.
+        # Third-party governance libraries are rejected at lint time.
+        no-off-the-shelf-governance:
+          deny:
+            - pkg: github.com/sony/gobreaker
+              desc: circuit breaker is hand-written in internal/circuit
+            - pkg: golang.org/x/time/rate
+              desc: token bucket is hand-written in internal/limiter
+            - pkg: golang.org/x/sync/singleflight
+              desc: singleflight is hand-written in internal/cache
+            - pkg: github.com/go-redis/redis_rate
+              desc: rate limiting is hand-written in internal/limiter
