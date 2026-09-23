@@ -41,7 +41,7 @@ func main() {
 		ShutdownGrace: cfg.Server.ShutdownGrace,
 	})
 
-	logger.Info("gateway listening", "addr", cfg.Server.Addr)
+	logger.Info("gateway starting", "addr", cfg.Server.Addr)
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("server terminated", "error", err)
 		os.Exit(1)

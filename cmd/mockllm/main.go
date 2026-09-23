@@ -6,22 +6,20 @@
  *
  * Responsibilities:
  * - Parse process flags
- * - Assemble and run the mock HTTP server with graceful shutdown
+ * - Assemble the mock handler and hand it to the shared server lifecycle
  */
 package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/httpserver"
 	"github.com/daftpunkwav/breakwater/internal/mockllm"
 )
 
@@ -40,40 +38,16 @@ func main() {
 		ErrorRate:    *errorRate,
 	})
 
-	httpServer := &http.Server{
-		Addr:              *addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	listener, err := net.Listen("tcp", *addr)
-	if err != nil {
-		logger.Error("listen failed", "addr", *addr, "error", err)
-		os.Exit(1)
-	}
-	logger.Info("mock upstream listening", "addr", listener.Addr().String())
-
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- httpServer.Serve(listener)
-	}()
-
-	select {
-	case err := <-serveErr:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server failed", "error", err)
-			os.Exit(1)
-		}
-	case <-ctx.Done():
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Error("shutdown failed", "error", err)
+	logger.Info("mock upstream starting", "addr", *addr)
+	if err := httpserver.Run(ctx, httpserver.Options{
+		Addr:          *addr,
+		Handler:       handler,
+		ShutdownGrace: 10 * time.Second,
+	}); err != nil {
+		logger.Error("mock upstream terminated", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("mock upstream stopped")

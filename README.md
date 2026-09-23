@@ -15,7 +15,8 @@ by reproducible tests, metrics and fault-injection experiments.
 | --------------------- | --------------------------------------------------------- |
 | `cmd/breakwater`      | Gateway binary                                            |
 | `cmd/mockllm`         | Mock OpenAI-compatible upstream with fault injection      |
-| `internal/server`     | HTTP lifecycle, routing, graceful shutdown                |
+| `internal/server`     | Gateway route assembly                                    |
+| `internal/httpserver` | Shared HTTP lifecycle (serve, drain, graceful shutdown)   |
 | `internal/config`     | Configuration schema and loading                          |
 | `internal/pipeline`   | Ordered middleware composition                            |
 | `internal/obs`        | Access log contracts (bounded, never blocking)            |
