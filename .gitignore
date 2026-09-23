@@ -1,0 +1,24 @@
+# Internal design docs and local-only instructions never enter the repository
+docs-local/
+AGENTS.local.md
+CLAUDE.local.md
+
+# Build artifacts
+/bin/
+*.exe
+*.test
+
+# Coverage and profiling output
+*.out
+coverage.txt
+coverage.html
+
+# Local environment files
+.env
+.env.*
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
