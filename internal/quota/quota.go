@@ -3,22 +3,28 @@
  * @description Quota ledger contracts: the lease model.
  *
  * Responsibilities:
- * - Define the lease lifecycle (RESERVED -> SETTLED | EXPIRED | CANCELLED)
- *   and the ledger port
- * - Nothing else: atomic reservation scripts, the sweeper and the
- *   reconciliation protocol belong to the implementation
+ * - Own the monetary balance ledger and the lease lifecycle
+ *   (RESERVED -> SETTLED | EXPIRED | CANCELLED)
+ * - Nothing else: time-window throughput protection (RPM/TPM) belongs to
+ *   the limiter module; token estimation (prompt estimate + max_tokens
+ *   clamp) is computed once by the pipeline layer and passed to both
+ * - Atomic reservation scripts, the sweeper and the reconciliation
+ *   protocol belong to the implementation
  *
  * Invariants carried by this contract:
  * - I3: no over-draft from concurrency; initial balance = current balance
  *   + consumed - refunded must always reconcile to zero error
  * - I9: every reservation has a lease record; reservations outside the
  *   settled set are reclaimed by the sweeper
+ *
+ * A balance query member joins when the minimal admin API lands.
  */
 package quota
 
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // LeaseState enumerates the lease lifecycle.
@@ -43,6 +49,8 @@ type Lease struct {
 	// Amount is the reserved token budget.
 	Amount int64
 	State  LeaseState
+	// CreatedAt orders leases for sweeper scans and reconciliation views.
+	CreatedAt time.Time
 }
 
 // ErrInsufficientBalance reports a reservation denied because the tenant
@@ -58,8 +66,14 @@ type Ledger interface {
 	// Settle reconciles a live lease against actual usage: the difference
 	// (reserved - used) is refunded when positive and never surcharged
 	// when negative.
+	//
+	// Settling a lease that already reached a terminal state (settled,
+	// expired, cancelled) must be a detectable no-op: no double refund,
+	// the event surfaced through a counter or log. Long streams can
+	// outlive the sweeper TTL, so late settles are expected, not errors.
 	Settle(ctx context.Context, leaseID string, usedTokens int64) error
 	// Cancel releases a live lease without consumption (e.g. the request
-	// was rejected before reaching an upstream).
+	// was rejected before reaching an upstream). Cancelling a terminal
+	// lease follows the same no-op rule as Settle.
 	Cancel(ctx context.Context, leaseID string) error
 }
