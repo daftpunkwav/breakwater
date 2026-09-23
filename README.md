@@ -17,6 +17,8 @@ by reproducible tests, metrics and fault-injection experiments.
 | `cmd/mockllm`         | Mock OpenAI-compatible upstream with fault injection      |
 | `internal/server`     | Gateway route assembly                                    |
 | `internal/httpserver` | Shared HTTP lifecycle (serve, drain, graceful shutdown)   |
+| `internal/protocol`   | External wire contract: OpenAI schema, SSE codec          |
+| `internal/relay`      | Response-side execution engine (reserved; lands with the forwarding milestone) |
 | `internal/config`     | Configuration schema and loading                          |
 | `internal/pipeline`   | Ordered middleware composition                            |
 | `internal/obs`        | Access log contracts (bounded, never blocking)            |
@@ -30,6 +32,37 @@ by reproducible tests, metrics and fault-injection experiments.
 | `internal/upstream`   | Provider port                                             |
 | `deploy`              | docker-compose stack, schema, container build             |
 | `loadtest`            | k6 scenarios (planned)                                    |
+
+## Layout zoning
+
+The directory tree is closed: future growth lands as new files inside
+existing packages, never as new top-level directories. The zoning rules:
+
+1. Governance mechanisms are self-contained: implementations, Lua
+   scripts, sweepers and their own pipeline middleware grow inside their
+   package — never subpackages.
+2. Provider adapters stay flat: a new provider is a new file in
+   `internal/upstream` (`openai.go`, `deepseek.go`), not an adaptor tree.
+3. Everything HTTP-endpoint-shaped belongs to `internal/server`
+   (business `/v1/*`, `/admin/*`, probes); everything wire-format-shaped
+   belongs to `internal/protocol`.
+4. `internal/httpserver` hosts only neutral, stdlib-only transport
+   mechanics; composition happens exclusively in `cmd/*` roots.
+
+Placement of known future work:
+
+| Future deliverable                         | Lands as                              |
+| ------------------------------------------ | ------------------------------------- |
+| `/v1/chat/completions` handler, admin API  | `server/completions.go`, `server/admin.go` |
+| OpenAI schema, request normalization       | `protocol/schema.go`, `normalize.go`  |
+| Response tee                               | `httpserver/tee.go`                   |
+| OpenAI-compatible / DeepSeek adapters      | `upstream/openai.go`, `upstream/deepseek.go` |
+| Rate limit backends + Lua                  | `limiter/memory.go`, `redis.go`, `tokenbucket.lua` |
+| Lease ledger, sweeper, reconciliation      | `quota/ledger.go`, `sweeper.go`, `reconcile.go` |
+| Breaker implementation + nop               | `circuit/breaker.go`, `nop.go`        |
+| Attempt loop, failover engine              | `relay/executor.go`, `failover.go`    |
+| Prometheus metrics                         | `obs/metrics.go`                      |
+| Cost-weight routing, stream broadcaster    | `router/weight.go`, `cache/broadcast.go` |
 
 ## Quick start
 

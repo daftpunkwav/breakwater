@@ -16,8 +16,10 @@
  * Retry, circuit breaking and failover wrap the upstream call INSIDE
  * the terminal forward stage; they must not be composed as Middleware
  * layers, because a retry cannot replay a half-consumed http.Handler
- * response. Stages that reserve before next() settle after it returns
- * (quota settles within its own middleware scope).
+ * response. The terminal stage is owned by the relay engine
+ * (internal/relay, lands with the forwarding milestone); stages that
+ * reserve before next() settle after it returns (quota settles within
+ * its own middleware scope).
  *
  * Stages wrap http.Handler so that http.Flusher implementations survive
  * every layer, a prerequisite for SSE passthrough. A shared per-request

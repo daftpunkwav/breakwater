@@ -1,11 +1,13 @@
 /**
  * @file httpserver
- * @description Neutral HTTP server lifecycle shared by every binary in
- * this repository: bind, serve until the caller's context is cancelled,
- * drain in-flight requests within a grace deadline (invariant I8).
+ * @description Neutral HTTP transport mechanics shared by every binary
+ * in this repository: the serve/drain lifecycle (invariant I8) and
+ * stdlib-only transport helpers (e.g. the response tee used by
+ * forwarding).
  *
  * Responsibilities:
  * - Own the http.Server lifecycle, exactly once across binaries
+ * - Host neutral, business-agnostic transport utilities
  * - Nothing else: routing, handlers, configuration and governance live
  *   with their owners; this package imports only the standard library
  */
