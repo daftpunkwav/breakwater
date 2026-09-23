@@ -3,12 +3,26 @@
  * @description Ordered composition of pipeline stages over net/http handlers.
  *
  * Responsibilities:
- * - Compose governance stages into a single handler in a fixed order
+ * - Compose the request-side governance stages into a single handler in
+ *   a fixed order
  * - Nothing else: stage behavior lives in the owning modules
+ *
+ * Two chains exist in the gateway; only the request side is composed
+ * here:
+ *
+ *	request side:  auth -> limiter -> quota(reserve) -> cache -> route -> forward
+ *	response side: forward -> retry/circuit -> quota(settle) -> cache write -> obs
+ *
+ * Retry, circuit breaking and failover wrap the upstream call INSIDE
+ * the terminal forward stage; they must not be composed as Middleware
+ * layers, because a retry cannot replay a half-consumed http.Handler
+ * response. Stages that reserve before next() settle after it returns
+ * (quota settles within its own middleware scope).
  *
  * Stages wrap http.Handler so that http.Flusher implementations survive
  * every layer, a prerequisite for SSE passthrough. A shared per-request
- * carrier joins when the first real stage lands.
+ * carrier joins when the first real stage lands; it must be a typed
+ * struct assembled per request, not scattered context values.
  */
 package pipeline
 
