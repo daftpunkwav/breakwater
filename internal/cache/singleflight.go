@@ -24,10 +24,11 @@ import (
 	"sync"
 )
 
-// call is one in-flight fetch: the holder runs fn, waiters block on
-// the WaitGroup and read the result after Done.
+// call is one in-flight fetch: the holder runs fn, waiters block on the
+// done channel, which the holder closes exactly once after publishing
+// the result — one channel per flight, none per waiter.
 type call struct {
-	wg    sync.WaitGroup
+	done  chan struct{}
 	value Entry
 	err   error
 }
@@ -54,13 +55,12 @@ func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (E
 		entry, err := existing.wait(ctx)
 		return entry, err, false
 	}
-	c := &call{}
-	c.wg.Add(1)
+	c := &call{done: make(chan struct{})}
 	g.calls[key] = c
 	g.mu.Unlock()
 
-	// Holder path. The result is published before Done so waiting
-	// readers observe it through the WaitGroup's happens-before.
+	// Holder path. The result is published before done is closed, so
+	// waiting readers observe it through the channel's happens-before.
 	defer func() {
 		if r := recover(); r != nil {
 			// A panicking fetch must not wedge the flight: publish the
@@ -70,7 +70,7 @@ func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (E
 			g.mu.Lock()
 			delete(g.calls, key)
 			g.mu.Unlock()
-			c.wg.Done()
+			close(c.done)
 			panic(r)
 		}
 	}()
@@ -80,21 +80,17 @@ func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (E
 	g.mu.Lock()
 	delete(g.calls, key)
 	g.mu.Unlock()
-	c.wg.Done()
+	close(c.done)
 
 	return c.value, c.err, true
 }
 
 // wait blocks for the holder's result, bounded by the waiter's own
-// context: a client gone mid-wait stops waiting.
+// context: a client gone mid-wait stops waiting. Receiving from the
+// closed channel happens after the holder published the result.
 func (c *call) wait(ctx context.Context) (Entry, error) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		c.wg.Wait()
-	}()
 	select {
-	case <-done:
+	case <-c.done:
 		return c.value, c.err
 	case <-ctx.Done():
 		return Entry{}, ctx.Err()
