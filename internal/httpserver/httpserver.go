@@ -50,6 +50,11 @@ func Run(ctx context.Context, opts Options) error {
 	httpSrv := &http.Server{
 		Handler:           opts.Handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// IdleTimeout reaps keep-alive connections whose client vanished
+		// without a FIN; it never bounds an in-flight request, so SSE
+		// streams are unaffected. ReadTimeout and WriteTimeout stay
+		// unset on purpose: either would kill long legitimate streams.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	serveErr := make(chan error, 1)
