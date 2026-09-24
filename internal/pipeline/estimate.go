@@ -17,7 +17,7 @@
 package pipeline
 
 import (
-	"strings"
+	"unicode"
 
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
@@ -48,12 +48,32 @@ func EstimatePartialTokens(req protocol.ChatRequest, streamBytes int64) int64 {
 func promptEstimate(req protocol.ChatRequest) int64 {
 	prompt := int64(0)
 	for _, m := range req.Messages {
-		prompt += int64(len(strings.Fields(m.Content)))
+		prompt += countWords(m.Content)
 	}
 	if prompt == 0 {
 		prompt = 1
 	}
 	return prompt
+}
+
+// countWords counts whitespace-separated words — the same number
+// strings.Fields would produce — without materializing the field slice:
+// a large prompt would otherwise allocate a large transient slice on
+// every request just to be counted.
+func countWords(s string) int64 {
+	n := int64(0)
+	inWord := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			inWord = false
+			continue
+		}
+		if !inWord {
+			inWord = true
+			n++
+		}
+	}
+	return n
 }
 
 func completionEstimate(req protocol.ChatRequest, maxRequestTokens int64) int64 {
