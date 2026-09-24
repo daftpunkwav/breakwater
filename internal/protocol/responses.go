@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // responsesRequest is the subset of the Responses schema the gateway
@@ -107,14 +108,14 @@ func responsesText(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return "", fmt.Errorf("content must be a string or a part array")
 	}
-	joined := ""
+	var joined strings.Builder
 	for _, part := range parts {
 		if part.Type != "input_text" && part.Type != "output_text" {
 			return "", fmt.Errorf("unsupported input part type %q: text parts only", part.Type)
 		}
-		joined += part.Text
+		joined.WriteString(part.Text)
 	}
-	return joined, nil
+	return joined.String(), nil
 }
 
 // responsesWire renders the Responses surface.
