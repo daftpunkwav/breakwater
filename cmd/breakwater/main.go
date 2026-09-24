@@ -4,11 +4,12 @@
  *
  * Responsibilities:
  * - Load configuration from the environment
- * - Assemble the HTTP server
+ * - Assemble the upstream adapters, the router, the relay engine and
+ *   the HTTP surface
  * - Own the process lifecycle: signal handling and shutdown ordering
  *
- * Governance pipeline wiring lands with the forwarding milestone; this
- * root stays the only place that knows concrete implementations.
+ * This root stays the only place that knows concrete implementations;
+ * governance stages join the pipeline here as they land.
  */
 package main
 
@@ -19,8 +20,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
+	"github.com/daftpunkwav/breakwater/internal/relay"
+	"github.com/daftpunkwav/breakwater/internal/retry"
+	"github.com/daftpunkwav/breakwater/internal/router"
 	"github.com/daftpunkwav/breakwater/internal/server"
+	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
 func main() {
@@ -33,18 +39,57 @@ func main() {
 		os.Exit(1)
 	}
 
+	bindings, err := buildBindings(cfg.Upstreams)
+	if err != nil {
+		logger.Error("build upstream adapters", "error", err)
+		os.Exit(1)
+	}
+
+	rt, err := router.NewPriority(bindings, router.WithBreaker(circuit.NopBreaker{}))
+	if err != nil {
+		logger.Error("build router", "error", err)
+		os.Exit(1)
+	}
+
+	relayer := relay.New(retry.Policy{
+		MaxAttempts:     cfg.Retry.MaxAttempts,
+		AttemptTimeout:  cfg.Retry.AttemptTimeout,
+		OverallDeadline: cfg.Retry.OverallDeadline,
+		BackoffInitial:  cfg.Retry.BackoffInitial,
+		BackoffMax:      cfg.Retry.BackoffMax,
+	}, retry.NewBudget(cfg.Retry.BudgetMaxInFlight))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	srv := server.New(server.Options{
 		Addr:          cfg.Server.Addr,
 		ShutdownGrace: cfg.Server.ShutdownGrace,
+		Completions:   server.NewCompletions(rt, relayer),
 	})
 
-	logger.Info("gateway starting", "addr", cfg.Server.Addr)
+	logger.Info("gateway starting", "addr", cfg.Server.Addr, "upstreams", len(cfg.Upstreams))
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("server terminated", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("gateway stopped")
+}
+
+// buildBindings turns configured upstreams into ordered router bindings.
+func buildBindings(cfgs []config.Upstream) ([]router.Binding, error) {
+	bindings := make([]router.Binding, 0, len(cfgs))
+	for _, c := range cfgs {
+		adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
+			ID:       c.ID,
+			BaseURL:  c.BaseURL,
+			APIKey:   c.APIKey,
+			ProbeURL: c.ProbeURL,
+		})
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, router.Binding{Models: c.Models, Upstream: adapter})
+	}
+	return bindings, nil
 }

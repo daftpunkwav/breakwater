@@ -5,18 +5,20 @@
  * Responsibilities:
  * - Map paths to handlers in one place
  * - Keep the public URL layout explicit
- *
- * The /v1/chat/completions route and the pipeline it fronts are added by
- * the forwarding milestone; governance stages must not be wired here.
  */
 package server
 
 import "net/http"
 
 // newRootHandler assembles the root handler with all routes registered.
-func newRootHandler() http.Handler {
+// A nil completions handler leaves the business route unregistered —
+// the gateway then serves probes only.
+func newRootHandler(completions http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleLiveness)
 	mux.HandleFunc("GET /readyz", handleReadiness)
+	if completions != nil {
+		mux.Handle("POST /v1/chat/completions", completions)
+	}
 	return mux
 }

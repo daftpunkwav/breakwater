@@ -9,6 +9,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -19,10 +20,16 @@ import (
 // Defaults keep the gateway runnable with zero configuration. They are
 // provisional tuning values and may change during implementation.
 const (
-	defaultAddr           = ":8080"
-	defaultShutdownGrace  = 15 * time.Second
-	defaultRedisAddr      = "127.0.0.1:6379"
-	defaultAccessLogQueue = 4096
+	defaultAddr              = ":8080"
+	defaultShutdownGrace     = 15 * time.Second
+	defaultRedisAddr         = "127.0.0.1:6379"
+	defaultAccessLogQueue    = 4096
+	defaultMaxAttempts       = 3
+	defaultAttemptTimeout    = 30 * time.Second
+	defaultOverallDeadline   = 60 * time.Second
+	defaultBackoffInitial    = 100 * time.Millisecond
+	defaultBackoffMax        = 2 * time.Second
+	defaultRetryBudgetRadius = 64
 )
 
 // Environment variable names.
@@ -32,6 +39,14 @@ const (
 	envRedisAddr      = "BREAKWATER_REDIS_ADDR"
 	envPostgresDSN    = "BREAKWATER_POSTGRES_DSN"
 	envAccessLogQueue = "BREAKWATER_ACCESS_LOG_QUEUE_SIZE"
+	envUpstreams      = "BREAKWATER_UPSTREAMS"
+
+	envRetryMaxAttempts    = "BREAKWATER_RETRY_MAX_ATTEMPTS"
+	envRetryAttemptTimeout = "BREAKWATER_RETRY_ATTEMPT_TIMEOUT"
+	envRetryOverall        = "BREAKWATER_RETRY_OVERALL_DEADLINE"
+	envRetryBackoffInitial = "BREAKWATER_RETRY_BACKOFF_INITIAL"
+	envRetryBackoffMax     = "BREAKWATER_RETRY_BACKOFF_MAX"
+	envRetryBudget         = "BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -50,6 +65,14 @@ func Load() (Config, error) {
 		Obs: Obs{
 			AccessLogQueueSize: defaultAccessLogQueue,
 		},
+		Retry: Retry{
+			MaxAttempts:       defaultMaxAttempts,
+			AttemptTimeout:    defaultAttemptTimeout,
+			OverallDeadline:   defaultOverallDeadline,
+			BackoffInitial:    defaultBackoffInitial,
+			BackoffMax:        defaultBackoffMax,
+			BudgetMaxInFlight: defaultRetryBudgetRadius,
+		},
 	}
 
 	var err error
@@ -59,11 +82,47 @@ func Load() (Config, error) {
 	if cfg.Obs.AccessLogQueueSize, err = envInt(envAccessLogQueue, cfg.Obs.AccessLogQueueSize); err != nil {
 		return Config{}, err
 	}
+	if cfg.Upstreams, err = envJSON[Upstream](envUpstreams); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.MaxAttempts, err = envInt(envRetryMaxAttempts, cfg.Retry.MaxAttempts); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.AttemptTimeout, err = envDuration(envRetryAttemptTimeout, cfg.Retry.AttemptTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.OverallDeadline, err = envDuration(envRetryOverall, cfg.Retry.OverallDeadline); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.BackoffInitial, err = envDuration(envRetryBackoffInitial, cfg.Retry.BackoffInitial); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.BackoffMax, err = envDuration(envRetryBackoffMax, cfg.Retry.BackoffMax); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.BudgetMaxInFlight, err = envInt(envRetryBudget, cfg.Retry.BudgetMaxInFlight); err != nil {
+		return Config{}, err
+	}
+
 	if cfg.Server.ShutdownGrace <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envShutdownGrace)
 	}
 	if cfg.Obs.AccessLogQueueSize <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envAccessLogQueue)
+	}
+	if cfg.Retry.MaxAttempts <= 0 {
+		return Config{}, fmt.Errorf("config: %s must be positive", envRetryMaxAttempts)
+	}
+	if cfg.Retry.BudgetMaxInFlight < 0 {
+		return Config{}, fmt.Errorf("config: %s must not be negative", envRetryBudget)
+	}
+	for i, u := range cfg.Upstreams {
+		if u.ID == "" || u.BaseURL == "" {
+			return Config{}, fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
+		}
+		if len(u.Models) == 0 {
+			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
+		}
 	}
 	return cfg, nil
 }
@@ -97,4 +156,20 @@ func envInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("config: parse %s=%q: %w", key, raw, err)
 	}
 	return n, nil
+}
+
+// envJSON decodes a JSON-valued environment variable into a slice; an
+// unset or empty variable yields nil without error. Structured config
+// (the upstream table) rides the same environment-only source as every
+// other setting.
+func envJSON[T any](key string) ([]T, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil, nil
+	}
+	var out []T
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", key, err)
+	}
+	return out, nil
 }

@@ -13,6 +13,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/httpserver"
@@ -24,6 +25,9 @@ type Options struct {
 	Addr string
 	// ShutdownGrace bounds the drain window after shutdown begins.
 	ShutdownGrace time.Duration
+	// Completions is the /v1/chat/completions handler; nil leaves the
+	// business route unregistered.
+	Completions http.Handler
 }
 
 // Server runs the gateway HTTP endpoint.
@@ -41,7 +45,7 @@ func New(opts Options) *Server {
 func (s *Server) Run(ctx context.Context) error {
 	return httpserver.Run(ctx, httpserver.Options{
 		Addr:          s.opts.Addr,
-		Handler:       newRootHandler(),
+		Handler:       newRootHandler(s.opts.Completions),
 		ShutdownGrace: s.opts.ShutdownGrace,
 	})
 }
