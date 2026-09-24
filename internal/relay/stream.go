@@ -10,6 +10,12 @@
  *   re-encoding the stream
  * - Nothing else: abort rendering and retry decisions live with their
  *   owners; a pump error just means "the stream broke"
+ *
+ * Allocation discipline: one SSE stream carries thousands of frames, so
+ * the pump reads lines through bufio ReadSlice (no per-line copy for
+ * lines that fit the buffer; over-long lines fall back to an
+ * accumulating read) and reuses one outgoing buffer instead of building
+ * a fresh string per frame.
  */
 package relay
 
@@ -25,6 +31,10 @@ import (
 // dataPrefix marks an SSE data line.
 const dataPrefix = "data: "
 
+// dataPrefixBytes is the byte form of dataPrefix for zero-copy prefix
+// tests against buffered lines.
+var dataPrefixBytes = []byte(dataPrefix)
+
 // doneSentinel is the canonical wire's stream terminator.
 const doneSentinel = "[DONE]"
 
@@ -37,7 +47,7 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 	flusher, flushes := out.(http.Flusher)
 	var usage protocol.Usage
 	usageKnown := false
-	var bytes int64
+	var total int64
 
 	flush := func() {
 		if flushes {
@@ -46,32 +56,32 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 	}
 
 	if err := transcoder.Start(out, model); err != nil {
-		return usage, usageKnown, bytes, err
+		return usage, usageKnown, total, err
 	}
 	flush()
 
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, readErr := readLine(reader)
 		if len(line) > 0 {
 			trimmed := trimEOL(line)
-			if payload, isData := scrapePayload([]byte(trimmed)); isData {
+			if payload, isData := bytes.CutPrefix(trimmed, dataPrefixBytes); isData {
 				if string(payload) != doneSentinel {
 					if u, ok := protocol.ParseUsage(payload); ok {
 						usage, usageKnown = u, true
 					}
 					if err := transcoder.Delta(out, payload); err != nil {
-						return usage, usageKnown, bytes, err
+						return usage, usageKnown, total, err
 					}
 				}
-				bytes += int64(len(trimmed)) + 1
+				total += int64(len(trimmed)) + 1
 				flush()
 			}
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
-				return usage, usageKnown, bytes, transcoder.Finish(out, usage, usageKnown)
+				return usage, usageKnown, total, transcoder.Finish(out, usage, usageKnown)
 			}
-			return usage, usageKnown, bytes, readErr
+			return usage, usageKnown, total, readErr
 		}
 	}
 }
@@ -86,53 +96,67 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 	flusher, flushes := out.(http.Flusher)
 	var usage protocol.Usage
 	usageKnown := false
-	var bytes int64
+	var total int64
+	// outBuf carries one outgoing line and is reused across the pump;
+	// building a fresh string per frame would put one allocation per
+	// SSE line on the hot path.
+	outBuf := make([]byte, 0, 512)
 
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, readErr := readLine(reader)
 		if len(line) > 0 {
 			trimmed := trimEOL(line)
-			if payload, isData := scrapePayload([]byte(trimmed)); isData {
+			if payload, isData := bytes.CutPrefix(trimmed, dataPrefixBytes); isData {
 				if u, ok := protocol.ParseUsage(payload); ok {
 					usage, usageKnown = u, true
 				}
 			}
-			if _, writeErr := io.WriteString(out, trimmed+"\n"); writeErr != nil {
-				return usage, usageKnown, bytes, writeErr
+			outBuf = append(outBuf[:0], trimmed...)
+			outBuf = append(outBuf, '\n')
+			if _, writeErr := out.Write(outBuf); writeErr != nil {
+				return usage, usageKnown, total, writeErr
 			}
-			bytes += int64(len(trimmed)) + 1
+			total += int64(len(trimmed)) + 1
 			// A blank line closes one SSE event: the client-visible
 			// boundary to flush at.
-			if trimmed == "" && flushes {
+			if len(trimmed) == 0 && flushes {
 				flusher.Flush()
 			}
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
-				return usage, usageKnown, bytes, nil
+				return usage, usageKnown, total, nil
 			}
-			return usage, usageKnown, bytes, readErr
+			return usage, usageKnown, total, readErr
 		}
 	}
 }
 
-// scrapePayload extracts the JSON payload of an SSE data line; ok is
-// false for every other line (comments, event names, blank lines),
-// which pass through untouched.
-func scrapePayload(line []byte) (payload []byte, ok bool) {
-	rest, found := bytes.CutPrefix(line, []byte(dataPrefix))
-	return rest, found
-}
-
-// trimEOL strips one trailing line terminator (\n or \r\n).
-func trimEOL(line string) string {
-	line = trimSuffixByte(line, '\n')
-	return trimSuffixByte(line, '\r')
-}
-
-func trimSuffixByte(s string, b byte) string {
-	if len(s) > 0 && s[len(s)-1] == b {
-		return s[:len(s)-1]
+// readLine returns the next '\n'-terminated line without copying for
+// lines that fit bufio's buffer. A line longer than the buffer is
+// accumulated by falling back to the allocating read. The returned
+// slice is valid only until the next read.
+func readLine(reader *bufio.Reader) ([]byte, error) {
+	line, err := reader.ReadSlice('\n')
+	if err != bufio.ErrBufferFull {
+		return line, err
 	}
-	return s
+	whole := append([]byte(nil), line...)
+	for err == bufio.ErrBufferFull {
+		line, err = reader.ReadSlice('\n')
+		whole = append(whole, line...)
+	}
+	return whole, err
+}
+
+// trimEOL strips one trailing line terminator (\n or \r\n) from a
+// buffered line.
+func trimEOL(line []byte) []byte {
+	if n := len(line); n > 0 && line[n-1] == '\n' {
+		line = line[:n-1]
+	}
+	if n := len(line); n > 0 && line[n-1] == '\r' {
+		line = line[:n-1]
+	}
+	return line
 }
