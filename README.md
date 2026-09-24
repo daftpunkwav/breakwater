@@ -31,7 +31,7 @@ tests, metrics and fault-injection experiments.
 | `internal/config`     | Configuration schema and loading                          |
 | `internal/obs`        | Bounded async access log, hand-written metrics registry   |
 | `deploy`              | docker-compose stack, schema, seed, container build       |
-| `loadtest`            | k6 scenarios, one per system invariant                    |
+| `loadtest`            | k6 scenarios, each targeting a system invariant           |
 | `docs`                | Evidence documents (benchmarks, chaos report)             |
 
 ## Layout zoning

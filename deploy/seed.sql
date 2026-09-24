@@ -1,6 +1,8 @@
 -- Local development seed: one tier, two tenants, two API keys.
--- The key_hash column holds SHA-256 of the raw key; the raw values for
--- local runs are documented in the README quick start.
+-- The key_hash column holds SHA-256 of the raw key. The raw values are
+-- the loadtest scenarios' default API_KEYs: 'bw-local-t1' (local-1)
+-- and 'bw-local-t2' (local-2). The README quick start uses a separate
+-- BREAKWATER_IDENTITY key and does not need this seed.
 -- Applied manually after the first-boot schema:
 --   docker compose -f deploy/docker-compose.yml exec -T postgres \
 --     psql -U breakwater -d breakwater < deploy/seed.sql

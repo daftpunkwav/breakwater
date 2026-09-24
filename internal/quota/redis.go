@@ -24,12 +24,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// reserveScriptSrc atomically deducts the balance and records the lease.
+//
 //go:embed reserve.lua
 var reserveScriptSrc string
 
+// settleScriptSrc reconciles a live lease against actual usage.
+//
 //go:embed settle.lua
 var settleScriptSrc string
 
+// releaseScriptSrc moves a RESERVED lease to a terminal state and
+// refunds its full amount exactly once.
+//
 //go:embed release.lua
 var releaseScriptSrc string
 

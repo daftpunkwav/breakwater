@@ -3,10 +3,11 @@
  * @description The upstream port implemented by every provider adapter.
  *
  * Responsibilities:
- * - Define the single surface governance layers see: forwarding, stream
- *   decoding, usage extraction and health probing
+ * - Define the single surface governance layers see: one forwarding
+ *   exchange per call and the health probe
  * - Nothing else: protocol differences (payload translation, provider
- *   quirks) belong to each adapter
+ *   quirks) belong to each adapter; response body decoding (SSE or
+ *   buffered) and usage extraction stay with the caller (the relay)
  *
  * Adding a provider means adding an implementation of this port; the
  * governance layers must not change (frozen architectural decision).
@@ -19,9 +20,6 @@
  * - Callers classify retryability from the pair (retry layer) and
  *   health from the exchange alone (circuit layer); the port does not
  *   classify on their behalf.
- *
- * The usage extraction surface joins with the streaming implementation
- * and must stay provider-neutral.
  */
 package upstream
 

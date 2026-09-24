@@ -21,6 +21,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// allowScriptSrc is the atomic refill-check-deduct token bucket script
+// behind Allow.
+//
 //go:embed tokenbucket.lua
 var allowScriptSrc string
 
