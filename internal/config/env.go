@@ -20,9 +20,11 @@ import (
 // Defaults keep the gateway runnable with zero configuration. They are
 // provisional tuning values and may change during implementation.
 const (
-	defaultAddr              = ":8080"
-	defaultShutdownGrace     = 15 * time.Second
-	defaultRedisAddr         = "127.0.0.1:6379"
+	defaultAddr          = ":8080"
+	defaultShutdownGrace = 15 * time.Second
+	// No default Redis address: memory backends are the zero-config
+	// mode; Redis runs only when explicitly configured.
+	defaultRedisAddr         = ""
 	defaultAccessLogQueue    = 4096
 	defaultMaxAttempts       = 3
 	defaultAttemptTimeout    = 30 * time.Second
@@ -62,6 +64,9 @@ const (
 	envCircuitThreshold = "BREAKWATER_CIRCUIT_FAIL_THRESHOLD"
 	envCircuitCooldown  = "BREAKWATER_CIRCUIT_COOLDOWN"
 	envCircuitProbe     = "BREAKWATER_CIRCUIT_PROBE_TIMEOUT"
+
+	envAccessLogPath = "BREAKWATER_ACCESS_LOG_PATH"
+	envAdminToken    = "BREAKWATER_ADMIN_TOKEN"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -80,6 +85,10 @@ func Load() (Config, error) {
 		Identity: strings.TrimSpace(os.Getenv(envIdentity)),
 		Obs: Obs{
 			AccessLogQueueSize: defaultAccessLogQueue,
+			AccessLogPath:      strings.TrimSpace(os.Getenv(envAccessLogPath)),
+		},
+		Security: Security{
+			AdminToken: strings.TrimSpace(os.Getenv(envAdminToken)),
 		},
 		Retry: Retry{
 			MaxAttempts:       defaultMaxAttempts,

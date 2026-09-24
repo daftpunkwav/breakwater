@@ -23,12 +23,14 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
-// Middleware returns the quota stage over a ledger.
-func Middleware(ledger Ledger) pipeline.Middleware {
+// Middleware returns the quota stage over a ledger. The metrics
+// recorder may be nil to disable.
+func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			carrier := pipeline.CarrierFrom(r.Context())
@@ -60,6 +62,7 @@ func Middleware(ledger Ledger) pipeline.Middleware {
 				return
 			}
 			carrier.Lease = lease.ID
+			metrics.QuotaReserved(carrier.Tenant.ID, amount)
 
 			next.ServeHTTP(w, r)
 
@@ -74,7 +77,11 @@ func Middleware(ledger Ledger) pipeline.Middleware {
 				if err := ledger.Cancel(settleCtx, lease.ID); err != nil {
 					slog.Warn("quota cancel failed", "lease", lease.ID, "error", err)
 				}
+				metrics.QuotaRefunded(carrier.Tenant.ID, amount)
 				return
+			}
+			if refund := amount - carrier.Consumed; refund > 0 {
+				metrics.QuotaRefunded(carrier.Tenant.ID, refund)
 			}
 			if err := ledger.Settle(settleCtx, lease.ID, carrier.Consumed); err != nil {
 				slog.Warn("quota settle failed", "lease", lease.ID, "error", err)

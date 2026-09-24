@@ -56,7 +56,7 @@ func cacheStage(t *testing.T, upstream http.Handler) http.Handler {
 	t.Helper()
 	return pipeline.Chain(
 		pipeline.CarrierStage(),
-		Middleware(NewMemory(), NewFlight(), time.Minute),
+		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
 	)(upstream)
 }
 

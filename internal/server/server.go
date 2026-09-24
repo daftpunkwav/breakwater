@@ -28,6 +28,10 @@ type Options struct {
 	// Completions is the /v1/chat/completions handler; nil leaves the
 	// business route unregistered.
 	Completions http.Handler
+	// Metrics serves the Prometheus scrape endpoint; nil omits it.
+	Metrics http.Handler
+	// Admin serves the management API; nil omits it.
+	Admin http.Handler
 	// Readiness reports whether business traffic may be served; nil
 	// always reports ready.
 	Readiness func() error
@@ -48,7 +52,7 @@ func New(opts Options) *Server {
 func (s *Server) Run(ctx context.Context) error {
 	return httpserver.Run(ctx, httpserver.Options{
 		Addr:          s.opts.Addr,
-		Handler:       newRootHandler(s.opts.Completions, s.opts.Readiness),
+		Handler:       newRootHandler(s.opts.Completions, s.opts.Metrics, s.opts.Admin, s.opts.Readiness),
 		ShutdownGrace: s.opts.ShutdownGrace,
 	})
 }

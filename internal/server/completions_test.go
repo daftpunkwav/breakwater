@@ -81,7 +81,7 @@ func TestCompletionsBufferedRoundTrip(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL)))
+	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -107,7 +107,7 @@ func TestCompletionsStreamedRoundTrip(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL)))
+	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -135,7 +135,7 @@ func TestCompletionsUnknownModel(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL)))
+	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -154,7 +154,7 @@ func TestCompletionsMalformedBody(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL)))
+	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader("{not json"))

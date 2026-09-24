@@ -27,6 +27,7 @@ type Config struct {
 	Identity string
 	Cache    Cache
 	Circuit  Circuit
+	Security Security
 }
 
 // Cache configures the exact-match response cache.
@@ -105,4 +106,14 @@ type Obs struct {
 	// AccessLogQueueSize caps the in-memory access log queue; overflow
 	// drops entries and must be counted explicitly (invariant I7).
 	AccessLogQueueSize int
+	// AccessLogPath is the JSONL file the access log writes to; empty
+	// disables the file sink (metrics stay active).
+	AccessLogPath string
+}
+
+// Security holds the management-surface credentials.
+type Security struct {
+	// AdminToken guards the admin API; empty disables authentication
+	// (local development only).
+	AdminToken string
 }

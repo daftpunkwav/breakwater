@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/httpserver"
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -43,7 +44,7 @@ const relaySharedFetch = "shared-fetch"
 
 // Middleware returns the cache stage over a store, a flight group and
 // the base TTL applied by the store (with its jitter).
-func Middleware(store Cache, flight *Flight, ttl time.Duration) pipeline.Middleware {
+func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Metrics) pipeline.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			carrier := pipeline.CarrierFrom(r.Context())
@@ -62,18 +63,21 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration) pipeline.Middlew
 			key := KeyFor(carrier.Body)
 
 			if entry, err := store.Get(r.Context(), key); err == nil {
+				metrics.CacheHit()
 				replay(w, entry)
 				carrier.CacheHit = true
 				carrier.Consumed = 0
 				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: relayCache}
 				return
 			}
+			metrics.CacheMiss()
 
 			if carrier.Chat.Stream {
 				// Frozen boundary: streams fetch individually; the flight
 				// group is reserved for non-streaming requests.
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r)
+				metrics.CacheFetch(upstreamOf(carrier))
 				if storeWorthy(tee) {
 					_ = store.Set(r.Context(), key, capture(tee), ttl)
 				}
@@ -83,6 +87,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration) pipeline.Middlew
 			entry, fetchErr, owner := flight.Do(r.Context(), key, func(ctx context.Context) (Entry, error) {
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r.WithContext(ctx))
+				metrics.CacheFetch(upstreamOf(carrier))
 				return capture(tee), nil
 			})
 			if fetchErr != nil {
@@ -101,6 +106,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration) pipeline.Middlew
 			}
 			// Waiter: the shared fetch's result is replayed verbatim;
 			// it caused no upstream fetch of its own.
+			metrics.CacheShared()
 			replay(w, entry)
 			carrier.CacheHit = true
 			carrier.Consumed = 0
@@ -129,6 +135,15 @@ func capture(tee *httpserver.TeeResponseWriter) Entry {
 		Header: tee.Header().Clone(),
 		Body:   tee.Body(),
 	}
+}
+
+// upstreamOf names the upstream that served the request, as reported
+// by the forward stage through the carrier.
+func upstreamOf(carrier *pipeline.Carrier) string {
+	if carrier.Relay != nil {
+		return carrier.Relay.UpstreamID
+	}
+	return "-"
 }
 
 // storeWorthy reports whether a completed response should be stored:

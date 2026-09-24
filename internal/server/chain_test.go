@@ -59,8 +59,8 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 	stages := []pipeline.Middleware{
 		pipeline.CarrierStage(),
 		pipeline.AuthStage(identity),
-		limiter.Middleware(limiter.NewMemory()),
-		quota.Middleware(ledger),
+		limiter.Middleware(limiter.NewMemory(), nil),
+		quota.Middleware(ledger, nil),
 	}
 	return pipeline.Chain(stages...)(NewCompletions(rt, relayer))
 }
@@ -202,8 +202,8 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.AuthStage(identity),
-		limiter.Middleware(limiter.NewMemory()),
-		quota.Middleware(ledger),
+		limiter.Middleware(limiter.NewMemory(), nil),
+		quota.Middleware(ledger, nil),
 	)(NewCompletions(rt, relayer))
 
 	srv := httptest.NewServer(handler)

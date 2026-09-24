@@ -23,12 +23,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
-// Middleware returns the rate limiting stage.
-func Middleware(l Limiter) pipeline.Middleware {
+// Middleware returns the rate limiting stage. The metrics recorder
+// may be nil to disable.
+func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			carrier := pipeline.CarrierFrom(r.Context())
@@ -52,6 +54,7 @@ func Middleware(l Limiter) pipeline.Middleware {
 				return
 			}
 			if !decision.Allowed {
+				metrics.RateLimited(carrier.Tenant.ID)
 				seconds := int64(decision.RetryAfter / time.Second)
 				if seconds < 1 {
 					seconds = 1

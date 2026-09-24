@@ -29,6 +29,7 @@ import (
 	"net/http"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
@@ -45,7 +46,7 @@ type Executor struct {
 	budget     *retry.Budget
 	classifier retry.Classifier
 	breaker    circuit.Breaker
-	onRetry    retry.OnRetry
+	metrics    *obs.Metrics
 }
 
 // Option customizes an Executor.
@@ -62,9 +63,9 @@ func WithClassifier(c retry.Classifier) Option {
 	return func(e *Executor) { e.classifier = c }
 }
 
-// WithRetryObserver installs the hook fired on every scheduled retry.
-func WithRetryObserver(fn retry.OnRetry) Option {
-	return func(e *Executor) { e.onRetry = fn }
+// WithMetrics installs the observation recorder; nil disables.
+func WithMetrics(m *obs.Metrics) Option {
+	return func(e *Executor) { e.metrics = m }
 }
 
 // New builds an Executor. A nil budget means retries are unbounded by
@@ -169,7 +170,7 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 	}
 
 	r := &run{exec: e, job: job, ctx: ctx}
-	err := retry.Execute(ctx, e.policy, e.budget, e.classifier, e.onRetry, r.attempt)
+	err := retry.Execute(ctx, e.policy, e.budget, e.classifier, nil, r.attempt)
 	return r.finish(err)
 }
 
@@ -179,6 +180,12 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	r.attempts = attempt
 	if attempt > 1 {
 		r.retries = attempt - 1
+		r.exec.metrics.RetryScheduled(r.job.Candidates[min(attempt, len(r.job.Candidates))-1].ID())
+		prev := r.job.Candidates[min(attempt-1, len(r.job.Candidates))-1]
+		curr := r.job.Candidates[min(attempt, len(r.job.Candidates))-1]
+		if prev.ID() != curr.ID() {
+			r.exec.metrics.Failover(prev.ID(), curr.ID())
+		}
 	}
 	cand := r.job.Candidates[min(attempt, len(r.job.Candidates))-1]
 
@@ -250,6 +257,7 @@ func (r *run) finish(err error) Result {
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, retry.ErrBudgetExhausted):
+		r.exec.metrics.RetryBudgetExhausted()
 		renderGatewayError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
 			"retry budget exhausted before an upstream answered")
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
