@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
@@ -28,7 +29,7 @@ func (stubUp) Probe(context.Context) error { return nil }
 
 func TestCandidatesExcludesBreakerOpen(t *testing.T) {
 	t.Parallel()
-	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: 1})
+	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour})
 	primary, fallback := stubUp{id: "primary"}, stubUp{id: "fallback"}
 	rt, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: primary},
@@ -56,7 +57,7 @@ func TestCandidatesExcludesBreakerOpen(t *testing.T) {
 
 func TestCandidatesAllOpenIsErrUnavailable(t *testing.T) {
 	t.Parallel()
-	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: 1})
+	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour})
 	bound := stubUp{id: "u1"}
 	rt, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: bound}}, WithBreaker(breaker))
 	if err != nil {
