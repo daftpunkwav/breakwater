@@ -325,8 +325,9 @@ func (m *Metrics) SetLogsDropped(n int64) {
 	m.logDrops.Store(n)
 }
 
-// Render writes every family in the Prometheus text format 0.0.4.
-func (m *Metrics) Render(w io.Writer) {
+// Render writes every family in the Prometheus text format 0.0.4,
+// returning the first write failure.
+func (m *Metrics) Render(w io.Writer) error {
 	names := make([]string, 0, len(m.families))
 	for name := range m.families {
 		names = append(names, name)
@@ -349,11 +350,19 @@ func (m *Metrics) Render(w io.Writer) {
 				var cumulative uint64
 				for i, bound := range f.buckets {
 					cumulative = c.buckets[i].Load()
-					fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, labelsWithLE(labels, bound), cumulative)
+					if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, labelsWithLE(labels, bound), cumulative); err != nil {
+						return err
+					}
 				}
-				fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, labelsWithLE(labels, math.Inf(1)), c.count.Load())
-				fmt.Fprintf(w, "%s_sum%s %g\n", f.name, labels, loadFloat(&c.value))
-				fmt.Fprintf(w, "%s_count%s %d\n", f.name, labels, c.count.Load())
+				if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, labelsWithLE(labels, math.Inf(1)), c.count.Load()); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(w, "%s_sum%s %g\n", f.name, labels, loadFloat(&c.value)); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(w, "%s_count%s %d\n", f.name, labels, c.count.Load()); err != nil {
+					return err
+				}
 			}
 		default:
 			for _, c := range children {
@@ -362,12 +371,15 @@ func (m *Metrics) Render(w io.Writer) {
 				if f.name == "breakwater_logs_dropped_total" {
 					value = float64(m.logDrops.Load())
 				}
-				fmt.Fprintf(w, "%s%s %g\n", f.name, labels, value)
+				if _, err := fmt.Fprintf(w, "%s%s %g\n", f.name, labels, value); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	// Scalars live outside families.
-	fmt.Fprintf(w, "# HELP breakwater_inflight_requests Requests currently in flight.\n# TYPE breakwater_inflight_requests gauge\nbreakwater_inflight_requests %d\n", m.inflight.Load())
+	_, err := fmt.Fprintf(w, "# HELP breakwater_inflight_requests Requests currently in flight.\n# TYPE breakwater_inflight_requests gauge\nbreakwater_inflight_requests %d\n", m.inflight.Load())
+	return err
 }
 
 // renderLabels joins label names and values into the {k="v",...} form.

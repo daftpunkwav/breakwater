@@ -218,7 +218,8 @@ func stateValue(s circuit.State) float64 {
 func metricsHandler(m *obs.Metrics) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		m.Render(w)
+		// A scrape client that walked away is not a gateway problem.
+		_ = m.Render(w)
 	})
 }
 

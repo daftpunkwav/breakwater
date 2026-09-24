@@ -19,7 +19,9 @@ func TestMetricsRenderCountersAndGauges(t *testing.T) {
 	m.InflightAdd(3)
 
 	var out strings.Builder
-	m.Render(&out)
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
 	text := out.String()
 
 	for _, want := range []string{
@@ -41,7 +43,9 @@ func TestMetricsRenderHistogram(t *testing.T) {
 	m.ObserveDuration("u1", 0.02)  // bucket .025
 
 	var out strings.Builder
-	m.Render(&out)
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
 	text := out.String()
 
 	for _, want := range []string{
@@ -64,7 +68,9 @@ func TestMetricsCircuitStateGauge(t *testing.T) {
 	m.CircuitState("u1", 2)
 
 	var out strings.Builder
-	m.Render(&out)
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
 	text := out.String()
 	if !strings.Contains(text, `breakwater_circuit_state{upstream="u1"} 2`) {
 		t.Errorf("circuit gauge missing:\n%s", text)

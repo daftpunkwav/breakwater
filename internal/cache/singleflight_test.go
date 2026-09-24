@@ -120,7 +120,7 @@ func TestFlightWaiterContextBoundsTheWait(t *testing.T) {
 	ownerDone := make(chan struct{})
 	go func() {
 		defer close(ownerDone)
-		g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
 			<-release
 			return entryFor(200), nil
 		})
