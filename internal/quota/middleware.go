@@ -33,10 +33,8 @@ import (
 func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			carrier := pipeline.CarrierFrom(r.Context())
-			if carrier == nil {
-				protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
-					"no request carrier assembled")
+			carrier, ok := pipeline.RequireCarrier(w, r)
+			if !ok {
 				return
 			}
 			wire := protocol.WireFor(carrier.Format)

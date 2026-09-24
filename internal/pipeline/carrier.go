@@ -91,6 +91,20 @@ func CarrierFrom(ctx context.Context) *Carrier {
 	return c
 }
 
+// RequireCarrier returns the request carrier, rendering the
+// pipeline_misconfigured envelope when the chain-entry stage did not
+// assemble one; a false return means the response was already written.
+// Every governance stage starts with this check.
+func RequireCarrier(w http.ResponseWriter, r *http.Request) (*Carrier, bool) {
+	carrier := CarrierFrom(r.Context())
+	if carrier == nil {
+		protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+			"no request carrier assembled")
+		return nil, false
+	}
+	return carrier, true
+}
+
 // CarrierStage is the chain-entry middleware: it assembles the
 // per-request carrier every governance stage shares.
 func CarrierStage() Middleware {
