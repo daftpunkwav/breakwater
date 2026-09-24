@@ -175,6 +175,72 @@ func TestCacheMiddlewareStreamBoundary(t *testing.T) {
 	}
 }
 
+// oversizedUpstream answers with a body larger than the retention cap;
+// the cache contract says it still reaches its own client in full, but
+// the truncated capture must be neither stored nor shared.
+func oversizedUpstream(fetches *atomic.Int64, release <-chan struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("x", maxCacheableBytes+1)))
+	})
+}
+
+// TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored locks
+// the capture-cap contract on the singleflight path: a reply larger
+// than the cap must not be published to waiters (they would replay a
+// truncated prefix as a complete reply) and must not be stored (the
+// prefix would come back on every later hit).
+func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T) {
+	t.Parallel()
+	var fetches atomic.Int64
+	release := make(chan struct{})
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
+	)(oversizedUpstream(&fetches, release))
+
+	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+
+	ownerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		ownerDone <- fireRequest(handler, body)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && fetches.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	waiterDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		waiterDone <- fireRequest(handler, body)
+	}()
+	time.Sleep(100 * time.Millisecond) // let the waiter join the flight
+	close(release)
+
+	owner := <-ownerDone
+	if owner.Code != http.StatusOK || owner.Body.Len() != maxCacheableBytes+1 {
+		t.Fatalf("owner status = %d len = %d, want 200 and the full body", owner.Code, owner.Body.Len())
+	}
+	waiter := <-waiterDone
+	if waiter.Code != http.StatusBadGateway || !strings.Contains(waiter.Body.String(), "upstream_unreachable") {
+		t.Fatalf("waiter status = %d body = %s, want 502: a truncated capture must not be shared", waiter.Code, waiter.Body.String())
+	}
+
+	// Nothing was stored: the next request fetches upstream again and
+	// gets its own complete reply.
+	again := fireRequest(handler, body)
+	if again.Code != http.StatusOK || again.Body.Len() != maxCacheableBytes+1 {
+		t.Fatalf("after oversize: status = %d len = %d, want a fresh full fetch", again.Code, again.Body.Len())
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetches = %d, want 2: the oversized reply must not be stored", got)
+	}
+}
+
 // abortingUpstream delivers a partial stream terminated through the
 // error event contract, reporting it through the carrier the way the
 // inference handler does, and counts how often it was entered.

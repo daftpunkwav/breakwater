@@ -88,20 +88,35 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				return
 			}
 
+			tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 			entry, fetchErr, owner := flight.Do(r.Context(), key, func(ctx context.Context) (Entry, error) {
-				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r.WithContext(ctx))
 				metrics.CacheFetch(upstreamOf(carrier))
 				// A fetch whose handler produced no HTTP response at all
 				// (its own client walked away before the first byte) has
 				// nothing shareable: publishing the empty capture would
-				// make waiters replay a header-less entry.
+				// make waiters replay a header-less entry. A capture cut
+				// off at the byte cap is equally unshareable: waiters
+				// would replay a truncated body as a complete reply.
 				if status := tee.Status(); status < 100 || status > 599 {
 					return Entry{}, fmt.Errorf("cache: shared fetch produced no response")
+				}
+				if tee.Truncated() {
+					return Entry{}, fmt.Errorf("cache: shared fetch exceeded the shareable size")
 				}
 				return capture(tee), nil
 			})
 			if fetchErr != nil {
+				// The owner's response, when the fetch produced one, is
+				// already on the wire through the tee — only a
+				// response-less fetch still owes its client an envelope.
+				if owner {
+					if tee.Status() < 100 && r.Context().Err() == nil {
+						protocol.WireFor(carrier.Format).RenderError(w, http.StatusBadGateway,
+							"upstream_unreachable", "the shared fetch for this request failed")
+					}
+					return
+				}
 				// A waiter whose own context ended has a client gone: the
 				// response would be noise. Any other waiter deserves a
 				// real envelope instead of the collapsed shared fetch.

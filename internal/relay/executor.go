@@ -122,8 +122,10 @@ type Result struct {
 	// input when the stream ended without a usage report.
 	Streamed    bool
 	StreamBytes int64
-	// Aborted reports a stream terminated through the error event
-	// contract after bytes had already reached the client.
+	// Aborted reports a stream terminated honestly after bytes had
+	// already reached the client: through the error event contract, or
+	// with nothing further when the client had already walked away. The
+	// cache stage treats any aborted stream as unreplayable.
 	Aborted bool
 	// ClientGone reports that the client disconnected before the
 	// response completed.
