@@ -132,8 +132,9 @@ func (b *Registry) Allow(_ context.Context, upstreamID string) (Permission, bool
 		// Cooldown elapsed: the breaker transitions to half-open and
 		// this call becomes the probe.
 		b.transition(s, StateHalfOpen)
-		s.probe = &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
-		return &granted{s: s, breaker: b}, true
+		grant := &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
+		s.probe = grant
+		return &granted{s: s, breaker: b, grant: grant}, true
 
 	case StateHalfOpen:
 		// Exactly one probe may be outstanding. An expired one is
@@ -146,8 +147,9 @@ func (b *Registry) Allow(_ context.Context, upstreamID string) (Permission, bool
 			// Another probe is outstanding: denied, never queued.
 			return nil, false
 		}
-		s.probe = &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
-		return &granted{s: s, breaker: b}, true
+		grant := &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
+		s.probe = grant
+		return &granted{s: s, breaker: b, grant: grant}, true
 	}
 	return nil, false
 }
@@ -218,10 +220,13 @@ func (b *Registry) reclaimProbe(s *state, now time.Time) {
 	s.openedAt = now
 }
 
-// granted is the Permission of an admitted call.
+// granted is the Permission of an admitted call. grant pins the
+// half-open probe slot this permission owns (nil outside half-open), so
+// a very late report cannot act on a probe granted to a later caller.
 type granted struct {
 	breaker *Registry
 	s       *state
+	grant   *probeGrant
 	// reported guards the exactly-once rule against double reports.
 	reported bool
 }
@@ -252,9 +257,10 @@ func (g *granted) Report(outcome Outcome) {
 		}
 
 	case StateHalfOpen:
-		if s.probe == nil {
+		if s.probe == nil || s.probe != g.grant {
 			// Absorbed: the probe was already reclaimed by a concurrent
-			// Allow or StateOf.
+			// Allow or StateOf, or this report belongs to an earlier
+			// probe and must not hijack the outstanding one.
 			return
 		}
 		if now.After(s.probe.deadline) && outcome == OutcomeSuccess {

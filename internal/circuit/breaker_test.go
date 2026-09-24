@@ -270,6 +270,48 @@ func TestBreakerConcurrentProbesExactlyOne(t *testing.T) {
 	}
 }
 
+// TestBreakerStaleProbeReportDoesNotHijack locks the probe-identity
+// rule: a report from a probe whose slot was already reclaimed must be
+// absorbed instead of acting on the probe granted to a later caller —
+// otherwise a stale success could close the breaker while the live
+// probe is still in flight (I4's exactly-one-probe guarantee).
+func TestBreakerStaleProbeReportDoesNotHijack(t *testing.T) {
+	t.Parallel()
+	b, advance := testRegistry(t, nil)
+	ctx := context.Background()
+
+	for range 3 {
+		p, _ := b.Allow(ctx, "u")
+		p.Report(OutcomeServerFault)
+	}
+	advance(2 * time.Second)
+	stale, ok := b.Allow(ctx, "u") // probe A
+	if !ok {
+		t.Fatal("half-open denied the first probe")
+	}
+	advance(2 * time.Second) // probe A's deadline expires unreclaimed
+
+	// The next Allow reclaims A as a failure (denied here), then the
+	// cooldown admits probe B.
+	if _, ok := b.Allow(ctx, "u"); ok {
+		t.Fatal("grant after an expired probe must be denied")
+	}
+	advance(2 * time.Second)
+	fresh, ok := b.Allow(ctx, "u") // probe B
+	if !ok {
+		t.Fatal("half-open denied the replacement probe")
+	}
+
+	stale.Report(OutcomeSuccess) // A's very late success
+	if got := b.StateOf(ctx, "u"); got != StateHalfOpen {
+		t.Fatalf("state = %s, want half-open: a stale report must not close the breaker", got)
+	}
+	fresh.Report(OutcomeServerFault)
+	if got := b.StateOf(ctx, "u"); got != StateOpen {
+		t.Fatalf("state = %s, want open: the live probe's outcome must drive the machine", got)
+	}
+}
+
 func TestBreakerUpstreamsAreIndependent(t *testing.T) {
 	t.Parallel()
 	b, _ := testRegistry(t, nil)
