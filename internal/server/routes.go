@@ -12,11 +12,12 @@ import "net/http"
 
 // newRootHandler assembles the root handler with all routes registered.
 // A nil completions handler leaves the business route unregistered —
-// the gateway then serves probes only.
-func newRootHandler(completions http.Handler) http.Handler {
+// the gateway then serves probes only. Readiness gates on the injected
+// probe; nil always reports ready.
+func newRootHandler(completions http.Handler, readiness func() error) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleLiveness)
-	mux.HandleFunc("GET /readyz", handleReadiness)
+	mux.HandleFunc("GET /readyz", makeReadiness(readiness))
 	if completions != nil {
 		mux.Handle("POST /v1/chat/completions", completions)
 	}

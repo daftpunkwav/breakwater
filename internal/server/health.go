@@ -22,8 +22,21 @@ func handleLiveness(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-func handleReadiness(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok\n"))
+// makeReadiness binds the injected probe. While the limiter is
+// fail-closed, readiness must gate on the dependency health or the
+// probe would lie.
+func makeReadiness(probe func() error) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if probe != nil {
+			if err := probe(); err != nil {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("not ready: " + err.Error() + "\n"))
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	}
 }

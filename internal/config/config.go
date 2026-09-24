@@ -21,6 +21,10 @@ type Config struct {
 	Obs       Obs
 	Upstreams []Upstream
 	Retry     Retry
+	// Identity is the raw JSON identity set (tiers, tenants, keys) for
+	// deployments without a database; its schema is owned by the auth
+	// package, keeping this package a leaf.
+	Identity string
 }
 
 // Upstream is one OpenAI-compatible provider binding. List order across

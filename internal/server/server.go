@@ -28,6 +28,9 @@ type Options struct {
 	// Completions is the /v1/chat/completions handler; nil leaves the
 	// business route unregistered.
 	Completions http.Handler
+	// Readiness reports whether business traffic may be served; nil
+	// always reports ready.
+	Readiness func() error
 }
 
 // Server runs the gateway HTTP endpoint.
@@ -45,7 +48,7 @@ func New(opts Options) *Server {
 func (s *Server) Run(ctx context.Context) error {
 	return httpserver.Run(ctx, httpserver.Options{
 		Addr:          s.opts.Addr,
-		Handler:       newRootHandler(s.opts.Completions),
+		Handler:       newRootHandler(s.opts.Completions, s.opts.Readiness),
 		ShutdownGrace: s.opts.ShutdownGrace,
 	})
 }

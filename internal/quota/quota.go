@@ -76,4 +76,8 @@ type Ledger interface {
 	// was rejected before reaching an upstream). Cancelling a terminal
 	// lease follows the same no-op rule as Settle.
 	Cancel(ctx context.Context, leaseID string) error
+	// Balance reports the tenant's current balance. It joins with the
+	// minimal admin API (query quota, view breaker state), never with
+	// the request path.
+	Balance(ctx context.Context, tenantID string) (int64, error)
 }

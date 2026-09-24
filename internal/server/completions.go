@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
 	"github.com/daftpunkwav/breakwater/internal/router"
@@ -36,23 +37,40 @@ func NewCompletions(rt router.Router, relayer *relay.Executor) *Completions {
 
 // ServeHTTP implements http.Handler.
 func (c *Completions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, protocol.MaxBodyBytes))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			protocol.WriteError(w, http.StatusRequestEntityTooLarge, "request_too_large",
-				"request body exceeds the accepted size")
+	carrier := pipeline.CarrierFrom(r.Context())
+
+	var body []byte
+	var parsed protocol.ChatRequest
+	if carrier != nil && carrier.ChatSet {
+		// A governance stage already read and parsed the body.
+		if carrier.ChatErr != nil {
+			protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "malformed JSON body")
 			return
 		}
-		protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "unreadable request body")
-		return
+		body, parsed = carrier.Body, carrier.Chat
+	} else {
+		var err error
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, protocol.MaxBodyBytes))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				protocol.WriteError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+					"request body exceeds the accepted size")
+				return
+			}
+			protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "unreadable request body")
+			return
+		}
+		parsed, err = protocol.ParseChatRequest(body)
+		if err != nil {
+			protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "malformed JSON body")
+			return
+		}
+		if carrier != nil {
+			carrier.SetBody(body, parsed, nil)
+		}
 	}
 
-	parsed, err := protocol.ParseChatRequest(body)
-	if err != nil {
-		protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "malformed JSON body")
-		return
-	}
 	if parsed.Model == "" {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
@@ -65,11 +83,26 @@ func (c *Completions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c.relayer.Execute(r.Context(), relay.Job{
+	result := c.relayer.Execute(r.Context(), relay.Job{
 		Model:      parsed.Model,
 		Stream:     parsed.Stream,
 		Body:       body,
 		Candidates: candidates,
 		Out:        w,
 	})
+
+	if carrier != nil {
+		// Settlement input: real usage when the reply carried one, the
+		// byte-derived estimate for streams that ended without it, and
+		// the reservation itself as the last resort.
+		switch {
+		case result.UsageKnown:
+			carrier.Consumed = result.Usage.TotalTokens
+		case result.Streamed:
+			carrier.Consumed = pipeline.EstimatePartialTokens(parsed, result.StreamBytes)
+		default:
+			carrier.Consumed = carrier.Tokens
+		}
+		carrier.Relay = &result
+	}
 }

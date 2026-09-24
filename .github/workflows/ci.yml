@@ -15,6 +15,31 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: breakwater
+          POSTGRES_PASSWORD: breakwater
+          POSTGRES_DB: breakwater
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U breakwater -d breakwater"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v6
 
@@ -35,3 +60,6 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+        env:
+          BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
+          BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable

@@ -18,10 +18,33 @@ import (
 	"errors"
 )
 
+// Tier is the entitlement snapshot a tenant resolves with: the limits
+// the governance layers enforce for this identity. The snapshot rides
+// with the identity so steady-state resolution stays cache-local; the
+// enforcement itself (buckets, leases) belongs to the limiter and
+// quota modules, not here.
+type Tier struct {
+	ID string
+	// RPM and TPM are the per-minute request and token ceilings; zero
+	// disables that ceiling.
+	RPM int64
+	TPM int64
+	// MaxTokens is the per-request token clamp of the TPM reservation
+	// (the self-inflicted-DoS guard); below one it is absent.
+	MaxTokens int64
+	// MonthlyQuota documents the tier's monthly token budget; the live
+	// balance ledger is the quota module's domain.
+	MonthlyQuota int64
+	// AllowedModels lists the models the tier may call; empty allows
+	// none (fail-closed).
+	AllowedModels []string
+}
+
 // Tenant is the identity a request is attributed to.
 type Tenant struct {
 	ID   string
 	Name string
+	Tier Tier
 }
 
 // ErrUnauthorized reports an unknown, malformed or revoked API key.

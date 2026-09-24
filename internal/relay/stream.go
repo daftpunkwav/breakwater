@@ -27,13 +27,15 @@ const dataPrefix = "data: "
 
 // pumpStream copies the SSE stream from body to out line by line,
 // flushing at event boundaries, and returns the usage object when the
-// stream carried one. A returned error means the stream broke mid-flight
-// — the caller owns the abort contract.
-func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, error) {
+// stream carried one plus the total byte count it passed through. A
+// returned error means the stream broke mid-flight — the caller owns
+// the abort contract.
+func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, int64, error) {
 	reader := bufio.NewReader(body)
 	flusher, flushes := out.(http.Flusher)
 	var usage protocol.Usage
 	usageKnown := false
+	var bytes int64
 
 	for {
 		line, readErr := reader.ReadString('\n')
@@ -45,8 +47,9 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 				}
 			}
 			if _, writeErr := io.WriteString(out, trimmed+"\n"); writeErr != nil {
-				return usage, usageKnown, writeErr
+				return usage, usageKnown, bytes, writeErr
 			}
+			bytes += int64(len(trimmed)) + 1
 			// A blank line closes one SSE event: the client-visible
 			// boundary to flush at.
 			if trimmed == "" && flushes {
@@ -55,9 +58,9 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
-				return usage, usageKnown, nil
+				return usage, usageKnown, bytes, nil
 			}
-			return usage, usageKnown, readErr
+			return usage, usageKnown, bytes, readErr
 		}
 	}
 }

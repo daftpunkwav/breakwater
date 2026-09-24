@@ -1,0 +1,94 @@
+/**
+ * @file middleware
+ * @description The rate limiting pipeline stage: RPM/TPM reservation
+ * around the rest of the chain.
+ *
+ * Responsibilities:
+ * - Read the request body once (into the carrier) and derive the token
+ *   estimate both reservations are based on
+ * - Reserve before next(); reject over-limit requests with 429 and a
+ *   Retry-After, never touching an upstream (invariant I1)
+ * - Correct the reservation after next() against the tokens actually
+ *   consumed — refund only, never surcharge
+ * - Enforce the degradation policy: a limiter backend error is
+ *   fail-closed (a gateway that cannot limit must not forward)
+ *
+ * Stage order: auth -> limiter -> quota; the limiter stage owns the
+ * single body read the quota stage also relies on.
+ */
+package limiter
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/daftpunkwav/breakwater/internal/pipeline"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
+)
+
+// Middleware returns the rate limiting stage.
+func Middleware(l Limiter) pipeline.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			carrier := pipeline.CarrierFrom(r.Context())
+			if carrier == nil {
+				protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+					"no request carrier assembled")
+				return
+			}
+
+			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, protocol.MaxBodyBytes))
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					protocol.WriteError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+						"request body exceeds the accepted size")
+				} else {
+					protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+						"unreadable request body")
+				}
+				return
+			}
+			parsed, parseErr := protocol.ParseChatRequest(body)
+			carrier.SetBody(body, parsed, parseErr)
+			if parseErr != nil {
+				protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "malformed JSON body")
+				return
+			}
+
+			limits := Limits{RPM: carrier.Tenant.Tier.RPM, TPM: carrier.Tenant.Tier.TPM}
+			tokens := pipeline.EstimateTokens(carrier.Chat, carrier.Tenant.Tier.MaxTokens)
+
+			decision, err := l.Allow(r.Context(), carrier.Tenant.ID, limits, tokens)
+			if err != nil {
+				// Fail-closed: governance unavailable means reject (PRD Q4).
+				protocol.WriteError(w, http.StatusServiceUnavailable, "governance_unavailable",
+					"rate limiter unavailable")
+				return
+			}
+			if !decision.Allowed {
+				seconds := int64(decision.RetryAfter / time.Second)
+				if seconds < 1 {
+					seconds = 1
+				}
+				w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+				protocol.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded",
+					"tenant rate limit exceeded")
+				return
+			}
+			carrier.Tokens = tokens
+
+			next.ServeHTTP(w, r)
+
+			// Post-call correction: whatever was not consumed goes back.
+			// A client already gone cancels this context; the refund is
+			// lost and the bucket stays slightly low — the safe direction.
+			if refund := tokens - carrier.Consumed; refund > 0 {
+				_ = l.Refund(r.Context(), carrier.Tenant.ID, limits, refund)
+			}
+		})
+	}
+}

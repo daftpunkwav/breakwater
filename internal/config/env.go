@@ -47,6 +47,7 @@ const (
 	envRetryBackoffInitial = "BREAKWATER_RETRY_BACKOFF_INITIAL"
 	envRetryBackoffMax     = "BREAKWATER_RETRY_BACKOFF_MAX"
 	envRetryBudget         = "BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT"
+	envIdentity            = "BREAKWATER_IDENTITY"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -62,6 +63,7 @@ func Load() (Config, error) {
 		Postgres: Postgres{
 			DSN: strings.TrimSpace(os.Getenv(envPostgresDSN)),
 		},
+		Identity: strings.TrimSpace(os.Getenv(envIdentity)),
 		Obs: Obs{
 			AccessLogQueueSize: defaultAccessLogQueue,
 		},

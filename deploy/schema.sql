@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS tiers (
     rpm            INTEGER NOT NULL,
     tpm            BIGINT NOT NULL,
     monthly_quota  BIGINT NOT NULL,
+    -- Per-request token clamp of the TPM reservation: a declared
+    -- max_tokens is capped here so oversized requests cannot monopolize
+    -- a tenant bucket. Zero disables the clamp.
+    per_request_max_tokens BIGINT NOT NULL DEFAULT 0,
     -- Empty array allows no model (fail-closed); list every allowed model
     -- explicitly.
     allowed_models TEXT[] NOT NULL DEFAULT '{}',

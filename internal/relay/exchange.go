@@ -94,11 +94,12 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 	}
 	r.streamed = true
 
-	usage, usageKnown, pumpErr := pumpStream(r.job.Out, resp.Body)
+	usage, usageKnown, streamBytes, pumpErr := pumpStream(r.job.Out, resp.Body)
 	_ = resp.Body.Close()
 	if usageKnown {
 		r.usage, r.usageKnown = usage, true
 	}
+	r.streamBytes = streamBytes
 
 	if pumpErr == nil {
 		return circuit.OutcomeSuccess, nil

@@ -31,6 +31,17 @@ type Decision struct {
 	RetryAfter time.Duration
 }
 
+// Limits are the tenant's ceilings for one check. The limiter is a pure
+// mechanism: it knows tenants only as key material, never as identity —
+// the pipeline resolves the values from the tenant's tier and passes
+// them in. Zero disables a ceiling.
+type Limits struct {
+	// RPM is the per-minute request ceiling.
+	RPM int64
+	// TPM is the per-minute token ceiling.
+	TPM int64
+}
+
 // Limiter enforces RPM and TPM limits per tenant. Tokens are estimated
 // before the upstream call (reserve) and corrected after real usage is
 // known (refund); the estimate must clamp per-request max_tokens so
@@ -43,7 +54,7 @@ type Limiter interface {
 	// be ignored; the degradation policy for backend unavailability
 	// (fail-closed vs fail-open) is a pipeline-layer policy decision,
 	// not encoded here.
-	Allow(ctx context.Context, tenantID string, tokens int64) (Decision, error)
+	Allow(ctx context.Context, tenantID string, limits Limits, tokens int64) (Decision, error)
 	// Refund returns previously reserved tokens that went unconsumed.
-	Refund(ctx context.Context, tenantID string, tokens int64) error
+	Refund(ctx context.Context, tenantID string, limits Limits, tokens int64) error
 }

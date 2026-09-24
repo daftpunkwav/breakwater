@@ -113,8 +113,11 @@ type Result struct {
 	// falls back to estimation).
 	Usage      protocol.Usage
 	UsageKnown bool
-	// Streamed reports whether a streaming passthrough started.
-	Streamed bool
+	// Streamed reports whether a streaming passthrough started;
+	// StreamBytes is the byte count it delivered — the fallback metering
+	// input when the stream ended without a usage report.
+	Streamed    bool
+	StreamBytes int64
 	// Aborted reports a stream terminated through the error event
 	// contract after bytes had already reached the client.
 	Aborted bool
@@ -152,6 +155,7 @@ type run struct {
 	lastFailed    *exchangeSnapshot
 	lastFailedErr *retry.StatusError
 	terminal      *exchangeSnapshot
+	streamBytes   int64
 }
 
 // Execute runs the job. Exactly one HTTP response is written to
@@ -208,7 +212,7 @@ func (r *run) finish(err error) Result {
 			Status: http.StatusOK, UpstreamID: r.servedBy,
 			Attempts: r.attempts, Retries: r.retries,
 			Usage: r.usage, UsageKnown: r.usageKnown,
-			Streamed: true,
+			Streamed: true, StreamBytes: r.streamBytes,
 		}
 	case err == nil:
 		snap := r.success
@@ -217,6 +221,7 @@ func (r *run) finish(err error) Result {
 			Status: snap.status, UpstreamID: r.servedBy,
 			Attempts: r.attempts, Retries: r.retries,
 			Usage: r.usage, UsageKnown: r.usageKnown,
+			StreamBytes: r.streamBytes,
 		}
 
 	case errors.Is(err, retry.ErrCommitted):
@@ -225,37 +230,38 @@ func (r *run) finish(err error) Result {
 			Status: http.StatusOK, UpstreamID: r.servedBy,
 			Attempts: r.attempts, Retries: r.retries,
 			Usage: r.usage, UsageKnown: r.usageKnown,
-			Streamed: true, Aborted: true, ClientGone: r.clientGone(),
+			Streamed: true, StreamBytes: r.streamBytes,
+			Aborted: true, ClientGone: r.clientGone(),
 		}
 
 	case r.clientGone():
 		// The client is gone: writing anything would be noise. The
 		// intended status is still reported for observation.
 		return Result{Status: r.intendedStatus(err), ClientGone: true,
-			Attempts: r.attempts, Retries: r.retries, Usage: r.usage, UsageKnown: r.usageKnown}
+			Attempts: r.attempts, Retries: r.retries, Usage: r.usage, UsageKnown: r.usageKnown, StreamBytes: r.streamBytes}
 
 	case r.terminal != nil:
 		renderExchange(job.Out, r.terminal)
-		return Result{Status: r.terminal.status, Attempts: r.attempts, Retries: r.retries}
+		return Result{Status: r.terminal.status, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, errCircuitOpen):
 		renderGatewayError(job.Out, http.StatusServiceUnavailable, "circuit_open",
 			"all upstream candidates are unavailable")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries}
+		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, retry.ErrBudgetExhausted):
 		renderGatewayError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
 			"retry budget exhausted before an upstream answered")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries}
+		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
 		renderExchange(job.Out, r.lastFailed)
-		return Result{Status: r.lastFailed.status, Attempts: r.attempts, Retries: r.retries}
+		return Result{Status: r.lastFailed.status, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	default:
 		renderGatewayError(job.Out, http.StatusBadGateway, "upstream_unreachable",
 			"upstream did not answer: "+err.Error())
-		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries}
+		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 	}
 }
 
