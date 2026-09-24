@@ -66,6 +66,17 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tier model authorization: the fail-closed rule lives on the tier
+	// (empty list allows nothing) and applies to authenticated requests
+	// only — a deployment without an identity store runs no governance
+	// at all, so its zero tenant must not trip the check. Enforcement
+	// happens before any routing or upstream contact.
+	if carrier.Tenant.ID != "" && !carrier.Tenant.Tier.AllowsModel(carrier.Chat.Model) {
+		wire.RenderError(w, http.StatusForbidden, "model_not_allowed",
+			"the tenant tier does not allow model "+carrier.Chat.Model)
+		return
+	}
+
 	candidates, err := s.router.Candidates(r.Context(), carrier.Chat.Model)
 	if err != nil {
 		wire.RenderError(w, http.StatusNotFound, "model_not_found",

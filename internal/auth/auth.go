@@ -47,6 +47,21 @@ type Tenant struct {
 	Tier Tier
 }
 
+// wildcardModel matches every model in an AllowedModels list.
+const wildcardModel = "*"
+
+// AllowsModel reports whether the tier may call the model: the "*"
+// wildcard admits everything, an empty list admits nothing — the
+// fail-closed semantics the tier contract and schema promise.
+func (t Tier) AllowsModel(model string) bool {
+	for _, allowed := range t.AllowedModels {
+		if allowed == wildcardModel || allowed == model {
+			return true
+		}
+	}
+	return false
+}
+
 // ErrUnauthorized reports an unknown, malformed or revoked API key.
 var ErrUnauthorized = errors.New("auth: unknown or revoked api key")
 

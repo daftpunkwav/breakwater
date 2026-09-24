@@ -36,7 +36,7 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 	t.Helper()
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers: []auth.StaticTier{
-			{ID: "free", RPM: 2, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000},
+			{ID: "free", RPM: 2, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}},
 		},
 		Tenants: []auth.StaticTenant{
 			{ID: "t1", Name: "Tenant One", Tier: "free", Keys: []string{keyT1}},
@@ -46,7 +46,13 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}
+	return buildChainWithIdentity(t, backendURL, ledger, identity)
+}
 
+// buildChainWithIdentity assembles the full governance chain over the
+// given identity store.
+func buildChainWithIdentity(t *testing.T, backendURL string, ledger quota.Ledger, identity auth.Store) http.Handler {
+	t.Helper()
 	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backendURL})
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
@@ -211,7 +217,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	ledger.SetBalance("t1", 1_000_000)
 
 	identity, err := auth.NewStatic(auth.StaticConfig{
-		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000}},
+		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}}},
 		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{keyT1}}},
 	})
 	if err != nil {
@@ -258,5 +264,44 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"content":"hi"`) || !strings.HasSuffix(string(raw), "data: [DONE]\n\n") {
 		t.Fatalf("stream = %q", raw)
+	}
+}
+
+// TestChainDeniesModelOutsideTier is the tier-authorization evidence:
+// a model the tier does not list is rejected with 403 before any
+// routing or upstream contact, whatever the router could serve.
+func TestChainDeniesModelOutsideTier(t *testing.T) {
+	t.Parallel()
+	backend := testUpstreamBackend(t)
+	defer backend.Close()
+	ledger := quota.NewMemory()
+	ledger.SetBalance("t1", 1_000_000)
+
+	identity, err := auth.NewStatic(auth.StaticConfig{
+		Tiers: []auth.StaticTier{
+			// Explicit list without the wildcard: only m1 may be called,
+			// and an empty list would allow nothing (fail-closed).
+			{ID: "free", RPM: 10, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"m1"}},
+		},
+		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{keyT1}}},
+	})
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	handler := buildChainWithIdentity(t, backend.URL, ledger, identity)
+
+	status, body, _ := completionRequest(t, handler, keyT1, okBody)
+	if status != http.StatusOK {
+		t.Fatalf("allowed model status = %d body = %s", status, body)
+	}
+	status, body, _ = completionRequest(t, handler, keyT1,
+		`{"model":"other","messages":[{"role":"user","content":"hello"}]}`)
+	if status != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
+		t.Fatalf("denied model status = %d body = %s, want 403 envelope", status, body)
+	}
+	// The rejection refunds in full: no quota moved for the denied call.
+	bal, err := ledger.Balance(context.Background(), "t1")
+	if err != nil || bal != 1_000_000-3 {
+		t.Fatalf("balance = %d err = %v, want 999997 (denied call refunded)", bal, err)
 	}
 }
