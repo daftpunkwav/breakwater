@@ -83,9 +83,13 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Settlement input: real usage when the reply carried one, the
-	// byte-derived estimate for streams that ended without it, and the
-	// reservation itself as the last resort.
+	// byte-derived estimate for streams that ended without it, the
+	// reservation itself as the last resort for a delivered 2xx reply,
+	// and zero for a failure — an error reply served no tokens, so its
+	// reservation refunds in full.
 	switch {
+	case result.Status < 200 || result.Status > 299:
+		carrier.Consumed = 0
 	case result.UsageKnown:
 		carrier.Consumed = result.Usage.TotalTokens
 	case result.Streamed:

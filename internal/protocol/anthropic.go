@@ -243,7 +243,9 @@ func (s *anthropicStream) Start(w ioWriter, model string) error {
 }
 
 // Delta implements StreamTranscoder: the first content opens the text
-// block; every piece is a content_block_delta.
+// block; every piece is a content_block_delta. A finish_reason is
+// captured wherever it rides — some compatible backends send it on the
+// same frame as the last piece of content instead of a separate one.
 func (s *anthropicStream) Delta(w ioWriter, payload []byte) error {
 	var chunk struct {
 		Choices []struct {
@@ -255,6 +257,10 @@ func (s *anthropicStream) Delta(w ioWriter, payload []byte) error {
 	}
 	if err := json.Unmarshal(payload, &chunk); err != nil || len(chunk.Choices) == 0 {
 		return nil
+	}
+
+	if chunk.Choices[0].FinishReason != nil {
+		s.stop = anthropicStopReason(*chunk.Choices[0].FinishReason)
 	}
 
 	if text := chunk.Choices[0].Delta.Content; text != "" {
@@ -274,10 +280,6 @@ func (s *anthropicStream) Delta(w ioWriter, payload []byte) error {
 			"index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": text},
 		})
-	}
-
-	if chunk.Choices[0].FinishReason != nil {
-		s.stop = anthropicStopReason(*chunk.Choices[0].FinishReason)
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -143,6 +144,65 @@ func TestFlightWaiterContextBoundsTheWait(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("waiter blocked %v, its own context should have ended it", elapsed)
+	}
+}
+
+// TestFlightPanicReleasesWaiters pins the resilience rule: a panicking
+// holder must not wedge the flight. The waiters observe the failure,
+// the panic still reaches the holder's own caller (net/http recovers it
+// there), and the key is reusable afterwards.
+func TestFlightPanicReleasesWaiters(t *testing.T) {
+	t.Parallel()
+	g := NewFlight()
+	hold := make(chan struct{})
+	boom := errors.New("kaboom")
+
+	// The holder panics inside fn; Do must release the flight and
+	// re-raise toward its own caller.
+	ownerGotPanic := make(chan any, 1)
+	go func() {
+		defer func() {
+			ownerGotPanic <- recover()
+		}()
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+			<-hold
+			panic(boom)
+		})
+	}()
+	time.Sleep(50 * time.Millisecond) // the flight registers
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err, _ := g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+				t.Error("a waiter must never execute the loader")
+				return entryFor(200), nil
+			})
+			errs <- err
+		}()
+	}
+	time.Sleep(50 * time.Millisecond) // the waiters pile onto the flight
+	close(hold)
+	wg.Wait()
+	close(errs)
+
+	if r := <-ownerGotPanic; r != boom {
+		t.Fatalf("recovered %v, want the original panic re-raised to the holder", r)
+	}
+	for err := range errs {
+		if err == nil || !strings.Contains(err.Error(), "fetch panicked") {
+			t.Fatalf("waiter err = %v, want the shared panic failure", err)
+		}
+	}
+	// The flight must be gone: a fresh call owns its fetch again.
+	_, err, owner := g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+		return entryFor(200), nil
+	})
+	if !owner || err != nil {
+		t.Fatalf("owner = %v err = %v, want the key reusable after the panic", owner, err)
 	}
 }
 

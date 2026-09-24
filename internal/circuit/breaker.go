@@ -154,7 +154,10 @@ func (b *Registry) Allow(_ context.Context, upstreamID string) (Permission, bool
 
 // StateOf implements Breaker. Reading state performs lazy transitions
 // (open cooldown elapsed → half-open; expired probe → open) so the
-// router's pre-filter never sees stale positions.
+// router's pre-filter never sees stale positions. A read never
+// allocates the probe slot: probing stays the exclusive business of
+// Allow, so a router read followed by the attempt still finds the slot
+// free.
 func (b *Registry) StateOf(_ context.Context, upstreamID string) State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -164,8 +167,10 @@ func (b *Registry) StateOf(_ context.Context, upstreamID string) State {
 	switch s.name {
 	case StateOpen:
 		if now.Sub(s.openedAt) >= b.cfg.Cooldown {
+			// Lazy transition so a reader never sees a stale open. No
+			// probe is allocated here: a read must not consume the single
+			// half-open slot — the next Allow becomes the probe.
 			b.transition(s, StateHalfOpen)
-			s.probe = &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
 			return StateHalfOpen
 		}
 	case StateHalfOpen:

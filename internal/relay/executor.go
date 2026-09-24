@@ -154,7 +154,6 @@ type run struct {
 	usage      protocol.Usage
 	usageKnown bool
 	streamed   bool
-	aborted    bool
 
 	success       *exchangeSnapshot
 	lastFailed    *exchangeSnapshot

@@ -27,8 +27,9 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
-// StreamOptions mirrors the OpenAI stream options object; OnlyEstimated
-// usage chunk arrival is what settlement reads on streaming paths.
+// StreamOptions mirrors the OpenAI stream options object. The usage
+// chunk it requests is what settlement reads on streaming paths; the
+// request body itself is always forwarded verbatim.
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }

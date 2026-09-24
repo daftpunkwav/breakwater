@@ -151,6 +151,10 @@ func NewMetrics() *Metrics {
 		[]string{"upstream"}, nil)
 
 	reg("breakwater_logs_dropped_total", "Access log entries dropped for capacity.", "counter", nil, nil)
+	// Pre-create the label-less child so the drop counter is exposed —
+	// as the healthy zero — from the first scrape, before the periodic
+	// sync ever runs.
+	m.families["breakwater_logs_dropped_total"].childOf()
 	return m
 }
 
@@ -312,7 +316,8 @@ func (m *Metrics) StreamAborted(upstream string) {
 	m.inc("breakwater_sse_stream_aborted_total", 1, upstream)
 }
 
-// SetLogsDropped publishes the access log drop counter.
+// SetLogsDropped publishes the access log drop counter; Render sources
+// the sample value from here.
 func (m *Metrics) SetLogsDropped(n int64) {
 	if m == nil {
 		return

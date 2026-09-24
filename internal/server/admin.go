@@ -14,6 +14,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -48,10 +49,16 @@ func NewAdmin(token string, balances BalanceLookup, breakers BreakerStates) *Adm
 	return &Admin{token: token, balances: balances, breakers: breakers}
 }
 
-// ServeHTTP implements http.Handler with method guards.
+// ServeHTTP implements http.Handler: the bearer guard first, then the
+// read-only endpoints under a GET method guard.
 func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !a.authorized(r) {
 		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	switch {
@@ -70,15 +77,19 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authorized checks the bearer token; empty token disables the check.
+// The comparison is constant-time: the token guards a privileged
+// surface and must not leak through timing.
 func (a *Admin) authorized(r *http.Request) bool {
 	if a.token == "" {
 		return true
 	}
 	const prefix = "Bearer "
-	if !strings.HasPrefix(r.Header.Get("Authorization"), prefix) {
+	raw := r.Header.Get("Authorization")
+	if !strings.HasPrefix(raw, prefix) {
 		return false
 	}
-	return strings.TrimSpace(r.Header.Get("Authorization")[len(prefix):]) == a.token
+	presented := strings.TrimSpace(raw[len(prefix):])
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(a.token)) == 1
 }
 
 func (a *Admin) serveQuota(w http.ResponseWriter, r *http.Request, tenantID string) {

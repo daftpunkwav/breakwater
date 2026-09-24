@@ -157,6 +157,29 @@ func TestAnthropicStreamSequence(t *testing.T) {
 	}
 }
 
+// TestAnthropicStreamFinishReasonOnCombinedFrame pins that a
+// finish_reason riding the last content frame — the shape vLLM-style
+// compatible backends emit — still maps onto the stop_reason vocabulary
+// instead of degrading to end_turn.
+func TestAnthropicStreamFinishReasonOnCombinedFrame(t *testing.T) {
+	t.Parallel()
+	transcoder := WireFor(FormatAnthropicMessages).Stream()
+	rec := httptest.NewRecorder()
+
+	if err := transcoder.Start(rec, "m"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := transcoder.Delta(rec, []byte(`{"choices":[{"delta":{"content":"cut short"},"finish_reason":"length"}]}`)); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	if err := transcoder.Finish(rec, Usage{}, false); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if !strings.Contains(rec.Body.String(), `"stop_reason":"max_tokens"`) {
+		t.Fatalf("combined-frame finish_reason lost:\n%s", rec.Body.String())
+	}
+}
+
 func TestAnthropicStreamAbort(t *testing.T) {
 	t.Parallel()
 	transcoder := WireFor(FormatAnthropicMessages).Stream()

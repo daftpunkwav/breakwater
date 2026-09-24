@@ -197,3 +197,22 @@ func TestBackoffStaysUnderCeiling(t *testing.T) {
 		t.Fatalf("unshaped policy produced delay %v, want 0", d)
 	}
 }
+
+func TestBackoffCeilingGrowsFromInitial(t *testing.T) {
+	t.Parallel()
+	policy := Policy{BackoffInitial: 10 * time.Millisecond, BackoffMax: 40 * time.Millisecond}
+	want := []time.Duration{10, 20, 40, 40, 40} // double, then cap at max
+	for i, w := range want {
+		if got := time.Duration(backoffCeiling(policy, i+1)); got != w*time.Millisecond {
+			t.Fatalf("retry %d ceiling = %v, want %v (the sequence must grow from BackoffInitial)", i+1, got, w*time.Millisecond)
+		}
+	}
+	// Without an initial the cap is the max from the first retry on.
+	if got := backoffCeiling(Policy{BackoffMax: 30 * time.Millisecond}, 1); got != int64(30*time.Millisecond) {
+		t.Fatalf("initial-less ceiling = %v, want 30ms", time.Duration(got))
+	}
+	// Without a max the doubling is uncapped until the shift clamp.
+	if got := backoffCeiling(Policy{BackoffInitial: time.Second}, 3); got != int64(4*time.Second) {
+		t.Fatalf("uncapped ceiling = %v, want 4s", time.Duration(got))
+	}
+}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
+	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // countingUpstream answers chat completions and counts fetches; stream
@@ -169,5 +170,45 @@ func TestCacheMiddlewareStreamBoundary(t *testing.T) {
 	}
 	if got := fetches.Load(); got != 1 {
 		t.Fatalf("fetches = %d, want 1: the replay must come from the cache", got)
+	}
+}
+
+// abortingUpstream delivers a partial stream terminated through the
+// error event contract, reporting it through the carrier the way the
+// inference handler does, and counts how often it was entered.
+func abortingUpstream(fetches *atomic.Int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"par\"}}]}\n\n" +
+			"event: error\ndata: {\"error\":{\"code\":\"upstream_reset\"}}\n\ndata: [DONE]\n\n"))
+		if carrier := pipeline.CarrierFrom(r.Context()); carrier != nil {
+			carrier.Relay = &relay.Result{Status: http.StatusOK, Streamed: true, Aborted: true}
+		}
+	})
+}
+
+// TestCacheMiddlewareNeverStoresAbortedStreams guards the honesty rule:
+// a stream terminated through the error contract is a failure, and its
+// bytes must never come back as a cached completion.
+func TestCacheMiddlewareNeverStoresAbortedStreams(t *testing.T) {
+	t.Parallel()
+	var fetches atomic.Int64
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
+	)(abortingUpstream(&fetches))
+
+	body := `{"model":"m","stream":true,"temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	for i := range 2 {
+		rec := fireRequest(handler, body)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"code":"upstream_reset"`) {
+			t.Fatalf("request %d: %d %q", i, rec.Code, rec.Body.String())
+		}
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetches = %d, want 2: the aborted stream must not be cached", got)
 	}
 }

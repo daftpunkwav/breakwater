@@ -17,14 +17,13 @@
  * the terminal forward stage; they must not be composed as Middleware
  * layers, because a retry cannot replay a half-consumed http.Handler
  * response. The terminal stage is owned by the relay engine
- * (internal/relay, lands with the forwarding milestone); stages that
- * reserve before next() settle after it returns (quota settles within
- * its own middleware scope).
+ * (internal/relay); stages that reserve before next() settle after it
+ * returns (quota settles within its own middleware scope).
  *
  * Stages wrap http.Handler so that http.Flusher implementations survive
- * every layer, a prerequisite for SSE passthrough. A shared per-request
- * carrier joins when the first real stage lands; it must be a typed
- * struct assembled per request, not scattered context values.
+ * every layer, a prerequisite for SSE passthrough. The shared
+ * per-request carrier is a typed struct assembled at chain entry, not
+ * scattered context values.
  */
 package pipeline
 

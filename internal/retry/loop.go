@@ -118,20 +118,30 @@ func maxAttempts(policy Policy) int {
 // retry that follows attempt n. Full jitter picks uniformly from
 // [0, ceiling), spreading retries instead of synchronizing them.
 func backoffDelay(policy Policy, attempt int) time.Duration {
-	ceiling := policy.BackoffMax
-	if attempt > 1 {
-		shift := attempt - 2
-		if shift > 16 {
-			shift = 16
-		}
-		if exp := policy.BackoffInitial << uint(shift); exp > 0 && (ceiling == 0 || exp < ceiling) {
-			ceiling = exp
-		}
-	}
+	ceiling := backoffCeiling(policy, attempt)
 	if ceiling <= 0 {
 		return 0
 	}
-	return time.Duration(rand.Int64N(int64(ceiling)))
+	return time.Duration(rand.Int64N(ceiling))
+}
+
+// backoffCeiling is the exponential cap for the retry that follows
+// attempt n: the first retry waits at most BackoffInitial, every later
+// retry doubles the cap, never past BackoffMax. A zero BackoffInitial
+// leaves the cap at BackoffMax; an overflowed doubling falls back to it.
+func backoffCeiling(policy Policy, attempt int) int64 {
+	shift := attempt - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 16 {
+		shift = 16
+	}
+	ceiling := int64(policy.BackoffMax)
+	if exp := int64(policy.BackoffInitial) << uint(shift); exp > 0 && (ceiling == 0 || exp < ceiling) {
+		return exp
+	}
+	return ceiling
 }
 
 // sleep waits for d or until ctx ends.

@@ -20,6 +20,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -60,6 +61,19 @@ func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (E
 
 	// Holder path. The result is published before Done so waiting
 	// readers observe it through the WaitGroup's happens-before.
+	defer func() {
+		if r := recover(); r != nil {
+			// A panicking fetch must not wedge the flight: publish the
+			// failure, release the waiters, then re-raise so the caller's
+			// recovery (net/http's per-connection handler) sees it.
+			c.err = fmt.Errorf("cache: fetch panicked: %v", r)
+			g.mu.Lock()
+			delete(g.calls, key)
+			g.mu.Unlock()
+			c.wg.Done()
+			panic(r)
+		}
+	}()
 	value, err := fn(ctx)
 	c.value, c.err = value, err
 

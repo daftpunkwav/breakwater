@@ -74,6 +74,28 @@ func TestMetricsCircuitStateGauge(t *testing.T) {
 	}
 }
 
+// TestMetricsLogsDroppedRendersFromSync pins that the drop counter is
+// exposed from the first scrape — including the healthy zero, which
+// must still produce a sample line for the scraper — and that the
+// periodic sync moves the rendered value.
+func TestMetricsLogsDroppedRendersFromSync(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+
+	var out strings.Builder
+	m.Render(&out)
+	if !strings.Contains(out.String(), "breakwater_logs_dropped_total 0") {
+		t.Errorf("healthy zero missing from exposition:\n%s", out.String())
+	}
+
+	m.SetLogsDropped(7)
+	out.Reset()
+	m.Render(&out)
+	if !strings.Contains(out.String(), "breakwater_logs_dropped_total 7") {
+		t.Errorf("drop counter missing from exposition:\n%s", out.String())
+	}
+}
+
 // TestMetricsNilSafety pins that disabled instrumentation is free of
 // nil panics at every call site.
 func TestMetricsNilSafety(t *testing.T) {

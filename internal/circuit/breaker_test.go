@@ -208,6 +208,37 @@ func TestBreakerTransitionsAreObserved(t *testing.T) {
 	}
 }
 
+// TestBreakerReadThenAllowProbes reproduces the production sequence —
+// the router reads StateOf, then the attempt calls Allow — and proves a
+// read cannot consume the probe slot: after the cooldown the breaker
+// must still admit the probe and recover to closed.
+func TestBreakerReadThenAllowProbes(t *testing.T) {
+	t.Parallel()
+	b, advance := testRegistry(t, nil)
+	ctx := context.Background()
+
+	for range 3 {
+		p, _ := b.Allow(ctx, "u")
+		p.Report(OutcomeServerFault)
+	}
+	advance(2 * time.Second) // cooldown elapses
+
+	// The router's pre-filter sees half-open and keeps the upstream as a
+	// candidate.
+	if got := b.StateOf(ctx, "u"); got != StateHalfOpen {
+		t.Fatalf("state = %s, want half-open after the cooldown", got)
+	}
+	// The attempt right after the read must get the probe slot.
+	probe, ok := b.Allow(ctx, "u")
+	if !ok {
+		t.Fatal("Allow denied right after a StateOf read: the read consumed the probe slot")
+	}
+	probe.Report(OutcomeSuccess)
+	if got := b.StateOf(ctx, "u"); got != StateClosed {
+		t.Fatalf("state = %s, want closed after the probe", got)
+	}
+}
+
 // TestBreakerConcurrentProbesExactlyOne is the I4 concurrency evidence
 // under -race: a stampede against a half-open breaker must grant
 // exactly one probe.

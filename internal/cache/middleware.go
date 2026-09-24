@@ -81,7 +81,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r)
 				metrics.CacheFetch(upstreamOf(carrier))
-				if storeWorthy(tee) {
+				if storeWorthy(tee) && !relayAborted(carrier) {
 					_ = store.Set(r.Context(), key, capture(tee), ttl)
 				}
 				return
@@ -153,6 +153,13 @@ func upstreamOf(carrier *pipeline.Carrier) string {
 // a 2xx that fit the capture buffer entirely.
 func storeWorthy(tee *httpserver.TeeResponseWriter) bool {
 	return tee.Status() >= 200 && tee.Status() < 300 && !tee.Truncated()
+}
+
+// relayAborted reports a stream the forward stage terminated through the
+// error event contract: its bytes are a partial reply plus the error
+// frame — never a replayable completion, whatever the HTTP status says.
+func relayAborted(carrier *pipeline.Carrier) bool {
+	return carrier.Relay != nil && carrier.Relay.Aborted
 }
 
 // storeWorthyFromEntry applies the same rule to a fetched entry.

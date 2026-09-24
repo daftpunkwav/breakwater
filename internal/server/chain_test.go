@@ -150,6 +150,31 @@ func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	}
 }
 
+// TestChainFailedRequestSettlesAtZero is the S6 companion: an upstream
+// failure serves no tokens, so the reservation must refund in full —
+// a tenant never pays the estimate for a request no upstream answered.
+func TestChainFailedRequestSettlesAtZero(t *testing.T) {
+	t.Parallel()
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"boom"}}`))
+	}))
+	defer failing.Close()
+	ledger := quota.NewMemory()
+	ledger.SetBalance("t1", 1_000_000)
+	handler := buildChain(t, failing.URL, ledger)
+
+	status, _, _ := completionRequest(t, handler, keyT1, okBody)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 passthrough", status)
+	}
+	bal, err := ledger.Balance(context.Background(), "t1")
+	if err != nil || bal != 1_000_000 {
+		t.Fatalf("balance = %d err = %v, want untouched 1_000_000 (failed request consumed nothing)", bal, err)
+	}
+}
+
 // TestChainQuotaExhaustionIsPaymentRequired is scenario S5: a drained
 // tenant gets 402 and the upstream stays untouched.
 func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {

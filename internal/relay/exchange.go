@@ -10,7 +10,7 @@
  *   scraping, and terminate honestly through the error event contract
  *   once bytes have reached the client (invariant I6)
  * - Nothing else: the attempt loop and budgets live in the retry
- *   package, client rendering in render.go
+ *   package, client rendering with the protocol wires
  */
 package relay
 
@@ -115,8 +115,8 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 
 	// Mid-stream failure: honest termination per the frozen contract —
 	// one error frame in the client's format; chunks already sent stay
-	// sent.
-	r.aborted = true
+	// sent. The loop-level marker for this state is ErrCommitted, which
+	// the finish stage reports as Result.Aborted.
 	if r.clientGone() {
 		return circuit.OutcomeClientFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
