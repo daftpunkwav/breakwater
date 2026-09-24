@@ -152,7 +152,8 @@ func (anthropicWire) RenderUpstreamError(w http.ResponseWriter, status int, head
 }
 
 // RenderError implements Wire: gateway failures use the Messages error
-// envelope with the frozen in-stream code preserved in the type.
+// envelope; the gateway code maps onto the Messages error-type
+// vocabulary.
 func (anthropicWire) RenderError(w http.ResponseWriter, status int, code, message string) {
 	writeJSONResponse(w, status, anthropicErrorBody(anthropicErrorType(Code(code)), message))
 }
@@ -196,15 +197,15 @@ func anthropicStopReason(finish string) string {
 	}
 }
 
-// anthropicErrorType maps a frozen in-stream code to the Messages
-// error-type vocabulary.
+// anthropicErrorType maps a gateway error code (the shared Code
+// vocabulary) to the Messages error-type vocabulary.
 func anthropicErrorType(code Code) string {
 	switch code {
 	case CodeUpstreamTimeout:
 		return "timeout_error"
-	case "rate_limit_exceeded":
+	case CodeRateLimited:
 		return "rate_limit_error"
-	case "insufficient_quota":
+	case CodeInsufficientQuota:
 		return "billing_error"
 	default:
 		return "api_error"

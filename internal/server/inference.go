@@ -37,7 +37,7 @@ func routeOfFormat(format protocol.Format) string {
 	}
 }
 
-// inferenceServes the chat completion endpoints.
+// Inference serves one client format's inference endpoint.
 type Inference struct {
 	format  protocol.Format
 	router  router.Router
@@ -73,7 +73,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// at all, so its zero tenant must not trip the check. Enforcement
 	// happens before any routing or upstream contact.
 	if carrier.Tenant.ID != "" && !carrier.Tenant.Tier.AllowsModel(carrier.Chat.Model) {
-		wire.RenderError(w, http.StatusForbidden, "model_not_allowed",
+		wire.RenderError(w, http.StatusForbidden, string(protocol.CodeModelNotAllowed),
 			"the tenant tier does not allow model "+carrier.Chat.Model)
 		return
 	}

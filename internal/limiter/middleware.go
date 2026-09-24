@@ -59,7 +59,7 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 					seconds = 1
 				}
 				w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-				wire.RenderError(w, http.StatusTooManyRequests, "rate_limit_exceeded",
+				wire.RenderError(w, http.StatusTooManyRequests, string(protocol.CodeRateLimited),
 					"tenant rate limit exceeded")
 				return
 			}

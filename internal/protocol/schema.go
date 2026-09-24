@@ -96,16 +96,24 @@ type ErrorBody struct {
 	Code    string `json:"code"`
 }
 
-// gatewayErrorType marks gateway-originated failures, both as the HTTP
-// envelope type and as the in-stream error type of the frozen SSE
-// contract.
-const gatewayErrorType = "gateway_error"
+// Rejection codes the gateway carries in the HTTP error envelope. They
+// share the Code vocabulary with the in-stream contract (sse.go): the
+// Messages wire maps them onto its error-type vocabulary.
+const (
+	// CodeRateLimited marks a 429 rejection of the rate limiter.
+	CodeRateLimited Code = "rate_limit_exceeded"
+	// CodeInsufficientQuota marks a 402 rejection of the quota ledger.
+	CodeInsufficientQuota Code = "insufficient_quota"
+	// CodeModelNotAllowed marks a 403 rejection by tier model
+	// authorization.
+	CodeModelNotAllowed Code = "model_not_allowed"
+)
 
 // WriteError renders an error envelope with the given HTTP status.
 func WriteError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(ErrorEnvelope{
-		Error: ErrorBody{Message: message, Type: gatewayErrorType, Code: code},
+		Error: ErrorBody{Message: message, Type: ErrorType, Code: code},
 	})
 }

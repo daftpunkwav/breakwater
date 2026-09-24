@@ -5,7 +5,8 @@
  *
  * Responsibilities:
  * - Reserve the estimated token budget; deny with 402 when the balance
- *   cannot cover it (欠费不放大: a drained tenant stops here)
+ *   cannot cover it (a drained tenant stops here and costs nothing
+ *   further)
  * - Settle or cancel the lease once the outcome is known: zero
  *   consumption cancels (rejections, cache hits), anything else
  *   settles with the consumed count
@@ -50,7 +51,7 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 			lease, err := ledger.Reserve(r.Context(), carrier.Tenant.ID, amount)
 			switch {
 			case errors.Is(err, ErrInsufficientBalance):
-				wire.RenderError(w, http.StatusPaymentRequired, "insufficient_quota",
+				wire.RenderError(w, http.StatusPaymentRequired, string(protocol.CodeInsufficientQuota),
 					"the tenant balance cannot cover the estimated request")
 				return
 			case err != nil:
