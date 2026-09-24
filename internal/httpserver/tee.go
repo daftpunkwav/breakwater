@@ -28,8 +28,8 @@ import (
 type TeeResponseWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
-	// cap bounds retained body bytes; 0 selects counting mode.
-	cap int
+	// captureLimit bounds retained body bytes; 0 selects counting mode.
+	captureLimit int
 
 	status      int
 	wroteHeader bool
@@ -39,14 +39,14 @@ type TeeResponseWriter struct {
 	flushed     bool
 }
 
-// NewBufferingTee builds a tee that retains the body up to cap bytes;
-// writes past the cap pass through but are dropped from the retained
-// copy. Cap must be positive.
-func NewBufferingTee(w http.ResponseWriter, cap int) *TeeResponseWriter {
-	if cap < 0 {
-		cap = 0
+// NewBufferingTee builds a tee that retains the body up to captureLimit
+// bytes; writes past the limit pass through but are dropped from the
+// retained copy. The limit must be positive.
+func NewBufferingTee(w http.ResponseWriter, captureLimit int) *TeeResponseWriter {
+	if captureLimit < 0 {
+		captureLimit = 0
 	}
-	return newTee(w, cap)
+	return newTee(w, captureLimit)
 }
 
 // NewCountingTee builds a tee that only records byte counts; body bytes
@@ -55,8 +55,8 @@ func NewCountingTee(w http.ResponseWriter) *TeeResponseWriter {
 	return newTee(w, 0)
 }
 
-func newTee(w http.ResponseWriter, cap int) *TeeResponseWriter {
-	t := &TeeResponseWriter{w: w, cap: cap}
+func newTee(w http.ResponseWriter, captureLimit int) *TeeResponseWriter {
+	t := &TeeResponseWriter{w: w, captureLimit: captureLimit}
 	if f, ok := w.(http.Flusher); ok {
 		t.flusher = f
 	}
@@ -84,8 +84,8 @@ func (t *TeeResponseWriter) Write(p []byte) (int, error) {
 	}
 	n, err := t.w.Write(p)
 	t.bytes += int64(n)
-	if t.cap > 0 {
-		if room := t.cap - t.body.Len(); room > 0 {
+	if t.captureLimit > 0 {
+		if room := t.captureLimit - t.body.Len(); room > 0 {
 			kept := min(room, len(p))
 			t.body.Write(p[:kept])
 			t.truncated = kept < len(p)
@@ -111,11 +111,11 @@ func (t *TeeResponseWriter) Flush() {
 func (t *TeeResponseWriter) Status() int { return t.status }
 
 // Body returns the retained body bytes. In counting mode it is empty;
-// past the capture cap it is a truncated prefix.
+// past the capture limit it is a truncated prefix.
 func (t *TeeResponseWriter) Body() []byte { return t.body.Bytes() }
 
 // Truncated reports whether body bytes passed through unretained because
-// the capture cap was exceeded.
+// the capture limit was exceeded.
 func (t *TeeResponseWriter) Truncated() bool { return t.truncated }
 
 // BytesWritten reports the total body byte count that reached the client.

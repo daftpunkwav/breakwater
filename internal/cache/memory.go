@@ -41,8 +41,8 @@ type Memory struct {
 // MemoryOption customizes a Memory cache.
 type MemoryOption func(*Memory)
 
-// WithCapacity caps the entry count; the insertion-evicted victim is
-// an arbitrary expired-or-oldest entry.
+// WithCapacity caps the entry count; a capacity-pressure eviction drops
+// an arbitrary entry (map iteration order), not a policy-chosen victim.
 func WithCapacity(n int) MemoryOption {
 	return func(m *Memory) {
 		if n >= 1 {

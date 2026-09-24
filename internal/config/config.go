@@ -90,7 +90,8 @@ type Server struct {
 }
 
 // Redis holds connection settings for the hot governance state store
-// (rate limit buckets, quota hot ledger, response cache).
+// (rate limit buckets, quota hot ledger). The response cache is
+// process-local and does not use Redis.
 type Redis struct {
 	Addr string
 }

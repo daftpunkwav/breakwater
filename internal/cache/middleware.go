@@ -36,12 +36,15 @@ import (
 // bigger reply still reaches the client but is never stored.
 const maxCacheableBytes = 8 << 20
 
-// relayCache marks cache-served responses for observation.
-const relayCache = "cache"
-
-// relaySharedFetch marks singleflight waiters that rode an existing
-// fetch.
-const relaySharedFetch = "shared-fetch"
+// observedUpstream names the pseudo upstream ids recorded for responses
+// no upstream served, so observation can tell the three origins apart.
+const (
+	// observedUpstreamCache marks a replay from the store.
+	observedUpstreamCache = "cache"
+	// observedUpstreamSharedFetch marks a singleflight waiter that rode
+	// an existing fetch.
+	observedUpstreamSharedFetch = "shared-fetch"
+)
 
 // Middleware returns the cache stage over a store, a flight group and
 // the base TTL applied by the store (with its jitter).
@@ -69,7 +72,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				replay(w, entry)
 				carrier.CacheHit = true
 				carrier.Consumed = 0
-				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: relayCache}
+				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: observedUpstreamCache}
 				return
 			}
 			metrics.CacheMiss()
@@ -139,7 +142,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 			replay(w, entry)
 			carrier.CacheHit = true
 			carrier.Consumed = 0
-			carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: relaySharedFetch}
+			carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: observedUpstreamSharedFetch}
 		})
 	}
 }

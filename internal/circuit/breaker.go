@@ -90,7 +90,7 @@ func OnTransition(fn func(upstreamID string, from, to State)) Option {
 	return func(b *Registry) { b.onTransition = fn }
 }
 
-// NewBreaker builds the breaker registry.
+// NewRegistry builds the breaker registry.
 func NewRegistry(cfg Config, opts ...Option) *Registry {
 	if cfg.FailThreshold <= 0 {
 		cfg.FailThreshold = defaultFailThreshold

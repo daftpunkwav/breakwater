@@ -4,7 +4,7 @@
  *
  * Responsibilities:
  * - Define the stored entry and the storage port
- * - Nothing else: singleflight, negative caching and eligibility policy
+ * - Nothing else: singleflight and the eligibility policy
  *   (deterministic parameter combinations only) live with their owners —
  *   as coordination around the port, not inside it
  *

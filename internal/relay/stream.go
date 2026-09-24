@@ -35,8 +35,10 @@ const dataPrefix = "data: "
 // tests against buffered lines.
 var dataPrefixBytes = []byte(dataPrefix)
 
-// doneSentinel is the canonical wire's stream terminator.
-const doneSentinel = "[DONE]"
+// donePayload is the [DONE] token carried inside the canonical wire's
+// terminator data line (the full line form lives in the protocol
+// package, which owns the wire format).
+const donePayload = "[DONE]"
 
 // pumpTranscoded feeds the upstream SSE sequence through a stream
 // transcoder: the preamble opens the exchange, every data frame is
@@ -65,7 +67,7 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 		if len(line) > 0 {
 			trimmed := trimEOL(line)
 			if payload, isData := bytes.CutPrefix(trimmed, dataPrefixBytes); isData {
-				if string(payload) != doneSentinel {
+				if string(payload) != donePayload {
 					if u, ok := protocol.ParseUsage(payload); ok {
 						usage, usageKnown = u, true
 					}

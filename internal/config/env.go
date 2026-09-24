@@ -24,19 +24,19 @@ const (
 	defaultShutdownGrace = 15 * time.Second
 	// No default Redis address: memory backends are the zero-config
 	// mode; Redis runs only when explicitly configured.
-	defaultRedisAddr         = ""
-	defaultAccessLogQueue    = 4096
-	defaultMaxAttempts       = 3
-	defaultAttemptTimeout    = 30 * time.Second
-	defaultOverallDeadline   = 60 * time.Second
-	defaultBackoffInitial    = 100 * time.Millisecond
-	defaultBackoffMax        = 2 * time.Second
-	defaultRetryBudgetRadius = 64
-	defaultCacheTTL          = 60 * time.Second
-	defaultCacheCapacity     = 1024
-	defaultCircuitThreshold  = 5
-	defaultCircuitCooldown   = 30 * time.Second
-	defaultCircuitProbe      = 5 * time.Second
+	defaultRedisAddr        = ""
+	defaultAccessLogQueue   = 4096
+	defaultMaxAttempts      = 3
+	defaultAttemptTimeout   = 30 * time.Second
+	defaultOverallDeadline  = 60 * time.Second
+	defaultBackoffInitial   = 100 * time.Millisecond
+	defaultBackoffMax       = 2 * time.Second
+	defaultRetryBudgetCap   = 64
+	defaultCacheTTL         = 60 * time.Second
+	defaultCacheCapacity    = 1024
+	defaultCircuitThreshold = 5
+	defaultCircuitCooldown  = 30 * time.Second
+	defaultCircuitProbe     = 5 * time.Second
 )
 
 // Environment variable names.
@@ -96,7 +96,7 @@ func Load() (Config, error) {
 			OverallDeadline:   defaultOverallDeadline,
 			BackoffInitial:    defaultBackoffInitial,
 			BackoffMax:        defaultBackoffMax,
-			BudgetMaxInFlight: defaultRetryBudgetRadius,
+			BudgetMaxInFlight: defaultRetryBudgetCap,
 		},
 		Cache: Cache{
 			Enabled:  true,
