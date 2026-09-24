@@ -47,6 +47,9 @@ type Carrier struct {
 	// reject or bypass the upstream leave it at zero, and the refund
 	// stages correct every reservation against it.
 	Consumed int64
+	// CacheHit reports a response served from the cache (a hit replay
+	// or a shared singleflight fetch), for observation and refund.
+	CacheHit bool
 	// Relay captures the forward stage's outcome for the stages after
 	// it (settlement details, observation dimensions).
 	Relay *relay.Result

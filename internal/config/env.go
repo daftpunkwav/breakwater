@@ -30,6 +30,11 @@ const (
 	defaultBackoffInitial    = 100 * time.Millisecond
 	defaultBackoffMax        = 2 * time.Second
 	defaultRetryBudgetRadius = 64
+	defaultCacheTTL          = 60 * time.Second
+	defaultCacheCapacity     = 1024
+	defaultCircuitThreshold  = 5
+	defaultCircuitCooldown   = 30 * time.Second
+	defaultCircuitProbe      = 5 * time.Second
 )
 
 // Environment variable names.
@@ -48,6 +53,15 @@ const (
 	envRetryBackoffMax     = "BREAKWATER_RETRY_BACKOFF_MAX"
 	envRetryBudget         = "BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT"
 	envIdentity            = "BREAKWATER_IDENTITY"
+
+	envCacheEnabled  = "BREAKWATER_CACHE_ENABLED"
+	envCacheTTL      = "BREAKWATER_CACHE_TTL"
+	envCacheCapacity = "BREAKWATER_CACHE_CAPACITY"
+
+	envCircuitEnabled   = "BREAKWATER_CIRCUIT_ENABLED"
+	envCircuitThreshold = "BREAKWATER_CIRCUIT_FAIL_THRESHOLD"
+	envCircuitCooldown  = "BREAKWATER_CIRCUIT_COOLDOWN"
+	envCircuitProbe     = "BREAKWATER_CIRCUIT_PROBE_TIMEOUT"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -74,6 +88,17 @@ func Load() (Config, error) {
 			BackoffInitial:    defaultBackoffInitial,
 			BackoffMax:        defaultBackoffMax,
 			BudgetMaxInFlight: defaultRetryBudgetRadius,
+		},
+		Cache: Cache{
+			Enabled:  true,
+			TTL:      defaultCacheTTL,
+			Capacity: defaultCacheCapacity,
+		},
+		Circuit: Circuit{
+			Enabled:       true,
+			FailThreshold: defaultCircuitThreshold,
+			Cooldown:      defaultCircuitCooldown,
+			ProbeTimeout:  defaultCircuitProbe,
 		},
 	}
 
@@ -105,6 +130,27 @@ func Load() (Config, error) {
 	if cfg.Retry.BudgetMaxInFlight, err = envInt(envRetryBudget, cfg.Retry.BudgetMaxInFlight); err != nil {
 		return Config{}, err
 	}
+	if cfg.Cache.Enabled, err = envBool(envCacheEnabled, cfg.Cache.Enabled); err != nil {
+		return Config{}, err
+	}
+	if cfg.Cache.TTL, err = envDuration(envCacheTTL, cfg.Cache.TTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.Cache.Capacity, err = envInt(envCacheCapacity, cfg.Cache.Capacity); err != nil {
+		return Config{}, err
+	}
+	if cfg.Circuit.Enabled, err = envBool(envCircuitEnabled, cfg.Circuit.Enabled); err != nil {
+		return Config{}, err
+	}
+	if cfg.Circuit.FailThreshold, err = envInt(envCircuitThreshold, cfg.Circuit.FailThreshold); err != nil {
+		return Config{}, err
+	}
+	if cfg.Circuit.Cooldown, err = envDuration(envCircuitCooldown, cfg.Circuit.Cooldown); err != nil {
+		return Config{}, err
+	}
+	if cfg.Circuit.ProbeTimeout, err = envDuration(envCircuitProbe, cfg.Circuit.ProbeTimeout); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.Server.ShutdownGrace <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envShutdownGrace)
@@ -117,6 +163,25 @@ func Load() (Config, error) {
 	}
 	if cfg.Retry.BudgetMaxInFlight < 0 {
 		return Config{}, fmt.Errorf("config: %s must not be negative", envRetryBudget)
+	}
+	if cfg.Cache.Enabled {
+		if cfg.Cache.TTL <= 0 {
+			return Config{}, fmt.Errorf("config: %s must be positive", envCacheTTL)
+		}
+		if cfg.Cache.Capacity <= 0 {
+			return Config{}, fmt.Errorf("config: %s must be positive", envCacheCapacity)
+		}
+	}
+	if cfg.Circuit.Enabled {
+		if cfg.Circuit.FailThreshold <= 0 {
+			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitThreshold)
+		}
+		if cfg.Circuit.Cooldown <= 0 {
+			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitCooldown)
+		}
+		if cfg.Circuit.ProbeTimeout <= 0 {
+			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitProbe)
+		}
 	}
 	for i, u := range cfg.Upstreams {
 		if u.ID == "" || u.BaseURL == "" {
@@ -174,4 +239,17 @@ func envJSON[T any](key string) ([]T, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", key, err)
 	}
 	return out, nil
+}
+
+// envBool parses a boolean environment variable with a fallback.
+func envBool(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("config: parse %s=%q: %w", key, raw, err)
+	}
+	return b, nil
 }

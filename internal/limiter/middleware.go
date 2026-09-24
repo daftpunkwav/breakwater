@@ -19,8 +19,6 @@
 package limiter
 
 import (
-	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,23 +37,7 @@ func Middleware(l Limiter) pipeline.Middleware {
 					"no request carrier assembled")
 				return
 			}
-
-			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, protocol.MaxBodyBytes))
-			if err != nil {
-				var tooLarge *http.MaxBytesError
-				if errors.As(err, &tooLarge) {
-					protocol.WriteError(w, http.StatusRequestEntityTooLarge, "request_too_large",
-						"request body exceeds the accepted size")
-				} else {
-					protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-						"unreadable request body")
-				}
-				return
-			}
-			parsed, parseErr := protocol.ParseChatRequest(body)
-			carrier.SetBody(body, parsed, parseErr)
-			if parseErr != nil {
-				protocol.WriteError(w, http.StatusBadRequest, "invalid_request", "malformed JSON body")
+			if !pipeline.EnsureBody(w, r, carrier) {
 				return
 			}
 

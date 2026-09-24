@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/cache"
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
 	"github.com/daftpunkwav/breakwater/internal/limiter"
@@ -85,6 +86,13 @@ func main() {
 			limiter.Middleware(gov.limiter),
 			quota.Middleware(gov.ledger),
 		)
+		if cfg.Cache.Enabled {
+			stages = append(stages, cache.Middleware(
+				cache.NewMemory(cache.WithCapacity(cfg.Cache.Capacity)),
+				cache.NewFlight(),
+				cfg.Cache.TTL,
+			))
+		}
 		if gov.sweepTarget != nil {
 			quota.StartSweeper(ctx, gov.sweepTarget, sweepInterval, nil)
 		}
@@ -101,7 +109,16 @@ func main() {
 		logger.Error("build upstream adapters", "error", err)
 		os.Exit(1)
 	}
-	rt, err := router.NewPriority(bindings, router.WithBreaker(circuit.NopBreaker{}))
+
+	var breaker circuit.Breaker = circuit.NopBreaker{}
+	if cfg.Circuit.Enabled {
+		breaker = circuit.NewRegistry(circuit.Config{
+			FailThreshold: cfg.Circuit.FailThreshold,
+			Cooldown:      cfg.Circuit.Cooldown,
+			ProbeTimeout:  cfg.Circuit.ProbeTimeout,
+		})
+	}
+	rt, err := router.NewPriority(bindings, router.WithBreaker(breaker))
 	if err != nil {
 		logger.Error("build router", "error", err)
 		os.Exit(1)

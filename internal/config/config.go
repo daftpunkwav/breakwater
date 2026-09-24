@@ -25,6 +25,27 @@ type Config struct {
 	// deployments without a database; its schema is owned by the auth
 	// package, keeping this package a leaf.
 	Identity string
+	Cache    Cache
+	Circuit  Circuit
+}
+
+// Cache configures the exact-match response cache.
+type Cache struct {
+	// Enabled turns the cache stage on; false bypasses entirely.
+	Enabled bool
+	// TTL is the base entry lifetime; the store adds jitter on top.
+	TTL time.Duration
+	// Capacity caps stored entries.
+	Capacity int
+}
+
+// Circuit configures the per-upstream breaker. Enabled=false composes
+// the nop breaker instead.
+type Circuit struct {
+	Enabled       bool
+	FailThreshold int
+	Cooldown      time.Duration
+	ProbeTimeout  time.Duration
 }
 
 // Upstream is one OpenAI-compatible provider binding. List order across

@@ -1,0 +1,143 @@
+/**
+ * @file middleware
+ * @description The cache pipeline stage: exact-match replay around the
+ * rest of the chain.
+ *
+ * Responsibilities:
+ * - Serve deterministic, cache-eligible requests from the store; a hit
+ *   is zero-cost for the tenant (the whole reservation refunds)
+ * - Deduplicate concurrent cold non-streaming fetches through the
+ *   singleflight: exactly one upstream fetch per key (invariant I2);
+ *   waiters replay the holder's result, errors included, with no
+ *   implicit retry
+ * - Streaming requests never share a flight (frozen decision, spec
+ *   §6.3): they fetch individually and try to write the cache after
+ *   completion, last write wins
+ * - Nothing else: eligibility rules and key derivation live beside
+ *   this file; storage sits behind the Cache port; the completions
+ *   handler inside the chain owns consumption accounting
+ */
+package cache
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/daftpunkwav/breakwater/internal/httpserver"
+	"github.com/daftpunkwav/breakwater/internal/pipeline"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
+	"github.com/daftpunkwav/breakwater/internal/relay"
+)
+
+// maxCacheableBytes bounds the response size retained for caching; a
+// bigger reply still reaches the client but is never stored.
+const maxCacheableBytes = 8 << 20
+
+// relayCache marks cache-served responses for observation.
+const relayCache = "cache"
+
+// relaySharedFetch marks singleflight waiters that rode an existing
+// fetch.
+const relaySharedFetch = "shared-fetch"
+
+// Middleware returns the cache stage over a store, a flight group and
+// the base TTL applied by the store (with its jitter).
+func Middleware(store Cache, flight *Flight, ttl time.Duration) pipeline.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			carrier := pipeline.CarrierFrom(r.Context())
+			if carrier == nil {
+				protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+					"no request carrier assembled")
+				return
+			}
+			if !pipeline.EnsureBody(w, r, carrier) {
+				return
+			}
+			if !Eligible(carrier.Chat) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			key := KeyFor(carrier.Body)
+
+			if entry, err := store.Get(r.Context(), key); err == nil {
+				replay(w, entry)
+				carrier.CacheHit = true
+				carrier.Consumed = 0
+				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: relayCache}
+				return
+			}
+
+			if carrier.Chat.Stream {
+				// Frozen boundary: streams fetch individually; the flight
+				// group is reserved for non-streaming requests.
+				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
+				next.ServeHTTP(tee, r)
+				if storeWorthy(tee) {
+					_ = store.Set(r.Context(), key, capture(tee), ttl)
+				}
+				return
+			}
+
+			entry, fetchErr, owner := flight.Do(r.Context(), key, func(ctx context.Context) (Entry, error) {
+				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
+				next.ServeHTTP(tee, r.WithContext(ctx))
+				return capture(tee), nil
+			})
+			if fetchErr != nil {
+				// The waiter's own context ended; its client is gone and
+				// the response would be noise.
+				return
+			}
+			if owner {
+				// The owner's response was already written through the
+				// tee, and the completions handler already accounted its
+				// consumption. Only storage remains.
+				if storeWorthyFromEntry(entry) {
+					_ = store.Set(r.Context(), key, entry, ttl)
+				}
+				return
+			}
+			// Waiter: the shared fetch's result is replayed verbatim;
+			// it caused no upstream fetch of its own.
+			replay(w, entry)
+			carrier.CacheHit = true
+			carrier.Consumed = 0
+			carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: relaySharedFetch}
+		})
+	}
+}
+
+// replay writes a stored entry to a client.
+func replay(w http.ResponseWriter, entry Entry) {
+	header := w.Header()
+	if ct := entry.Header.Get("Content-Type"); ct != "" {
+		header.Set("Content-Type", ct)
+	}
+	w.WriteHeader(entry.Status)
+	_, _ = w.Write(entry.Body)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// capture extracts the stored-entry form of what the handler wrote.
+func capture(tee *httpserver.TeeResponseWriter) Entry {
+	return Entry{
+		Status: tee.Status(),
+		Header: tee.Header().Clone(),
+		Body:   tee.Body(),
+	}
+}
+
+// storeWorthy reports whether a completed response should be stored:
+// a 2xx that fit the capture buffer entirely.
+func storeWorthy(tee *httpserver.TeeResponseWriter) bool {
+	return tee.Status() >= 200 && tee.Status() < 300 && !tee.Truncated()
+}
+
+// storeWorthyFromEntry applies the same rule to a fetched entry.
+func storeWorthyFromEntry(entry Entry) bool {
+	return entry.Status >= 200 && entry.Status < 300 && len(entry.Body) <= maxCacheableBytes
+}
