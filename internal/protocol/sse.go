@@ -67,10 +67,13 @@ func NewStreamError(code Code, message string) StreamError {
 // WriteData writes one nameless SSE data event carrying a JSON payload;
 // chunk streaming uses this shape.
 func WriteData(w io.Writer, payload any) error {
-	if err := writeEventData(w, "", payload); err != nil {
-		return err
-	}
-	return nil
+	return WriteEvent(w, "", payload)
+}
+
+// WriteEvent writes one SSE event with an optional event name line and
+// a JSON data payload; translated wires use named events.
+func WriteEvent(w io.Writer, event string, payload any) error {
+	return writeEventData(w, event, payload)
 }
 
 // WriteAbort terminates a stream after a mid-flight failure per the

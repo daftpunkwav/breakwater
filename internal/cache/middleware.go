@@ -56,7 +56,10 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 			if !pipeline.EnsureBody(w, r, carrier) {
 				return
 			}
-			if !Eligible(carrier.Chat) {
+			// Frozen scope: only canonical-wire requests are cached. A
+			// translated format would need its response re-rendered on
+			// replay; until that lands, translated requests bypass.
+			if carrier.Format != protocol.FormatOpenAIChat || !Eligible(carrier.Chat) {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -8,14 +8,18 @@
  */
 package server
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/daftpunkwav/breakwater/internal/protocol"
+)
 
 // newRootHandler assembles the root handler with all routes registered.
-// A nil completions handler leaves the business route unregistered —
-// the gateway then serves probes only. Readiness gates on the injected
-// probe; nil always reports ready. Metrics and Admin expose their
-// endpoints when non-nil.
-func newRootHandler(completions, metrics, admin http.Handler, readiness func() error) http.Handler {
+// Inference maps each client format to its chain-wrapped handler; a
+// missing format leaves that route unregistered. Readiness gates on
+// the injected probe; nil always reports ready. Metrics and Admin
+// expose their endpoints when non-nil.
+func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin http.Handler, readiness func() error) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleLiveness)
 	mux.HandleFunc("GET /readyz", makeReadiness(readiness))
@@ -25,8 +29,8 @@ func newRootHandler(completions, metrics, admin http.Handler, readiness func() e
 	if admin != nil {
 		mux.Handle("GET /admin/", admin)
 	}
-	if completions != nil {
-		mux.Handle("POST /v1/chat/completions", completions)
+	for format, handler := range inference {
+		mux.Handle(routeOfFormat(format), handler)
 	}
 	return mux
 }

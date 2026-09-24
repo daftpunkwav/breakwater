@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
 // countingUpstream answers chat completions and counts fetches; stream
@@ -51,11 +52,12 @@ func countingUpstream(t *testing.T, fetches *atomic.Int64, holdStart <-chan stru
 }
 
 // cacheStage builds the cache stage applied over the given upstream,
-// with the carrier stage the pipeline always runs first.
+// with the carrier and format stages the pipeline always runs first.
 func cacheStage(t *testing.T, upstream http.Handler) http.Handler {
 	t.Helper()
 	return pipeline.Chain(
 		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
 	)(upstream)
 }
@@ -111,11 +113,15 @@ func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-start
 			codes <- fireRequest(handler, body).Code
 		}()
 	}
-	close(start)
+	// Release the (slow) fetch only after every caller had the chance
+	// to pile onto the flight; otherwise fast owners finish alone.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(start)
+	}()
 	wg.Wait()
 	close(codes)
 

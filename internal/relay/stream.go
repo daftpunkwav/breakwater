@@ -25,6 +25,57 @@ import (
 // dataPrefix marks an SSE data line.
 const dataPrefix = "data: "
 
+// doneSentinel is the canonical wire's stream terminator.
+const doneSentinel = "[DONE]"
+
+// pumpTranscoded feeds the upstream SSE sequence through a stream
+// transcoder: the preamble opens the exchange, every data frame is
+// translated, the terminator (or the abort sequence) closes it. Usage
+// is still scraped passively for settlement.
+func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol.StreamTranscoder, model string) (protocol.Usage, bool, int64, error) {
+	reader := bufio.NewReader(body)
+	flusher, flushes := out.(http.Flusher)
+	var usage protocol.Usage
+	usageKnown := false
+	var bytes int64
+
+	flush := func() {
+		if flushes {
+			flusher.Flush()
+		}
+	}
+
+	if err := transcoder.Start(out, model); err != nil {
+		return usage, usageKnown, bytes, err
+	}
+	flush()
+
+	for {
+		line, readErr := reader.ReadString('\n')
+		if len(line) > 0 {
+			trimmed := trimEOL(line)
+			if payload, isData := scrapePayload([]byte(trimmed)); isData {
+				if string(payload) != doneSentinel {
+					if u, ok := protocol.ParseUsage(payload); ok {
+						usage, usageKnown = u, true
+					}
+					if err := transcoder.Delta(out, payload); err != nil {
+						return usage, usageKnown, bytes, err
+					}
+				}
+				bytes += int64(len(trimmed)) + 1
+				flush()
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return usage, usageKnown, bytes, transcoder.Finish(out, usage, usageKnown)
+			}
+			return usage, usageKnown, bytes, readErr
+		}
+	}
+}
+
 // pumpStream copies the SSE stream from body to out line by line,
 // flushing at event boundaries, and returns the usage object when the
 // stream carried one plus the total byte count it passed through. A

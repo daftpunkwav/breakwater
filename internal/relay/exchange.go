@@ -94,7 +94,15 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 	}
 	r.streamed = true
 
-	usage, usageKnown, streamBytes, pumpErr := pumpStream(r.job.Out, resp.Body)
+	var usage protocol.Usage
+	var usageKnown bool
+	var streamBytes int64
+	var pumpErr error
+	if transcoder := r.wire.Stream(); transcoder != nil {
+		usage, usageKnown, streamBytes, pumpErr = pumpTranscoded(r.job.Out, resp.Body, transcoder, r.job.Model)
+	} else {
+		usage, usageKnown, streamBytes, pumpErr = pumpStream(r.job.Out, resp.Body)
+	}
 	_ = resp.Body.Close()
 	if usageKnown {
 		r.usage, r.usageKnown = usage, true
@@ -106,13 +114,19 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 	}
 
 	// Mid-stream failure: honest termination per the frozen contract —
-	// one error event, then [DONE]; chunks already sent stay sent.
+	// one error frame in the client's format; chunks already sent stay
+	// sent.
 	r.aborted = true
 	if r.clientGone() {
 		return circuit.OutcomeClientFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
 	code := abortCode(pumpErr)
-	_ = protocol.WriteAbort(r.job.Out, code, "upstream stream failed mid-flight: "+pumpErr.Error())
+	message := "upstream stream failed mid-flight: " + pumpErr.Error()
+	if transcoder := r.wire.Stream(); transcoder != nil {
+		_ = transcoder.Abort(r.job.Out, code, message)
+	} else {
+		_ = protocol.WriteAbort(r.job.Out, code, message)
+	}
 	return circuit.OutcomeServerFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 }
 

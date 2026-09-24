@@ -17,6 +17,7 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/limiter"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/daftpunkwav/breakwater/internal/relay"
 	"github.com/daftpunkwav/breakwater/internal/retry"
@@ -58,11 +59,12 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 
 	stages := []pipeline.Middleware{
 		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		pipeline.AuthStage(identity),
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
 	}
-	return pipeline.Chain(stages...)(NewCompletions(rt, relayer))
+	return pipeline.Chain(stages...)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
 }
 
 // completionRequest fires one POST through the chain and returns the
@@ -201,10 +203,11 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	relayer := relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		pipeline.AuthStage(identity),
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
-	)(NewCompletions(rt, relayer))
+	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

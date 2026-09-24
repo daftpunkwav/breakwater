@@ -30,6 +30,7 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/limiter"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/daftpunkwav/breakwater/internal/relay"
 	"github.com/daftpunkwav/breakwater/internal/retry"
@@ -47,6 +48,13 @@ const (
 	// dropPublishInterval paces the logs-dropped gauge sync.
 	dropPublishInterval = 5 * time.Second
 )
+
+// formats are the client-facing surfaces every route serves.
+var formats = []protocol.Format{
+	protocol.FormatOpenAIChat,
+	protocol.FormatOpenAIResponses,
+	protocol.FormatAnthropicMessages,
+}
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -89,18 +97,19 @@ func main() {
 	}
 	defer closeIdentity()
 
-	stages := []pipeline.Middleware{
-		pipeline.CarrierStage(),
+	// The governance stage template, shared by every client format; the
+	// format stage in front pins which wire parses and renders.
+	governance := []pipeline.Middleware{
 		pipeline.ObservationStage(metrics, accessLog.sink),
 	}
 	if authStore != nil {
-		stages = append(stages,
+		governance = append(governance,
 			pipeline.AuthStage(authStore),
 			limiter.Middleware(gov.limiter, metrics),
 			quota.Middleware(gov.ledger, metrics),
 		)
 		if cfg.Cache.Enabled {
-			stages = append(stages, cache.Middleware(
+			governance = append(governance, cache.Middleware(
 				cache.NewMemory(cache.WithCapacity(cfg.Cache.Capacity)),
 				cache.NewFlight(),
 				cfg.Cache.TTL,
@@ -141,12 +150,20 @@ func main() {
 		relay.WithMetrics(metrics),
 	)
 
-	completions := pipeline.Chain(stages...)(server.NewCompletions(rt, relayer))
+	// One chain per client format, one route per chain.
+	inference := make(map[protocol.Format]http.Handler, len(formats))
+	for _, format := range formats {
+		stages := append([]pipeline.Middleware{
+			pipeline.CarrierStage(),
+			pipeline.FormatStage(format),
+		}, governance...)
+		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer))
+	}
 
 	srv := server.New(server.Options{
 		Addr:          cfg.Server.Addr,
 		ShutdownGrace: cfg.Server.ShutdownGrace,
-		Completions:   completions,
+		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
 		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams)),
 		Readiness:     gov.readiness,

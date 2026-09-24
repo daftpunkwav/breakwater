@@ -95,6 +95,9 @@ type Job struct {
 	// attempt n uses candidate min(n, len)-1, so failover walks the list
 	// once and extra attempts re-hit the last fallback.
 	Candidates []upstream.Upstream
+	// Wire presents the exchange in the client's format; nil selects
+	// the canonical wire (openai-chat, byte passthrough).
+	Wire protocol.Wire
 	// Out is the client response writer.
 	Out http.ResponseWriter
 }
@@ -142,7 +145,8 @@ type run struct {
 	job  Job
 	// ctx is the client request context; finish reads it to tell a
 	// client disconnect apart from upstream failures.
-	ctx context.Context
+	ctx  context.Context
+	wire protocol.Wire
 
 	attempts   int
 	retries    int
@@ -164,12 +168,20 @@ type run struct {
 // upstream error, or a gateway error envelope.
 func (e *Executor) Execute(ctx context.Context, job Job) Result {
 	if len(job.Candidates) == 0 {
-		renderGatewayError(job.Out, http.StatusBadGateway, "no_upstream",
+		wire := job.Wire
+		if wire == nil {
+			wire = protocol.WireFor("")
+		}
+		wire.RenderError(job.Out, http.StatusBadGateway, "no_upstream",
 			"no upstream candidate available for model "+job.Model)
 		return Result{Status: http.StatusBadGateway}
 	}
 
-	r := &run{exec: e, job: job, ctx: ctx}
+	wire := job.Wire
+	if wire == nil {
+		wire = protocol.WireFor("")
+	}
+	r := &run{exec: e, job: job, ctx: ctx, wire: wire}
 	err := retry.Execute(ctx, e.policy, e.budget, e.classifier, nil, r.attempt)
 	return r.finish(err)
 }
@@ -223,7 +235,7 @@ func (r *run) finish(err error) Result {
 		}
 	case err == nil:
 		snap := r.success
-		renderExchange(job.Out, snap)
+		r.wire.RenderSuccess(job.Out, snap.status, snap.header, snap.body)
 		return Result{
 			Status: snap.status, UpstreamID: r.servedBy,
 			Attempts: r.attempts, Retries: r.retries,
@@ -248,26 +260,26 @@ func (r *run) finish(err error) Result {
 			Attempts: r.attempts, Retries: r.retries, Usage: r.usage, UsageKnown: r.usageKnown, StreamBytes: r.streamBytes}
 
 	case r.terminal != nil:
-		renderExchange(job.Out, r.terminal)
+		r.wire.RenderUpstreamError(job.Out, r.terminal.status, r.terminal.header, r.terminal.body)
 		return Result{Status: r.terminal.status, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, errCircuitOpen):
-		renderGatewayError(job.Out, http.StatusServiceUnavailable, "circuit_open",
+		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "circuit_open",
 			"all upstream candidates are unavailable")
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, retry.ErrBudgetExhausted):
 		r.exec.metrics.RetryBudgetExhausted()
-		renderGatewayError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
+		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
 			"retry budget exhausted before an upstream answered")
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
-		renderExchange(job.Out, r.lastFailed)
+		r.wire.RenderUpstreamError(job.Out, r.lastFailed.status, r.lastFailed.header, r.lastFailed.body)
 		return Result{Status: r.lastFailed.status, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	default:
-		renderGatewayError(job.Out, http.StatusBadGateway, "upstream_unreachable",
+		r.wire.RenderError(job.Out, http.StatusBadGateway, "upstream_unreachable",
 			"upstream did not answer: "+err.Error())
 		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 	}

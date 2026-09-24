@@ -29,15 +29,21 @@ type Carrier struct {
 	// Tenant is the authenticated identity; zero until the auth stage
 	// passed.
 	Tenant auth.Tenant
+	// Format is the client-facing API surface of this request; the
+	// format stage sets it before any body parsing.
+	Format protocol.Format
 	// Body is the raw request body as received; the first stage that
 	// needs it reads it once, here.
 	Body []byte
-	// Chat is the parsed request subset; ChatErr carries the parse
+	// Chat is the canonical request subset; ChatErr carries the parse
 	// failure for stages that care. ChatSet reports that the body was
 	// already read, so later stages never re-read it.
 	Chat    protocol.ChatRequest
 	ChatErr error
 	ChatSet bool
+	// UpstreamBody is the bytes to forward upstream: the raw body for
+	// the canonical wire, the canonical encoding for translated wires.
+	UpstreamBody []byte
 	// Tokens is the estimated, clamp-adjusted token cost every
 	// reservation downstream is based on.
 	Tokens int64
@@ -55,17 +61,19 @@ type Carrier struct {
 	Relay *relay.Result
 }
 
-// SetBody stores the request body and its parse result exactly once;
+// SetBody stores the request body and its ingest result exactly once;
 // later calls are absorbed. The first reader owns the read — the body
-// cap and JSON validity are request facts, not stage opinions.
-func (c *Carrier) SetBody(body []byte, parsed protocol.ChatRequest, parseErr error) {
+// cap, format parsing and canonical encoding are request facts, not
+// stage opinions.
+func (c *Carrier) SetBody(body []byte, chat protocol.ChatRequest, upstreamBody []byte, ingestErr error) {
 	if c.ChatSet {
 		return
 	}
 	c.ChatSet = true
 	c.Body = body
-	c.Chat = parsed
-	c.ChatErr = parseErr
+	c.Chat = chat
+	c.UpstreamBody = upstreamBody
+	c.ChatErr = ingestErr
 }
 
 // carrierKey is the unexported context key type.

@@ -39,6 +39,7 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 					"no request carrier assembled")
 				return
 			}
+			wire := protocol.WireFor(carrier.Format)
 
 			amount := carrier.Tokens
 			if amount <= 0 {
@@ -51,13 +52,13 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 			lease, err := ledger.Reserve(r.Context(), carrier.Tenant.ID, amount)
 			switch {
 			case errors.Is(err, ErrInsufficientBalance):
-				protocol.WriteError(w, http.StatusPaymentRequired, "insufficient_quota",
+				wire.RenderError(w, http.StatusPaymentRequired, "insufficient_quota",
 					"the tenant balance cannot cover the estimated request")
 				return
 			case err != nil:
 				// Fail-closed: a gateway that cannot meter must not give
 				// away upstream traffic.
-				protocol.WriteError(w, http.StatusServiceUnavailable, "governance_unavailable",
+				wire.RenderError(w, http.StatusServiceUnavailable, "governance_unavailable",
 					"quota ledger unavailable")
 				return
 			}

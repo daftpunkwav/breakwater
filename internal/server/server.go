@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/httpserver"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
 // Options configures the gateway server.
@@ -25,9 +26,9 @@ type Options struct {
 	Addr string
 	// ShutdownGrace bounds the drain window after shutdown begins.
 	ShutdownGrace time.Duration
-	// Completions is the /v1/chat/completions handler; nil leaves the
-	// business route unregistered.
-	Completions http.Handler
+	// Inference maps each client format to its chain-wrapped handler;
+	// formats absent from the map leave their route unregistered.
+	Inference map[protocol.Format]http.Handler
 	// Metrics serves the Prometheus scrape endpoint; nil omits it.
 	Metrics http.Handler
 	// Admin serves the management API; nil omits it.
@@ -52,7 +53,7 @@ func New(opts Options) *Server {
 func (s *Server) Run(ctx context.Context) error {
 	return httpserver.Run(ctx, httpserver.Options{
 		Addr:          s.opts.Addr,
-		Handler:       newRootHandler(s.opts.Completions, s.opts.Metrics, s.opts.Admin, s.opts.Readiness),
+		Handler:       newRootHandler(s.opts.Inference, s.opts.Metrics, s.opts.Admin, s.opts.Readiness),
 		ShutdownGrace: s.opts.ShutdownGrace,
 	})
 }

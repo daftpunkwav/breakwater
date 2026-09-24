@@ -3,10 +3,11 @@
  * @description The authentication pipeline stage: API key to tenant.
  *
  * Responsibilities:
- * - Extract the bearer key, resolve the tenant through the auth store
- *   and attach it to the request carrier
- * - Reject unknown or malformed keys with 401 before anything
- *   downstream runs
+ * - Extract the key (Authorization: Bearer, or x-api-key for
+ *   Anthropic-style clients), resolve the tenant through the auth
+ *   store and attach it to the request carrier
+ * - Reject unknown or malformed keys with 401 in the client format
+ *   before anything downstream runs
  * - Nothing else: limits and balances live downstream
  *
  * Placement note: this stage binds the carrier (defined in this
@@ -29,6 +30,31 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
+// apiKeyOf extracts the API key: Authorization: Bearer first, then the
+// x-api-key header Anthropic clients send.
+func apiKeyOf(r *http.Request) (string, bool) {
+	if raw := r.Header.Get("Authorization"); strings.HasPrefix(raw, bearerPrefix) {
+		if key := strings.TrimSpace(strings.TrimPrefix(raw, bearerPrefix)); key != "" {
+			return key, true
+		}
+		return "", false
+	}
+	if key := strings.TrimSpace(r.Header.Get("x-api-key")); key != "" {
+		return key, true
+	}
+	return "", false
+}
+
+// renderFor renders a governance rejection in the request's format; an
+// absent carrier falls back to the canonical envelope.
+func renderFor(r *http.Request, w http.ResponseWriter, status int, code, message string) {
+	format := protocol.Format("")
+	if carrier := CarrierFrom(r.Context()); carrier != nil {
+		format = carrier.Format
+	}
+	protocol.WireFor(format).RenderError(w, status, code, message)
+}
+
 // bearerPrefix is the accepted Authorization scheme.
 const bearerPrefix = "Bearer "
 
@@ -36,27 +62,21 @@ const bearerPrefix = "Bearer "
 func AuthStage(store auth.Store) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			raw := r.Header.Get("Authorization")
-			if !strings.HasPrefix(raw, bearerPrefix) {
-				protocol.WriteError(w, http.StatusUnauthorized, "missing_api_key",
-					"expected an Authorization: Bearer <key> header")
-				return
-			}
-			key := strings.TrimSpace(strings.TrimPrefix(raw, bearerPrefix))
-			if key == "" {
-				protocol.WriteError(w, http.StatusUnauthorized, "missing_api_key",
-					"the bearer credentials are empty")
+			key, ok := apiKeyOf(r)
+			if !ok {
+				renderFor(r, w, http.StatusUnauthorized, "missing_api_key",
+					"expected an Authorization: Bearer <key> or x-api-key header")
 				return
 			}
 
 			tenant, err := store.Resolve(r.Context(), key)
 			switch {
 			case errors.Is(err, auth.ErrUnauthorized):
-				protocol.WriteError(w, http.StatusUnauthorized, "invalid_api_key",
+				renderFor(r, w, http.StatusUnauthorized, "invalid_api_key",
 					"unknown or revoked api key")
 				return
 			case err != nil:
-				protocol.WriteError(w, http.StatusServiceUnavailable, "identity_unavailable",
+				renderFor(r, w, http.StatusServiceUnavailable, "identity_unavailable",
 					"identity store unavailable")
 				return
 			}

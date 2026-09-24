@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daftpunkwav/breakwater/internal/pipeline"
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
 	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/router"
@@ -58,6 +60,11 @@ func testUpstreamBackend(t *testing.T) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
+// inferenceMap wraps one handler under the chat format for the routes.
+func inferenceMap(handler http.Handler) map[protocol.Format]http.Handler {
+	return map[protocol.Format]http.Handler{protocol.FormatOpenAIChat: handler}
+}
+
 func buildEndpoint(t *testing.T, backendURL string) http.Handler {
 	t.Helper()
 	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
@@ -73,7 +80,10 @@ func buildEndpoint(t *testing.T, backendURL string) http.Handler {
 		t.Fatalf("build router: %v", err)
 	}
 	relayer := relay.New(retry.Policy{MaxAttempts: 2}, retry.NewBudget(4))
-	return NewCompletions(rt, relayer)
+	return pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
 }
 
 func TestCompletionsBufferedRoundTrip(t *testing.T) {
@@ -81,7 +91,7 @@ func TestCompletionsBufferedRoundTrip(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -107,7 +117,7 @@ func TestCompletionsStreamedRoundTrip(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -135,7 +145,7 @@ func TestCompletionsUnknownModel(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -154,7 +164,7 @@ func TestCompletionsMalformedBody(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(buildEndpoint(t, backend.URL), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader("{not json"))

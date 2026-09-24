@@ -1,10 +1,13 @@
 # Breakwater
 
-An OpenAI-compatible LLM gateway written in Go, built to prove one thesis:
-high-concurrency reliability governance — rate limiting, circuit breaking
-with failover, bounded retry, cache stampede protection, lease-based quota
-consistency and asynchronous observability — implemented by hand and backed
-by reproducible tests, metrics and fault-injection experiments.
+An LLM gateway written in Go that serves three client-facing API formats —
+**OpenAI Chat Completions** (`/v1/chat/completions`), **OpenAI Responses**
+(`/v1/responses`) and **Anthropic Messages** (`/v1/messages`) — over one
+canonical governance pipeline, built to prove one thesis: high-concurrency
+reliability governance — rate limiting, circuit breaking with failover,
+bounded retry, cache stampede protection, lease-based quota consistency and
+asynchronous observability — implemented by hand and backed by reproducible
+tests, metrics and fault-injection experiments.
 
 ## Components
 
@@ -12,11 +15,11 @@ by reproducible tests, metrics and fault-injection experiments.
 | --------------------- | --------------------------------------------------------- |
 | `cmd/breakwater`      | Gateway binary (composition root)                         |
 | `cmd/mockllm`         | Mock OpenAI-compatible upstream with fault injection      |
-| `internal/server`     | Route assembly, completions endpoint, minimal admin API   |
+| `internal/server`     | Route assembly, the three inference endpoints, minimal admin API |
 | `internal/relay`      | Response-side execution engine: attempts, failover, SSE passthrough, honest stream termination |
 | `internal/pipeline`   | Middleware chain, per-request carrier, observation stage  |
 | `internal/httpserver` | Shared HTTP lifecycle and the response tee                |
-| `internal/protocol`   | External wire contract: OpenAI schema, SSE error codec    |
+| `internal/protocol`   | Wire contracts: the canonical chat form, the translator wires (openai-chat passthrough, openai-responses and anthropic-messages transcoding), SSE codecs |
 | `internal/auth`       | Identity: static/PostgreSQL stores, process-local LRU     |
 | `internal/limiter`    | RPM/TPM token buckets (in-memory + Redis Lua), 429 stage  |
 | `internal/quota`      | Lease ledger (in-memory + Redis Lua), sweeper, 402 stage  |
@@ -46,6 +49,23 @@ existing packages, never as new top-level directories. The zoning rules:
    belongs to `internal/protocol`.
 4. `internal/httpserver` hosts only neutral, stdlib-only transport
    mechanics; composition happens exclusively in `cmd/*` roots.
+
+## Client formats
+
+| Route                      | Format                | Auth header              | Notes |
+| -------------------------- | --------------------- | ------------------------ | ----- |
+| `POST /v1/chat/completions`| OpenAI Chat (canonical)| `Authorization: Bearer` | Byte passthrough to OpenAI-compatible upstreams; SSE passthrough |
+| `POST /v1/responses`       | OpenAI Responses      | `Authorization: Bearer`  | Translated: input/instructions/max_output_tokens in, Responses objects and `response.*` events out |
+| `POST /v1/messages`        | Anthropic Messages    | `x-api-key` or Bearer    | Translated: system/blocks/required `max_tokens` in, Messages objects and `message_*` events out; `stop_sequences` refused rather than silently dropped |
+
+All three walk the identical governance pipeline (auth → rate limit →
+quota → cache) and the identical relay engine; only the wire differs.
+The canonical wire is openai-chat: unknown request fields survive byte
+passthrough, while translated formats ingest a declared subset and
+reject what they cannot express honestly. Text content only — image or
+tool blocks are rejected at ingest. The exact-match cache serves the
+canonical wire (translated replays would need response re-rendering,
+which is deliberately not faked).
 
 ## Quick start
 
