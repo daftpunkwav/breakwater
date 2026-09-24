@@ -158,3 +158,74 @@ func TestRedisConcurrentDrainReconciles(t *testing.T) {
 			final, want, final-want)
 	}
 }
+
+// TestRedisTerminalLeaseAuditWindowExpires locks the bounded-retention
+// rule: a terminal lease record stays for the audit window, then
+// expires, so the hash set cannot grow without bound; a late settle
+// after expiry is a silent no-op.
+func TestRedisTerminalLeaseAuditWindowExpires(t *testing.T) {
+	t.Parallel()
+	r, mr := newTestLedger(t)
+	ctx := context.Background()
+
+	if err := r.SetBalance(ctx, "t", 1000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	settled, err := r.Reserve(ctx, "t", 400)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	cancelled, err := r.Reserve(ctx, "t", 100)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := r.Settle(ctx, settled.ID, 150); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if err := r.Cancel(ctx, cancelled.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	if !mr.Exists(leaseKey(settled.ID)) || !mr.Exists(leaseKey(cancelled.ID)) {
+		t.Fatal("terminal records vanished before the audit window elapsed")
+	}
+	mr.FastForward(2 * leaseAuditTTL)
+	if mr.Exists(leaseKey(settled.ID)) || mr.Exists(leaseKey(cancelled.ID)) {
+		t.Fatal("terminal records survived the audit window")
+	}
+	// Balance accounting is untouched by the expiry.
+	if bal, _ := r.Balance(ctx, "t"); bal != 850 {
+		t.Fatalf("balance = %d, want 850", bal)
+	}
+	// A late settle after the record expired is a silent no-op.
+	if err := r.Settle(ctx, settled.ID, 150); err != nil {
+		t.Fatalf("late settle after expiry = %v, want nil no-op", err)
+	}
+}
+
+// TestRedisSweepDropsGhostEntries locks the sweep convergence rule: a
+// zset entry whose lease hash is already gone must be dropped by the
+// sweep instead of being fetched forever.
+func TestRedisSweepDropsGhostEntries(t *testing.T) {
+	t.Parallel()
+	r, _ := newTestLedger(t)
+	ctx := context.Background()
+
+	if err := r.rdb.ZAdd(ctx, sweepKey(), redis.Z{
+		Score:  float64(time.Now().Add(-time.Hour).UnixMilli()),
+		Member: "ghost-lease",
+	}).Err(); err != nil {
+		t.Fatalf("seed ghost: %v", err)
+	}
+
+	n, err := r.SweepOnce(ctx, time.Now(), 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("reclaimed = %d, want 0 (nothing to refund)", n)
+	}
+	if card := r.rdb.ZCard(ctx, sweepKey()).Val(); card != 0 {
+		t.Fatalf("sweep zset cardinality = %d, want 0 (ghost dropped)", card)
+	}
+}

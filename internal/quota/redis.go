@@ -16,6 +16,7 @@ package quota
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"time"
 
@@ -109,13 +110,19 @@ func (r *Redis) Reserve(ctx context.Context, tenantID string, amount int64) (Lea
 // round-trip stays off the hot path.
 func (r *Redis) Settle(ctx context.Context, leaseID string, usedTokens int64) error {
 	tenant, err := r.rdb.HGet(ctx, leaseKey(leaseID), "tenant").Result()
-	if err != nil {
+	if errors.Is(err, redis.Nil) {
 		// Unknown lease: settling it would be a no-op in the script too.
 		return nil
 	}
+	if err != nil {
+		// A backend failure must surface, never masquerade as an
+		// unknown lease: the middleware logs it and the sweeper still
+		// converges the lease.
+		return fmt.Errorf("quota: settle lease lookup: %w", err)
+	}
 	res, err := r.settleScript.Run(ctx, r.rdb,
 		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey()},
-		usedTokens, leaseID,
+		usedTokens, leaseID, leaseAuditTTL.Milliseconds(),
 	).Slice()
 	if err != nil {
 		return fmt.Errorf("quota: settle script: %w", err)
@@ -140,12 +147,21 @@ func (r *Redis) Cancel(ctx context.Context, leaseID string) error {
 // transition (false for unknown or already-terminal leases).
 func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState) (bool, error) {
 	tenant, err := r.rdb.HGet(ctx, leaseKey(leaseID), "tenant").Result()
-	if err != nil {
+	if errors.Is(err, redis.Nil) {
+		// The record is gone: terminal past its audit window, or never
+		// provisioned. Drop the stale sweep entry so the zset cannot
+		// accumulate ghosts the sweeper would fetch forever.
+		if err := r.rdb.ZRem(ctx, sweepKey(), leaseID).Err(); err != nil {
+			return false, fmt.Errorf("quota: sweep entry cleanup: %w", err)
+		}
 		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("quota: lease lookup: %w", err)
 	}
 	res, err := r.releaseScript.Run(ctx, r.rdb,
 		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey()},
-		leaseID, string(state),
+		leaseID, string(state), leaseAuditTTL.Milliseconds(),
 	).Int64()
 	if err != nil {
 		return false, fmt.Errorf("quota: release script: %w", err)
@@ -165,6 +181,12 @@ func (r *Redis) Balance(ctx context.Context, tenantID string) (int64, error) {
 // defaultLeaseTTL bounds how long a RESERVED lease may live before the
 // sweeper reclaims it. Long streams must settle within it.
 const defaultLeaseTTL = 10 * time.Minute
+
+// leaseAuditTTL bounds how long a terminal lease record is retained for
+// audit before it expires; without it the hash set would grow without
+// bound. A RESERVED lease never carries this TTL — its refund depends
+// on the record surviving until the sweeper sees it.
+const leaseAuditTTL = time.Hour
 
 // SweepOnce reclaims expired RESERVED leases through the release
 // script, which moves each one to EXPIRED and refunds its amount
