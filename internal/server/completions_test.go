@@ -7,12 +7,15 @@
 package server
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -156,6 +159,53 @@ func TestCompletionsUnknownModel(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestCompletionsAllUpstreamsCircuitOpenIsUnavailable pins the
+// circuit-open error contract at the routing boundary: a model with
+// bindings whose every upstream is breaker-open is a fast 503 with the
+// circuit_open code — the same envelope the executor renders when the
+// breaker denies an attempt — never a misleading 404.
+func TestCompletionsAllUpstreamsCircuitOpenIsUnavailable(t *testing.T) {
+	t.Parallel()
+	backend := testUpstreamBackend(t)
+	defer backend.Close()
+
+	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backend.URL})
+	if err != nil {
+		t.Fatalf("build adapter: %v", err)
+	}
+	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour})
+	perm, ok := breaker.Allow(context.Background(), "test")
+	if !ok {
+		t.Fatal("breaker denied in closed state")
+	}
+	perm.Report(circuit.OutcomeServerFault)
+
+	rt, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}},
+		router.WithBreaker(breaker))
+	if err != nil {
+		t.Fatalf("build router: %v", err)
+	}
+	relayer := relay.New(retry.Policy{MaxAttempts: 2}, retry.NewBudget(4), relay.WithBreaker(breaker))
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
+
+	srv := httptest.NewServer(newRootHandler(inferenceMap(handler), nil, nil, nil))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), `"code":"circuit_open"`) {
+		t.Fatalf("status = %d body = %s, want 503 circuit_open envelope", resp.StatusCode, raw)
 	}
 }
 

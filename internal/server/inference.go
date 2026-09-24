@@ -16,6 +16,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
@@ -79,6 +80,15 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := s.router.Candidates(r.Context(), carrier.Chat.Model)
 	if err != nil {
+		if errors.Is(err, router.ErrUnavailable) {
+			// The model exists but every binding is circuit-open: the
+			// same fast-fail contract the executor renders at attempt
+			// time, so the condition reads identically wherever it is
+			// detected.
+			wire.RenderError(w, http.StatusServiceUnavailable, "circuit_open",
+				"every upstream serving model "+carrier.Chat.Model+" is circuit-open")
+			return
+		}
 		wire.RenderError(w, http.StatusNotFound, "model_not_found",
 			"no upstream serves model "+carrier.Chat.Model)
 		return

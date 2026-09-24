@@ -17,6 +17,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
@@ -25,6 +26,11 @@ import (
 
 // wildcardModel matches every requested model.
 const wildcardModel = "*"
+
+// ErrUnavailable reports that the model has bound upstreams but every
+// one of them is currently circuit-open. Callers map it to 503; the
+// model-not-found 404 is reserved for models with no binding at all.
+var ErrUnavailable = errors.New("router: every upstream for the model is circuit-open")
 
 // entry binds one upstream to the models it serves.
 type entry struct {
@@ -82,20 +88,27 @@ type Binding struct {
 
 // Candidates implements Router: every upstream bound to the model (or
 // the wildcard), in binding order, with breaker-open upstreams excluded.
+// When the model has bindings but all of them are breaker-open, the
+// error is ErrUnavailable, not a no-binding failure.
 func (p *Priority) Candidates(ctx context.Context, model string) ([]upstream.Upstream, error) {
 	candidates := make([]upstream.Upstream, 0, len(p.entries))
+	bound := 0
 	for _, e := range p.entries {
 		_, exact := e.models[model]
 		_, wild := e.models[wildcardModel]
 		if !exact && !wild {
 			continue
 		}
+		bound++
 		if p.breaker != nil && p.breaker.StateOf(ctx, e.upstream.ID()) == circuit.StateOpen {
 			continue
 		}
 		candidates = append(candidates, e.upstream)
 	}
 	if len(candidates) == 0 {
+		if bound > 0 {
+			return nil, ErrUnavailable
+		}
 		return nil, fmt.Errorf("router: no upstream serves model %q", model)
 	}
 	return candidates, nil
