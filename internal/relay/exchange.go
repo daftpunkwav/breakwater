@@ -93,12 +93,16 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 		flusher.Flush()
 	}
 	r.streamed = true
+	// The delivered reply belongs to this candidate from the commit on —
+	// including its aborted tail.
+	r.servedBy = cand.ID()
 
 	var usage protocol.Usage
 	var usageKnown bool
 	var streamBytes int64
 	var pumpErr error
-	if transcoder := r.wire.Stream(); transcoder != nil {
+	transcoder := r.wire.Stream()
+	if transcoder != nil {
 		usage, usageKnown, streamBytes, pumpErr = pumpTranscoded(r.job.Out, resp.Body, transcoder, r.job.Model)
 	} else {
 		usage, usageKnown, streamBytes, pumpErr = pumpStream(r.job.Out, resp.Body)
@@ -115,14 +119,14 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 
 	// Mid-stream failure: honest termination per the frozen contract —
 	// one error frame in the client's format; chunks already sent stay
-	// sent. The loop-level marker for this state is ErrCommitted, which
-	// the finish stage reports as Result.Aborted.
+	// sent. The same transcoder instance closes the stream it opened:
+	// a fresh one would carry a new object id no client frame introduced.
 	if r.clientGone() {
 		return circuit.OutcomeClientFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
 	code := abortCode(pumpErr)
 	message := "upstream stream failed mid-flight: " + pumpErr.Error()
-	if transcoder := r.wire.Stream(); transcoder != nil {
+	if transcoder != nil {
 		_ = transcoder.Abort(r.job.Out, code, message)
 	} else {
 		_ = protocol.WriteAbort(r.job.Out, code, message)

@@ -7,6 +7,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -211,5 +212,76 @@ func TestCacheMiddlewareNeverStoresAbortedStreams(t *testing.T) {
 	}
 	if got := fetches.Load(); got != 2 {
 		t.Fatalf("fetches = %d, want 2: the aborted stream must not be cached", got)
+	}
+}
+
+// TestCacheMiddlewareWaiterSurvivesOwnerDisconnect locks the shared
+// fetch failure contract: an owner whose client walks away mid-fetch
+// produces no response at all; its empty capture must fail the flight
+// instead of being replayed by waiters (a header-less WriteHeader with
+// status 0 panics in net/http).
+func TestCacheMiddlewareWaiterSurvivesOwnerDisconnect(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var fetches atomic.Int64
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		// The owner's client is gone: nothing is written at all.
+	})
+	flight := NewFlight()
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+		Middleware(NewMemory(), flight, time.Minute, nil),
+	)(upstream)
+
+	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
+
+	ownerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req.WithContext(ownerCtx))
+		ownerDone <- rec
+	}()
+	<-entered // the flight entry exists from here on
+
+	waiterDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		waiterDone <- rec
+	}()
+
+	// The shared fetch wait is the waiter's only blocking point; a
+	// stability window without a second upstream fetch proves it is
+	// parked there instead of fetching on its own.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if fetches.Load() != 1 {
+			t.Fatal("waiter started its own fetch: it missed the shared flight")
+		}
+		select {
+		case rec := <-waiterDone:
+			t.Fatalf("waiter completed on its own: status %d", rec.Code)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+
+	cancelOwner()
+	close(release)
+	<-ownerDone
+	waiterRec := <-waiterDone
+	if waiterRec.Code != http.StatusBadGateway || !strings.Contains(waiterRec.Body.String(), "upstream_unreachable") {
+		t.Fatalf("waiter status = %d body = %s, want 502 envelope", waiterRec.Code, waiterRec.Body.String())
 	}
 }

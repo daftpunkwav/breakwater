@@ -154,8 +154,13 @@ func (chatWire) Stream() StreamTranscoder { return nil }
 // act on and are therefore forwarded.
 var passthroughHeaderNames = []string{"Content-Type", "Retry-After"}
 
-// renderExchangeBody writes status, selected headers and body.
+// renderExchangeBody writes status, selected headers and body. A
+// broken upstream can report a status outside the renderable range;
+// net/http panics on those, so the passthrough clamps instead.
 func renderExchangeBody(w http.ResponseWriter, status int, header http.Header, body []byte, names []string) {
+	if status < 100 || status > 599 {
+		status = http.StatusBadGateway
+	}
 	out := w.Header()
 	for _, name := range names {
 		if v := header.Get(name); v != "" {

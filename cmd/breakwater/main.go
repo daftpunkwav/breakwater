@@ -177,6 +177,9 @@ func main() {
 		"governance", gov.mode)
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("server terminated", "error", err)
+		// os.Exit skips deferred calls: flush the observation queue here
+		// so the error path keeps invariant I8 too.
+		accessLog.close()
 		os.Exit(1)
 	}
 	logger.Info("gateway stopped")

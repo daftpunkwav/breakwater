@@ -21,6 +21,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -91,11 +92,23 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r.WithContext(ctx))
 				metrics.CacheFetch(upstreamOf(carrier))
+				// A fetch whose handler produced no HTTP response at all
+				// (its own client walked away before the first byte) has
+				// nothing shareable: publishing the empty capture would
+				// make waiters replay a header-less entry.
+				if status := tee.Status(); status < 100 || status > 599 {
+					return Entry{}, fmt.Errorf("cache: shared fetch produced no response")
+				}
 				return capture(tee), nil
 			})
 			if fetchErr != nil {
-				// The waiter's own context ended; its client is gone and
-				// the response would be noise.
+				// A waiter whose own context ended has a client gone: the
+				// response would be noise. Any other waiter deserves a
+				// real envelope instead of the collapsed shared fetch.
+				if r.Context().Err() == nil {
+					protocol.WireFor(carrier.Format).RenderError(w, http.StatusBadGateway,
+						"upstream_unreachable", "the shared fetch for this request failed")
+				}
 				return
 			}
 			if owner {

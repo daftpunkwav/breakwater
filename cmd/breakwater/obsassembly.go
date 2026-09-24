@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
@@ -33,21 +34,26 @@ type accessLog struct {
 	sink   obs.Sink
 	logger *obs.Logger
 	file   *os.File
+	once   sync.Once
 }
 
-// close drains and shuts the log down; safe to call when disabled.
+// close drains and shuts the log down; safe to call when disabled and
+// safe to call twice — the error-exit path flushes explicitly before
+// os.Exit, the normal path through the deferred call.
 func (a *accessLog) close() {
-	if a.logger == nil {
+	if a == nil || a.logger == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownLogGrace)
-	defer cancel()
-	if err := a.logger.Close(ctx); err != nil {
-		slog.Warn("access log drain incomplete", "error", err)
-	}
-	if a.file != nil {
-		_ = a.file.Close()
-	}
+	a.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownLogGrace)
+		defer cancel()
+		if err := a.logger.Close(ctx); err != nil {
+			slog.Warn("access log drain incomplete", "error", err)
+		}
+		if a.file != nil {
+			_ = a.file.Close()
+		}
+	})
 }
 
 // newAccessLog opens the JSONL sink when a path is configured; it

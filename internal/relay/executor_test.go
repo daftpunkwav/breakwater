@@ -8,6 +8,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
@@ -269,6 +271,9 @@ func TestStreamAbortTerminatesHonestly(t *testing.T) {
 	if !result.Aborted {
 		t.Fatal("result not marked aborted")
 	}
+	if result.UpstreamID != "s" {
+		t.Fatalf("aborted stream served by %q, want s (the committing candidate)", result.UpstreamID)
+	}
 	body := string(result.Body)
 	if !strings.HasPrefix(body, partial) {
 		t.Fatalf("delivered bytes lost: %q", body)
@@ -292,4 +297,69 @@ func TestStreamServerErrorBeforeFirstByteStaysHTTP(t *testing.T) {
 	if result.Status != http.StatusServiceUnavailable || result.Streamed {
 		t.Fatalf("status = %d streamed = %v, want 503/false: pre-first-byte failures use HTTP status", result.Status, result.Streamed)
 	}
+}
+
+// TestStreamAbortReusesTheTranscoderInstance locks the translated-wire
+// abort contract: the failure frame must carry the same object id the
+// preamble introduced — a fresh transcoder would invent a new one.
+func TestStreamAbortReusesTheTranscoderInstance(t *testing.T) {
+	t.Parallel()
+	partial := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		header := http.Header{}
+		header.Set("Content-Type", "text/event-stream")
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(&brokenReader{data: partial}),
+		}, nil
+	}}
+	rec := httptest.NewRecorder()
+	exec := New(testPolicy(), nil)
+	result := exec.Execute(context.Background(), Job{
+		Model:      "test-model",
+		Stream:     true,
+		Candidates: []upstream.Upstream{cand},
+		Wire:       protocol.WireFor(protocol.FormatOpenAIResponses),
+		Out:        rec,
+	})
+	if !result.Aborted {
+		t.Fatal("result not marked aborted")
+	}
+	body := rec.Body.String()
+	startID := extractJSONField(t, body, "response.created", "id")
+	failID := extractJSONField(t, body, "response.failed", "id")
+	if startID == "" || failID == "" {
+		t.Fatalf("missing ids: created=%q failed=%q body=%s", startID, failID, body)
+	}
+	if startID != failID {
+		t.Fatalf("abort frame id %q does not match the stream preamble id %q", failID, startID)
+	}
+}
+
+// extractJSONField pulls one field from the payload of a named SSE
+// event in a recorded stream, looking one object level deep.
+func extractJSONField(t *testing.T, stream, event, field string) string {
+	t.Helper()
+	for _, frame := range strings.Split(stream, "\n\n") {
+		lines := strings.Split(frame, "\n")
+		if len(lines) < 2 || lines[0] != "event: "+event {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "data: ")), &payload); err != nil {
+			t.Fatalf("event %s payload: %v", event, err)
+		}
+		if id, ok := payload[field].(string); ok {
+			return id
+		}
+		for _, nested := range payload {
+			if obj, ok := nested.(map[string]any); ok {
+				if id, ok := obj[field].(string); ok {
+					return id
+				}
+			}
+		}
+	}
+	return ""
 }
