@@ -57,6 +57,11 @@ type Lease struct {
 // balance cannot cover the requested amount. Callers map it to HTTP 402.
 var ErrInsufficientBalance = errors.New("quota: insufficient balance")
 
+// ErrUnknownTenant reports a balance query for a tenant that has no
+// ledger entry. Callers distinguish it from backend failures: the admin
+// API maps it to 404, while any other Balance error is a 503.
+var ErrUnknownTenant = errors.New("quota: tenant has no balance ledger")
+
 // Ledger is the quota account port. Implementations must be safe for
 // concurrent use and must never over-draft a balance.
 type Ledger interface {
@@ -78,6 +83,7 @@ type Ledger interface {
 	Cancel(ctx context.Context, leaseID string) error
 	// Balance reports the tenant's current balance. It joins with the
 	// minimal admin API (query quota, view breaker state), never with
-	// the request path.
+	// the request path. A tenant without a ledger reports
+	// ErrUnknownTenant; any other error is a backend failure.
 	Balance(ctx context.Context, tenantID string) (int64, error)
 }

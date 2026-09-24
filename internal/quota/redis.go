@@ -18,6 +18,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -128,18 +129,26 @@ func (r *Redis) Settle(ctx context.Context, leaseID string, usedTokens int64) er
 		return fmt.Errorf("quota: settle script: %w", err)
 	}
 	if moved, _ := res[0].(int64); moved == 0 {
-		// Detectable no-op: the lease was already terminal. The second
-		// return names the state it found; late settles after a sweeper
-		// expiry are expected, not errors.
-		_ = res[1]
+		// Detectable no-op: the lease was already terminal. Late settles
+		// after a sweeper expiry are expected, not errors; the contract
+		// requires surfacing them.
+		slog.Info("quota settle reached a terminal lease", "lease", leaseID, "state", res[1])
 	}
 	return nil
 }
 
 // Cancel implements Ledger.
 func (r *Redis) Cancel(ctx context.Context, leaseID string) error {
-	_, err := r.terminate(ctx, leaseID, LeaseStateCancelled)
-	return err
+	moved, err := r.terminate(ctx, leaseID, LeaseStateCancelled)
+	if err != nil {
+		return err
+	}
+	if !moved {
+		// Detectable no-op, surfaced per the Ledger contract: the lease
+		// was already terminal or its record is gone.
+		slog.Info("quota cancel reached a missing or terminal lease", "lease", leaseID)
+	}
+	return nil
 }
 
 // terminate moves a RESERVED lease to a terminal state through the
@@ -172,6 +181,11 @@ func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState)
 // Balance implements Ledger.
 func (r *Redis) Balance(ctx context.Context, tenantID string) (int64, error) {
 	bal, err := r.rdb.Get(ctx, balanceKey(tenantID)).Int64()
+	if errors.Is(err, redis.Nil) {
+		// Unprovisioned tenants are reported, not read as zero: the
+		// admin API must tell "no ledger" apart from "drained".
+		return 0, ErrUnknownTenant
+	}
 	if err != nil {
 		return 0, fmt.Errorf("quota: balance: %w", err)
 	}

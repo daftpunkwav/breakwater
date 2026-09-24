@@ -64,6 +64,10 @@ func TestRedisInsufficientBalance(t *testing.T) {
 	if _, err := r.Reserve(ctx, "ghost", 1); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("unprovisioned err = %v", err)
 	}
+	// An unprovisioned balance query is reported, not read as zero.
+	if _, err := r.Balance(ctx, "ghost"); !errors.Is(err, ErrUnknownTenant) {
+		t.Fatalf("unprovisioned balance err = %v, want ErrUnknownTenant", err)
+	}
 }
 
 func TestRedisSweeperReclaimsAbandonedLeases(t *testing.T) {

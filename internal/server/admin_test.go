@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
+	"github.com/daftpunkwav/breakwater/internal/quota"
 )
 
 func TestAdminRequiresBearerToken(t *testing.T) {
@@ -62,8 +63,11 @@ func TestAdminRejectsNonGetMethods(t *testing.T) {
 func TestAdminQuotaEndpoint(t *testing.T) {
 	t.Parallel()
 	balances := func(_ *http.Request, tenantID string) (int64, error) {
-		if tenantID == "ghost" {
-			return 0, errors.New("quota: balance: missing")
+		switch tenantID {
+		case "ghost":
+			return 0, quota.ErrUnknownTenant
+		case "broken":
+			return 0, errors.New("redis: connection refused")
 		}
 		return 42, nil
 	}
@@ -81,6 +85,14 @@ func TestAdminQuotaEndpoint(t *testing.T) {
 	admin.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown tenant status = %d, want 404", rec.Code)
+	}
+
+	// A ledger outage is a 503, never a misleading 404.
+	req = httptest.NewRequest(http.MethodGet, "/admin/tenants/broken/quota", nil)
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "balance_unavailable") {
+		t.Fatalf("outage status = %d body = %s, want 503 envelope", rec.Code, rec.Body.String())
 	}
 }
 

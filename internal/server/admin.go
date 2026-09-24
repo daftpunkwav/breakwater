@@ -16,14 +16,18 @@ package server
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
+	"github.com/daftpunkwav/breakwater/internal/quota"
 )
 
-// BalanceLookup reports a tenant's current quota balance.
+// BalanceLookup reports a tenant's current quota balance. It returns
+// quota.ErrUnknownTenant for a tenant with no ledger; any other error is
+// a backend failure and renders as 503, never as a misleading 404.
 type BalanceLookup func(r *http.Request, tenantID string) (int64, error)
 
 // BreakerStates lists the current breaker state of every configured
@@ -98,11 +102,16 @@ func (a *Admin) serveQuota(w http.ResponseWriter, r *http.Request, tenantID stri
 		return
 	}
 	balance, err := a.balances(r, tenantID)
-	if err != nil {
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": balance})
+	case errors.Is(err, quota.ErrUnknownTenant):
 		protocol.WriteError(w, http.StatusNotFound, "tenant_unknown", "no balance for tenant "+tenantID)
-		return
+	default:
+		// A ledger outage must not masquerade as an unknown tenant.
+		protocol.WriteError(w, http.StatusServiceUnavailable, "balance_unavailable",
+			"quota ledger unavailable")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": balance})
 }
 
 func (a *Admin) serveBreakers(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -132,4 +133,22 @@ func TestMemorySweeperReclaimsAbandonedLeases(t *testing.T) {
 		t.Fatalf("balance = %d, want fully refunded 1000", bal)
 	}
 	// The reclaimed lease is terminal: a late settle is a no-op.
+}
+
+// TestMemoryBalanceUnknownTenant locks the Balance error contract: an
+// unprovisioned tenant is reported, not read as zero, so the admin API
+// can tell "no ledger" apart from "drained".
+func TestMemoryBalanceUnknownTenant(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	m.SetBalance("t", 7)
+	ctx := context.Background()
+
+	if _, err := m.Balance(ctx, "ghost"); !errors.Is(err, ErrUnknownTenant) {
+		t.Fatalf("unprovisioned balance err = %v, want ErrUnknownTenant", err)
+	}
+	bal, err := m.Balance(ctx, "t")
+	if err != nil || bal != 7 {
+		t.Fatalf("balance = %d err = %v, want 7/nil", bal, err)
+	}
 }

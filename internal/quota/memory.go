@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -97,7 +98,8 @@ func (m *Memory) Settle(_ context.Context, leaseID string, usedTokens int64) err
 	}
 	if lease.State != LeaseStateReserved {
 		// Detectable no-op: late settles after sweeper expiry are
-		// expected; nothing moves.
+		// expected; nothing moves. The contract requires surfacing them.
+		slog.Info("quota settle reached a terminal lease", "lease", leaseID, "state", lease.State)
 		return nil
 	}
 	refund := lease.Amount - usedTokens
@@ -117,6 +119,8 @@ func (m *Memory) Cancel(_ context.Context, leaseID string) error {
 		return fmt.Errorf("quota: unknown lease %s", leaseID)
 	}
 	if lease.State != LeaseStateReserved {
+		// Detectable no-op, surfaced per the Ledger contract.
+		slog.Info("quota cancel reached a terminal lease", "lease", leaseID, "state", lease.State)
 		return nil
 	}
 	m.balances[lease.TenantID] += lease.Amount
@@ -128,7 +132,13 @@ func (m *Memory) Cancel(_ context.Context, leaseID string) error {
 func (m *Memory) Balance(_ context.Context, tenantID string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.balances[tenantID], nil
+	balance, ok := m.balances[tenantID]
+	if !ok {
+		// Unprovisioned tenants are reported, not read as zero: the
+		// admin API must tell "no ledger" apart from "drained".
+		return 0, ErrUnknownTenant
+	}
+	return balance, nil
 }
 
 // SweepOnce reclaims RESERVED leases older than the lease TTL,
