@@ -8,8 +8,10 @@
  *   reserve, refund-only settle, idempotent terminal transitions
  * - Serve tests and the in-memory degradation posture
  *
- * Terminal leases are retained (not deleted) so settle-after-terminal
- * is observable and audit stays possible.
+ * Terminal leases are retained for audit (settle-after-terminal stays
+ * observable) but only for the same bounded audit window the Redis
+ * backend applies: the sweeper purges records past it, so the lease map
+ * cannot grow with request volume.
  */
 package quota
 
@@ -27,17 +29,25 @@ import (
 type Memory struct {
 	mu       sync.Mutex
 	balances map[string]int64
-	leases   map[string]*Lease
+	leases   map[string]*memLease
 	now      func() time.Time
 	// leaseTTL matches the Redis backend's sweep TTL.
 	leaseTTL time.Duration
+}
+
+// memLease is the stored lease plus the in-memory backend's audit
+// bookkeeping: when the lease reached a terminal state. Zero while the
+// lease is RESERVED.
+type memLease struct {
+	Lease
+	terminalAt time.Time
 }
 
 // NewMemory builds the in-process ledger.
 func NewMemory() *Memory {
 	return &Memory{
 		balances: make(map[string]int64),
-		leases:   make(map[string]*Lease),
+		leases:   make(map[string]*memLease),
 		now:      time.Now,
 		leaseTTL: defaultLeaseTTL,
 	}
@@ -84,7 +94,7 @@ func (m *Memory) Reserve(_ context.Context, tenantID string, amount int64) (Leas
 		State:     LeaseStateReserved,
 		CreatedAt: m.now(),
 	}
-	m.leases[lease.ID] = &lease
+	m.leases[lease.ID] = &memLease{Lease: lease}
 	return lease, nil
 }
 
@@ -107,6 +117,7 @@ func (m *Memory) Settle(_ context.Context, leaseID string, usedTokens int64) err
 		m.balances[lease.TenantID] += refund
 	}
 	lease.State = LeaseStateSettled
+	lease.terminalAt = m.now()
 	return nil
 }
 
@@ -125,6 +136,7 @@ func (m *Memory) Cancel(_ context.Context, leaseID string) error {
 	}
 	m.balances[lease.TenantID] += lease.Amount
 	lease.State = LeaseStateCancelled
+	lease.terminalAt = m.now()
 	return nil
 }
 
@@ -141,23 +153,31 @@ func (m *Memory) Balance(_ context.Context, tenantID string) (int64, error) {
 	return balance, nil
 }
 
-// SweepOnce reclaims RESERVED leases older than the lease TTL,
-// refunding their amounts and marking them EXPIRED; it returns how many
-// leases were reclaimed (bounded by limit per call).
+// SweepOnce reclaims RESERVED leases older than the lease TTL, refunding
+// their amounts and marking them EXPIRED; it returns how many leases
+// were reclaimed (bounded by limit per call). Terminal leases past the
+// shared audit window (leaseAuditTTL, the Redis backend's retention) are
+// purged in the same pass — reclaim count excludes purges, and purges
+// never touch balances.
 func (m *Memory) SweepOnce(_ context.Context, now time.Time, limit int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cutoff := now.Add(-m.leaseTTL)
+	reservedCutoff := now.Add(-m.leaseTTL)
+	terminalCutoff := now.Add(-leaseAuditTTL)
 	expired := 0
-	for _, lease := range m.leases {
-		if expired >= limit {
-			break
+	for id, lease := range m.leases {
+		if lease.State != LeaseStateReserved {
+			if lease.terminalAt.Before(terminalCutoff) {
+				delete(m.leases, id)
+			}
+			continue
 		}
-		if lease.State != LeaseStateReserved || lease.CreatedAt.After(cutoff) {
+		if expired >= limit || !lease.CreatedAt.Before(reservedCutoff) {
 			continue
 		}
 		m.balances[lease.TenantID] += lease.Amount
 		lease.State = LeaseStateExpired
+		lease.terminalAt = now
 		expired++
 	}
 	return expired, nil

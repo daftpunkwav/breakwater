@@ -152,3 +152,70 @@ func TestMemoryBalanceUnknownTenant(t *testing.T) {
 		t.Fatalf("balance = %d err = %v, want 7/nil", bal, err)
 	}
 }
+
+// TestMemoryTerminalLeasesPurgeAfterAuditWindow pins the bounded-growth
+// rule: terminal records survive the audit window (matching the Redis
+// backend) and are purged by the sweeper afterwards — without touching
+// balances again, and with a late settle of a purged lease surfaced.
+func TestMemoryTerminalLeasesPurgeAfterAuditWindow(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+	m.SetBalance("t", 1000)
+
+	first, err := m.Reserve(ctx, "t", 100)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	second, err := m.Reserve(ctx, "t", 100)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := m.Settle(ctx, first.ID, 40); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if err := m.Cancel(ctx, second.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	// 1000 - 100 - 100 + 60 (settle refund) + 100 (cancel) = 960.
+	if bal, _ := m.Balance(ctx, "t"); bal != 960 {
+		t.Fatalf("balance = %d, want 960", bal)
+	}
+	if len(m.leases) != 2 {
+		t.Fatalf("retained leases = %d, want 2 inside the audit window", len(m.leases))
+	}
+
+	// Sweeping inside the audit window keeps the records for audit.
+	midway := time.Now().Add(defaultLeaseTTL + time.Second)
+	expired, err := m.SweepOnce(ctx, midway, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if expired != 0 {
+		t.Fatalf("expired = %d, want 0: terminal records are not reclaims", expired)
+	}
+	if len(m.leases) != 2 {
+		t.Fatalf("retained leases = %d, want 2: audit window not elapsed", len(m.leases))
+	}
+
+	// Past the audit window the sweeper purges them; balances stay put.
+	after := time.Now().Add(defaultLeaseTTL + leaseAuditTTL + time.Second)
+	expired, err = m.SweepOnce(ctx, after, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if expired != 0 {
+		t.Fatalf("expired = %d, want 0: a purge is not a reclaim", expired)
+	}
+	if len(m.leases) != 0 {
+		t.Fatalf("retained leases = %d, want 0 after the audit window", len(m.leases))
+	}
+	if bal, _ := m.Balance(ctx, "t"); bal != 960 {
+		t.Fatalf("balance = %d, want unchanged 960: purges never refund", bal)
+	}
+
+	// A settle arriving after the purge is surfaced, never silent.
+	if err := m.Settle(ctx, first.ID, 40); err == nil {
+		t.Fatal("settle of a purged lease must surface, not silently no-op")
+	}
+}
