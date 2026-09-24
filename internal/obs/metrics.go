@@ -335,7 +335,9 @@ func (m *Metrics) Render(w io.Writer) error {
 	sort.Strings(names)
 	for _, name := range names {
 		f := m.families[name]
-		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", f.name, f.help, f.name, f.typ)
+		if _, err := fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", f.name, f.help, f.name, f.typ); err != nil {
+			return err
+		}
 		f.mu.RLock()
 		children := make([]*child, 0, len(f.children))
 		for _, c := range f.children {

@@ -48,7 +48,8 @@ func countingUpstream(t *testing.T, fetches *atomic.Int64, holdStart <-chan stru
 		<-holdStart
 		fetches.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":%d}}`, fetches.Load())))
+		// A broken client write ends the exchange; nothing to observe.
+		_, _ = fmt.Fprintf(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":%d}}`, fetches.Load())
 	})
 }
 

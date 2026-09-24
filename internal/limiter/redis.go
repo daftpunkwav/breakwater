@@ -32,10 +32,6 @@ var refundScriptSrc string
 // keyPrefix namespaces every limiter key.
 const keyPrefix = "bw:limiter:"
 
-// bucketTTL bounds idle bucket lifetime; a bucket untouched this long
-// is fully refilled anyway, so expiry cannot change any decision.
-const bucketTTL = 2 * time.Minute
-
 // Redis is the Redis-backed Limiter. It is safe for concurrent use.
 type Redis struct {
 	rdb    *redis.Client

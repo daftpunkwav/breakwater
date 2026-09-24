@@ -216,7 +216,7 @@ func TestFlightKeysAreIndependent(t *testing.T) {
 	for _, key := range []string{"a", "b"} {
 		for range 4 {
 			go func(k string) {
-				g.Do(context.Background(), k, func(context.Context) (Entry, error) {
+				_, _, _ = g.Do(context.Background(), k, func(context.Context) (Entry, error) {
 					fetches.Add(1)
 					<-hold
 					return entryFor(200), nil

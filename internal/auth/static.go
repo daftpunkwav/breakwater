@@ -73,14 +73,10 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 		if t.ID == "" {
 			return nil, fmt.Errorf("auth: static tier without id")
 		}
-		tiers[t.ID] = Tier{
-			ID:            t.ID,
-			RPM:           t.RPM,
-			TPM:           t.TPM,
-			MaxTokens:     t.MaxTokens,
-			MonthlyQuota:  t.MonthlyQuota,
-			AllowedModels: t.AllowedModels,
-		}
+		// StaticTier mirrors Tier field for field: the direct conversion
+		// keeps the wire config honest about the identity snapshot it
+		// feeds and fails to compile if the shapes drift apart.
+		tiers[t.ID] = Tier(t)
 	}
 
 	s := &Static{byKey: make(map[string]Tenant, len(cfg.Tenants)*2)}

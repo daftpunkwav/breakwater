@@ -89,14 +89,18 @@ func TestMetricsLogsDroppedRendersFromSync(t *testing.T) {
 	m := NewMetrics()
 
 	var out strings.Builder
-	m.Render(&out)
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
 	if !strings.Contains(out.String(), "breakwater_logs_dropped_total 0") {
 		t.Errorf("healthy zero missing from exposition:\n%s", out.String())
 	}
 
 	m.SetLogsDropped(7)
 	out.Reset()
-	m.Render(&out)
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
 	if !strings.Contains(out.String(), "breakwater_logs_dropped_total 7") {
 		t.Errorf("drop counter missing from exposition:\n%s", out.String())
 	}
