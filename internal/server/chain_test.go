@@ -8,11 +8,14 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/limiter"
@@ -89,6 +92,21 @@ func completionRequest(t *testing.T, handler http.Handler, key, body string) (in
 
 const okBody = `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`
 
+// countingBackend wraps the shared test upstream and counts the requests
+// that actually reach it — the assertion surface of invariant I1
+// (a rejected request must not touch any upstream).
+func countingBackend(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	hits := &atomic.Int64{}
+	inner := testUpstreamHandler(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(backend.Close)
+	return backend, hits
+}
+
 func TestChainAuthenticatesAndForwards(t *testing.T) {
 	t.Parallel()
 	backend := testUpstreamBackend(t)
@@ -112,8 +130,7 @@ func TestChainAuthenticatesAndForwards(t *testing.T) {
 
 func TestChainRejectsMissingAndUnknownKeys(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
+	backend, hits := countingBackend(t)
 	ledger := quota.NewMemory()
 	handler := buildChain(t, backend.URL, ledger)
 
@@ -125,14 +142,17 @@ func TestChainRejectsMissingAndUnknownKeys(t *testing.T) {
 	if status != http.StatusUnauthorized || !strings.Contains(body, "invalid_api_key") {
 		t.Fatalf("bad-key status = %d body = %s", status, body)
 	}
+	// I1: an auth rejection never reaches the upstream.
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("upstream hits = %d, want 0 for rejected keys", got)
+	}
 }
 
 // TestChainRateLimitsWithRetryAfter is scenario S2: over-limit
 // requests get 429 with Retry-After and never reach the upstream.
 func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
+	backend, hits := countingBackend(t)
 	ledger := quota.NewMemory()
 	ledger.SetBalance("t1", 1_000_000)
 	handler := buildChain(t, backend.URL, ledger)
@@ -153,6 +173,11 @@ func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	}
 	if !strings.Contains(body, "rate_limit_exceeded") {
 		t.Fatalf("body = %s, want rate limit envelope", body)
+	}
+	// I1: exactly the two allowed requests touched the upstream; the
+	// 429 stampede behind them never did.
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("upstream hits = %d, want 2: rejected requests must not reach the upstream", got)
 	}
 }
 
@@ -185,8 +210,7 @@ func TestChainFailedRequestSettlesAtZero(t *testing.T) {
 // tenant gets 402 and the upstream stays untouched.
 func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
+	backend, hits := countingBackend(t)
 	ledger := quota.NewMemory()
 	// The estimate of okBody (1 prompt word + clamped 50) is 51 tokens;
 	// ten cannot cover it.
@@ -204,6 +228,10 @@ func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {
 	bal, err := ledger.Balance(context.Background(), "t2")
 	if err != nil || bal != 10 {
 		t.Fatalf("balance = %d err = %v, want untouched 10", bal, err)
+	}
+	// I1: the 402 never reached the upstream.
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("upstream hits = %d, want 0 for a quota-rejected request", got)
 	}
 }
 
@@ -272,8 +300,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 // routing or upstream contact, whatever the router could serve.
 func TestChainDeniesModelOutsideTier(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
+	backend, hits := countingBackend(t)
 	ledger := quota.NewMemory()
 	ledger.SetBalance("t1", 1_000_000)
 
@@ -299,9 +326,98 @@ func TestChainDeniesModelOutsideTier(t *testing.T) {
 	if status != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
 		t.Fatalf("denied model status = %d body = %s, want 403 envelope", status, body)
 	}
-	// The rejection refunds in full: no quota moved for the denied call.
+	// The rejection refunds in full: no quota moved for the denied call,
+	// and the denied request never reached the upstream (I1).
 	bal, err := ledger.Balance(context.Background(), "t1")
 	if err != nil || bal != 1_000_000-3 {
 		t.Fatalf("balance = %d err = %v, want 999997 (denied call refunded)", bal, err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits = %d, want 1 (only the allowed model): a denied model must not reach the upstream", got)
+	}
+}
+
+// TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage is the I10
+// evidence: a client that walks away mid-stream has its disconnect
+// propagated as upstream cancellation, and the lease settles by the
+// tokens actually consumed — never refunded as if nothing happened,
+// never surcharged past the reservation.
+func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
+	t.Parallel()
+	const initial = int64(1_000_000)
+	// The reservation for okBody-like stream requests: 1 prompt word +
+	// the tier's 50-token clamp (see buildChain's tier).
+	const reservation = int64(51)
+
+	sawCancel := make(chan struct{}, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for i := 0; ; i++ {
+			if r.Context().Err() != nil {
+				sawCancel <- struct{}{}
+				return
+			}
+			_, err := fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"chunk %d \"}}]}\n\n", i)
+			if err != nil {
+				sawCancel <- struct{}{}
+				return
+			}
+			flusher.Flush()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}))
+	defer backend.Close()
+
+	ledger := quota.NewMemory()
+	ledger.SetBalance("t1", initial)
+	handler := buildChain(t, backend.URL, ledger)
+
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+keyT1)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	// Read the head of the stream, then walk away mid-flight.
+	if _, err := io.ReadFull(resp.Body, make([]byte, 64)); err != nil {
+		t.Fatalf("read stream head: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// The disconnect must reach the upstream exchange.
+	select {
+	case <-sawCancel:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream exchange never observed the client disconnect")
+	}
+
+	// Settlement runs detached from the cancelled request context; poll
+	// until it lands. Anything below the initial balance proves tokens
+	// were actually consumed; the floor proves no surcharge happened.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		bal, err := ledger.Balance(context.Background(), "t1")
+		if err != nil {
+			t.Fatalf("balance: %v", err)
+		}
+		if bal < initial {
+			if floor := initial - reservation; bal < floor {
+				t.Fatalf("balance = %d, below the reserved worst case %d: the settle surcharged a disconnected request", bal, floor)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("balance = %d still full after the disconnect: the lease never settled by usage", bal)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

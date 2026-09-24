@@ -101,7 +101,7 @@ func TestCachedStoreEvictsLeastRecentlyUsed(t *testing.T) {
 		t.Fatalf("resolve b: %v", err)
 	}
 	if inner.resolves != 4 {
-		t.Fatalf("backend resolved %d times, want 4 (a,b,a-miss-free? c evicts b, b again)", inner.resolves)
+		t.Fatalf("backend resolved %d times, want 4 (a, b, a cached, c evicts b, b again)", inner.resolves)
 	}
 }
 

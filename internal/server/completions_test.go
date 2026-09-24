@@ -28,6 +28,14 @@ import (
 // HTTP, including chunked SSE delivery.
 func testUpstreamBackend(t *testing.T) *httptest.Server {
 	t.Helper()
+	return httptest.NewServer(testUpstreamHandler(t))
+}
+
+// testUpstreamHandler is the mock provider behind testUpstreamBackend,
+// exposed so tests can wrap it (e.g. to count the requests that
+// actually reach the upstream).
+func testUpstreamHandler(t *testing.T) http.Handler {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -60,7 +68,7 @@ func testUpstreamBackend(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))
 	})
-	return httptest.NewServer(mux)
+	return mux
 }
 
 // inferenceMap wraps one handler under the chat format for the routes.

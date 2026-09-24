@@ -8,6 +8,8 @@ package quota
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -217,5 +219,61 @@ func TestMemoryTerminalLeasesPurgeAfterAuditWindow(t *testing.T) {
 	// A settle arriving after the purge is surfaced, never silent.
 	if err := m.Settle(ctx, first.ID, 40); err == nil {
 		t.Fatal("settle of a purged lease must surface, not silently no-op")
+	}
+}
+
+// TestMemoryConcurrentDrainReconciles is the memory backend's I3
+// evidence, mirroring the Redis script test: concurrent reserve/settle
+// rounds against a shared balance under -race must reconcile exactly —
+// initial = final + consumed, zero drift.
+func TestMemoryConcurrentDrainReconciles(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+
+	const (
+		initial    = int64(1_000_000)
+		reserveAmt = int64(100)
+		workers    = 64
+		rounds     = 25
+	)
+	m.SetBalance("t", initial)
+
+	var consumed atomic.Int64
+	var wg sync.WaitGroup
+	errs := make(chan error, workers*rounds)
+	for w := range workers {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for round := range rounds {
+				lease, err := m.Reserve(ctx, "t", reserveAmt)
+				if err != nil {
+					errs <- err
+					continue
+				}
+				// Vary usage deterministically across the refund range.
+				used := int64((worker + round) % 101)
+				if err := m.Settle(ctx, lease.ID, used); err != nil {
+					errs <- err
+					continue
+				}
+				consumed.Add(used)
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent drain error: %v", err)
+	}
+
+	final, err := m.Balance(ctx, "t")
+	if err != nil {
+		t.Fatalf("balance: %v", err)
+	}
+	if want := initial - consumed.Load(); final != want {
+		t.Fatalf("reconciliation error: balance = %d, want %d (drift %d)",
+			final, want, final-want)
 	}
 }

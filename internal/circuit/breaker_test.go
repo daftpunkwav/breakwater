@@ -157,7 +157,7 @@ func TestBreakerReclaimsAbandonedProbe(t *testing.T) {
 		t.Fatal("grant after abandoned probe must be denied")
 	}
 	if got := b.StateOf(ctx, "u"); got != StateOpen {
-		t.Fatalf("state = %s, want open: the probe slot must not leak (I9 for breakers)", got)
+		t.Fatalf("state = %s, want open: the probe slot must not leak (I4)", got)
 	}
 }
 
