@@ -117,6 +117,7 @@ func TestMetricsNilSafety(t *testing.T) {
 	m.RateLimited("t")
 	m.QuotaReserved("t", 10)
 	m.QuotaRefunded("t", 5)
+	m.QuotaReconciliationError()
 	m.QuotaExpired()
 	m.CacheHit()
 	m.CacheMiss()
