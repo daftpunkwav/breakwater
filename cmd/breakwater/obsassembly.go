@@ -77,6 +77,9 @@ func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, ups
 	balances := func(r *http.Request, tenantID string) (int64, error) {
 		return gov.ledger.Balance(r.Context(), tenantID)
 	}
+	setBalance := func(r *http.Request, tenantID string, balance int64) error {
+		return gov.ledger.SetBalance(r.Context(), tenantID, balance)
+	}
 	states := func(r *http.Request) []server.BreakerView {
 		views := make([]server.BreakerView, 0, len(upstreamIDs))
 		for _, id := range upstreamIDs {
@@ -87,7 +90,7 @@ func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, ups
 		}
 		return views
 	}
-	return server.NewAdmin(cfg.Security.AdminToken, balances, states)
+	return server.NewAdmin(cfg.Security.AdminToken, balances, setBalance, states)
 }
 
 // upstreamIDs lists the configured upstream identifiers in order.

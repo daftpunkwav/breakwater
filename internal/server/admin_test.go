@@ -1,7 +1,7 @@
 /**
  * @file admin_test
- * @description Management API tests: the bearer guard, the GET method
- * guard and the two read-only endpoints.
+ * @description Management API tests: the bearer guard, method guards,
+ * the quota read/top-up pair and the breaker listing.
  */
 package server
 
@@ -20,7 +20,7 @@ import (
 func TestAdminRequiresBearerToken(t *testing.T) {
 	t.Parallel()
 	breakers := func(_ *http.Request) []BreakerView { return []BreakerView{} }
-	admin := NewAdmin("secret", nil, breakers)
+	admin := NewAdmin("secret", nil, nil, breakers)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/breakers", nil)
 	rec := httptest.NewRecorder()
@@ -48,7 +48,7 @@ func TestAdminRequiresBearerToken(t *testing.T) {
 
 func TestAdminRejectsNonGetMethods(t *testing.T) {
 	t.Parallel()
-	admin := NewAdmin("", nil, nil) // empty token: open, as documented
+	admin := NewAdmin("", nil, nil, nil) // empty token: open, as documented
 
 	for _, method := range []string{http.MethodPost, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/admin/breakers", nil)
@@ -57,6 +57,65 @@ func TestAdminRejectsNonGetMethods(t *testing.T) {
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s status = %d, want 405 (the admin surface is read-only)", method, rec.Code)
 		}
+	}
+}
+
+func TestAdminQuotaTopUp(t *testing.T) {
+	t.Parallel()
+	received := int64(-1)
+	setter := func(_ *http.Request, tenantID string, balance int64) error {
+		if tenantID == "ghost" {
+			return quota.ErrUnknownTenant
+		}
+		received = balance
+		return nil
+	}
+	admin := NewAdmin("", nil, setter, nil)
+
+	req := httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+		strings.NewReader(`{"balance":500}`))
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || received != 500 {
+		t.Fatalf("status = %d received = %d, want 200/500", rec.Code, received)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/admin/tenants/ghost/quota",
+		strings.NewReader(`{"balance":500}`))
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown tenant top-up = %d, want 404", rec.Code)
+	}
+
+	for _, body := range []string{`{}`, `{"balance":-1}`, `not json`} {
+		req = httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+			strings.NewReader(body))
+		rec = httptest.NewRecorder()
+		admin.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %q status = %d, want 400", body, rec.Code)
+		}
+	}
+	if received == -1 {
+		t.Fatal("a rejected top-up must not reach the ledger")
+	}
+}
+
+func TestAdminQuotaRejectsWrongMethod(t *testing.T) {
+	t.Parallel()
+	admin := NewAdmin("", nil, nil, nil)
+
+	// The quota path answers exactly GET (read) and PUT (top-up).
+	req := httptest.NewRequest(http.MethodPost, "/admin/tenants/t1/quota", nil)
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST on the quota path = %d, want 405", rec.Code)
+	}
+	allow := rec.Header().Get("Allow")
+	if !strings.Contains(allow, http.MethodGet) || !strings.Contains(allow, http.MethodPut) {
+		t.Fatalf("Allow = %q, want GET and PUT advertised", allow)
 	}
 }
 
@@ -71,7 +130,7 @@ func TestAdminQuotaEndpoint(t *testing.T) {
 		}
 		return 42, nil
 	}
-	admin := NewAdmin("", balances, nil)
+	admin := NewAdmin("", balances, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/tenants/t1/quota", nil)
 	rec := httptest.NewRecorder()
@@ -101,7 +160,7 @@ func TestAdminBreakersEndpoint(t *testing.T) {
 	states := func(_ *http.Request) []BreakerView {
 		return []BreakerView{{Upstream: "u1", State: circuit.StateClosed}}
 	}
-	admin := NewAdmin("", nil, states)
+	admin := NewAdmin("", nil, nil, states)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/breakers", nil)
 	rec := httptest.NewRecorder()
