@@ -85,17 +85,7 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 		// StaticTier mirrors Tier field for field: the direct conversion
 		// keeps the wire config honest about the identity snapshot it
 		// feeds and fails to compile if the shapes drift apart.
-		tiers[t.ID] = Tier{
-			ID:            t.ID,
-			RPM:           t.RPM,
-			TPM:           t.TPM,
-			MaxTokens:     t.MaxTokens,
-			MonthlyQuota:  t.MonthlyQuota,
-			AllowedModels: t.AllowedModels,
-			DeniedModels:  t.DeniedModels,
-			ModelQuotas:   t.ModelQuotas,
-			Concurrency:   t.Concurrency,
-		}
+		tiers[t.ID] = Tier(t)
 	}
 
 	s := &Static{byKey: make(map[string]Tenant, len(cfg.Tenants)*2)}
