@@ -52,24 +52,36 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream) (circ
 	resp, err := cand.Forward(fwdCtx, req)
 	if err != nil {
 		lease.end()
-		if lease.ttftFired {
+		if lease.ttftFired.Load() {
 			// Classified as a timeout so the loop may retry or fail
 			// over to the next candidate.
-			return circuit.OutcomeServerFault, fmt.Errorf(
-				"time-to-first-byte exceeded %v: %w", r.exec.policy.AttemptTimeout, context.DeadlineExceeded)
+			return circuit.OutcomeServerFault, r.ttftTimeoutError()
 		}
 		return transportOutcome(r.ctx, err), err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		lease.end()
+		// Read the error body while the lease is still alive: end
+		// cancels the forward context, and a cancelled request context
+		// takes the response body's readability with it — the upstream
+		// error status would be lost to a generic read failure.
 		body, readErr := readBounded(resp.Body, maxResponseBytes)
 		_ = resp.Body.Close()
+		lease.end()
 		if readErr != nil {
 			return circuit.OutcomeServerFault, fmt.Errorf("relay: upstream %s read body: %w", cand.ID(), readErr)
 		}
 		return r.stashUpstreamError(cand, resp, body)
 	}
 	lease.ttftPassed()
+	if lease.ttftFired.Load() {
+		// The timer fired as the headers landed: the forward context is
+		// already cancelled, so the body dies on its first read. Fail
+		// the attempt as the retryable timeout it is instead of
+		// committing a stream that cannot deliver.
+		_ = resp.Body.Close()
+		lease.end()
+		return circuit.OutcomeServerFault, r.ttftTimeoutError()
+	}
 	return r.exchangeStream(cand, resp, lease)
 }
 
@@ -150,7 +162,7 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 		return circuit.OutcomeClientFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
 	code := abortCode(pumpErr)
-	if lease.ceilingFired {
+	if lease.ceilingFired.Load() {
 		code = protocol.CodeUpstreamTimeout
 	}
 	message := "upstream stream failed mid-flight: " + pumpErr.Error()
@@ -188,6 +200,12 @@ func transportOutcome(requestCtx context.Context, err error) circuit.Outcome {
 		return circuit.OutcomeClientFault
 	}
 	return circuit.OutcomeServerFault
+}
+
+// ttftTimeoutError renders an expired time-to-first-byte budget as the
+// retryable timeout the attempt loop understands.
+func (r *run) ttftTimeoutError() error {
+	return fmt.Errorf("time-to-first-byte exceeded %v: %w", r.exec.policy.AttemptTimeout, context.DeadlineExceeded)
 }
 
 // abortCode maps a mid-stream failure to its frozen in-stream error

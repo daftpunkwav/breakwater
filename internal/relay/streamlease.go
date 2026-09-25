@@ -21,6 +21,7 @@ package relay
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,8 +30,10 @@ type streamLease struct {
 	cancel       context.CancelFunc
 	ttftTimer    *time.Timer
 	ceilingTimer *time.Timer
-	ttftFired    bool
-	ceilingFired bool
+	// The fired flags are stored by the timer goroutines and loaded by
+	// the attempt goroutine; atomics keep that hand-off race-free.
+	ttftFired    atomic.Bool
+	ceilingFired atomic.Bool
 }
 
 // beginStream derives the streaming forward context off the request
@@ -41,13 +44,13 @@ func (r *run) beginStream() (*streamLease, context.Context) {
 	lease := &streamLease{cancel: cancel}
 	if d := r.exec.streamTimeout; d > 0 {
 		lease.ceilingTimer = time.AfterFunc(d, func() {
-			lease.ceilingFired = true
+			lease.ceilingFired.Store(true)
 			cancel()
 		})
 	}
 	if d := r.exec.policy.AttemptTimeout; d > 0 {
 		lease.ttftTimer = time.AfterFunc(d, func() {
-			lease.ttftFired = true
+			lease.ttftFired.Store(true)
 			cancel()
 		})
 	}

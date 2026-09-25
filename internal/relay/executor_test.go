@@ -414,6 +414,77 @@ func TestStreamServerErrorBeforeFirstByteStaysHTTP(t *testing.T) {
 	}
 }
 
+// TestStreamErrorPassthroughOverRealTransport pins the error-body read
+// against a real HTTP upstream: the response body dies with the forward
+// context, so the exchange must read it while the lease is still alive —
+// otherwise the upstream 429 degrades into a gateway envelope.
+func TestStreamErrorPassthroughOverRealTransport(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		// Flush so Forward returns on the headers alone; the error body
+		// then trickles in later. A read issued after the forward
+		// context was cancelled fails visibly instead of hitting the
+		// transport's already-buffered bytes.
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"error":{"message":"slow down"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	cand, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "real", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("build adapter: %v", err)
+	}
+	exec := New(testPolicy(), nil)
+
+	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
+	if result.Status != http.StatusTooManyRequests || result.UpstreamID != "real" {
+		t.Fatalf("status = %d upstream = %q body = %q, want the upstream 429 passthrough",
+			result.Status, result.UpstreamID, result.Body)
+	}
+	if !strings.Contains(string(result.Body), "slow down") {
+		t.Fatalf("body = %q, want the upstream error body verbatim", result.Body)
+	}
+}
+
+// TestStreamTTFTExpiryDuringForwardRetries pins the race where the TTFT
+// timer expires while Forward is still in flight: the headers land into
+// an already-cancelled context, and the attempt must fail as the
+// retryable timeout it is — never commit a stream that cannot pump.
+func TestStreamTTFTExpiryDuringForwardRetries(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	sseHeader := func() http.Header {
+		header := http.Header{}
+		header.Set("Content-Type", "text/event-stream")
+		return header
+	}
+	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		calls++
+		if calls == 1 {
+			// Outlives the TTFT budget; the timer fires mid-call.
+			time.Sleep(80 * time.Millisecond)
+		}
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     sseHeader(),
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		}, nil
+	}}
+	exec := New(retry.Policy{MaxAttempts: 2, AttemptTimeout: 30 * time.Millisecond}, nil)
+
+	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
+	if result.Aborted {
+		t.Fatal("aborted: a TTFT expiry must fail the attempt before commit, not abort a committed stream")
+	}
+	if result.Status != http.StatusOK || result.Attempts != 2 {
+		t.Fatalf("status = %d attempts = %d, want 200/2 (retryable TTFT timeout)", result.Status, result.Attempts)
+	}
+}
+
 // TestStreamAbortReusesTheTranscoderInstance locks the translated-wire
 // abort contract: the failure frame must carry the same object id the
 // preamble introduced — a fresh transcoder would invent a new one.
