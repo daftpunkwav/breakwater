@@ -127,7 +127,15 @@ func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 		}
 	}()
 
-	<-started // the request is being served; the drain window will bound it
+	// Wait for the request to be served, but never unbounded: on a
+	// contended runner the client may fail to connect at all.
+	select {
+	case <-started:
+	case err := <-runErr:
+		t.Fatalf("run exited before the request started: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler never started")
+	}
 	cancel()
 
 	select {
