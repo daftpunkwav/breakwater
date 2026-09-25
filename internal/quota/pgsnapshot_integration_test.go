@@ -48,6 +48,13 @@ func TestPGSnapshotStoreIntegration(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 
+	// The test's rows must not outlive one run: the same database is
+	// reused across workflow steps, and the unknown-tenant read below
+	// is only honest against a clean slate for this tenant id.
+	if _, err := conn.Exec(ctx, `DELETE FROM quota_snapshots WHERE tenant_id = $1`, "reconcile-int"); err != nil {
+		t.Fatalf("clear previous rows: %v", err)
+	}
+
 	if latest, err := store.Latest(ctx, "reconcile-int"); err != nil || latest != nil {
 		t.Fatalf("latest of unknown tenant = %+v err = %v, want nil/nil", latest, err)
 	}
