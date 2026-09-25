@@ -57,19 +57,19 @@ func (a *accessLog) close() {
 }
 
 // newAccessLog opens the JSONL sink when a path is configured; it
-// returns a disabled bundle otherwise.
-func newAccessLog(cfg config.Config, logger *slog.Logger) *accessLog {
+// returns a disabled bundle otherwise. An unopenable path is an error,
+// not a silently unobserved gateway.
+func newAccessLog(cfg config.Config, logger *slog.Logger) (*accessLog, error) {
 	if cfg.Obs.AccessLogPath == "" {
-		return &accessLog{}
+		return &accessLog{}, nil
 	}
 	file, err := os.OpenFile(cfg.Obs.AccessLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		logger.Error("open access log", "path", cfg.Obs.AccessLogPath, "error", err)
-		os.Exit(1)
+		return nil, err
 	}
 	l := obs.NewLogger(file, cfg.Obs.AccessLogQueueSize)
 	logger.Info("access log enabled", "path", cfg.Obs.AccessLogPath, "queue", cfg.Obs.AccessLogQueueSize)
-	return &accessLog{sink: l, logger: l, file: file}
+	return &accessLog{sink: l, logger: l, file: file}, nil
 }
 
 // buildAdmin binds the admin endpoints to the live backends.
