@@ -73,7 +73,8 @@ func newAccessLog(cfg config.Config, logger *slog.Logger) (*accessLog, error) {
 }
 
 // buildAdmin binds the admin endpoints to the live backends; options
-// forward to server.NewAdmin (e.g. the routing switches).
+// forward to server.NewAdmin (the routing switches, the identity
+// administration store).
 func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, upstreamIDs []string, opts ...server.AdminOption) http.Handler {
 	balances := func(r *http.Request, tenantID string) (int64, error) {
 		return gov.ledger.Balance(r.Context(), tenantID)

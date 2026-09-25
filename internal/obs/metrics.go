@@ -121,6 +121,8 @@ func NewMetrics() *Metrics {
 
 	reg("breakwater_rate_limited_total", "Requests rejected by the rate limiter.", "counter",
 		[]string{"tenant"}, nil)
+	reg("breakwater_concurrency_limited_total", "Requests rejected by the per-tenant concurrency ceiling.", "counter",
+		[]string{"tenant"}, nil)
 
 	reg("breakwater_quota_reservation_tokens_total", "Tokens reserved by the quota ledger.", "counter",
 		[]string{"tenant"}, nil)
@@ -203,6 +205,14 @@ func (m *Metrics) RateLimited(tenant string) {
 		return
 	}
 	m.inc("breakwater_rate_limited_total", 1, tenant)
+}
+
+// ConcurrencyLimited records a concurrency-ceiling rejection.
+func (m *Metrics) ConcurrencyLimited(tenant string) {
+	if m == nil {
+		return
+	}
+	m.inc("breakwater_concurrency_limited_total", 1, tenant)
 }
 
 // QuotaReserved records the token estimate reserved for a request.

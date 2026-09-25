@@ -63,9 +63,9 @@ func TestNewAuthStoreBranches(t *testing.T) {
 	t.Parallel()
 	logger := slog.New(slog.DiscardHandler)
 
-	// No identity: no store, no probe, nothing to close.
-	store, static, closeFn, probe, err := newAuthStore(context.Background(), testConfig("127.0.0.1:0"))
-	if err != nil || store != nil || static != nil || probe != nil {
+	// No identity: no store, no admin surface, no probe, nothing to close.
+	store, static, admin, closeFn, probe, err := newAuthStore(context.Background(), testConfig("127.0.0.1:0"))
+	if err != nil || store != nil || static != nil || admin != nil || probe != nil {
 		t.Fatalf("no identity = %+v err = %v, want all nil", store, err)
 	}
 	closeFn()
@@ -73,16 +73,17 @@ func TestNewAuthStoreBranches(t *testing.T) {
 	// Broken identity JSON fails at assembly.
 	bad := testConfig("127.0.0.1:0")
 	bad.Identity = "{not json"
-	if _, _, _, _, err := newAuthStore(context.Background(), bad); err == nil {
+	if _, _, _, _, _, err := newAuthStore(context.Background(), bad); err == nil {
 		t.Fatal("broken identity JSON must fail assembly")
 	}
 
 	// A syntactically valid DSN assembles the pg store lazily: the
-	// readiness probe surfaces the (here unreachable) database.
+	// readiness probe surfaces the (here unreachable) database, and the
+	// administration port rides on the same store.
 	pg := testConfig("127.0.0.1:0")
 	pg.Postgres.DSN = "postgres://breakwater:breakwater@127.0.0.1:1/db"
-	pgStore, _, pgClose, pgProbe, err := newAuthStore(context.Background(), pg)
-	if err != nil || pgStore == nil || pgProbe == nil {
+	pgStore, _, pgAdmin, pgClose, pgProbe, err := newAuthStore(context.Background(), pg)
+	if err != nil || pgStore == nil || pgAdmin == nil || pgProbe == nil {
 		t.Fatalf("pg branch: %v", err)
 	}
 	defer pgClose()

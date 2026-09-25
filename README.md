@@ -154,6 +154,40 @@ All configuration is environment-based; core knobs:
 - `PUT /admin/models/{id}` — enable or disable a model (`{"enabled": false}`); disabled models refuse requests with `403 model_disabled`
 - `PUT /admin/upstreams/{id}` — enable or disable an upstream; disabled upstreams drop out of every candidate list. Switches are in-memory and reset on restart.
 
+### Identity administration (PostgreSQL deployments)
+
+With `BREAKWATER_POSTGRES_DSN` configured, identities are users with
+keys — up to five per user — and each level carries its own limits
+layer:
+
+- `POST /admin/users` — create a user (`{"name", "tier", "role"}`; role `user` or `admin`)
+- `GET /admin/users` — list users
+- `PUT /admin/users/{id}/limits` — the user-level limits layer, applied to every key the user holds
+- `POST /admin/users/{id}/keys` — issue a key (raw secret shown once)
+- `GET /admin/users/{id}/keys` — list the user's keys
+- `PUT /admin/keys/{id}/limits` — the key-level limits layer
+- `PUT /admin/keys/{id}/status` — disable or re-enable one key (`{"enabled": false}`)
+
+The limits layer (`LIMITS` below) is one JSON document:
+
+```json
+{"rpm": 30, "tpm": 50000, "max_tokens": 2048, "monthly_quota": 1000000,
+ "concurrency": 4,
+ "allowed_models": ["m1", "m2"],
+ "denied_models": ["expensive-model"],
+ "model_quotas": {"expensive-model": 100000}}
+```
+
+Resolution merges the tier template, the user layer and the key layer:
+scalars take the nearest set value (key over user over tier);
+`denied_models` union across layers — a user-level deny removes the
+model from every key; `allowed_models` only ever tightens (an
+`*`-wildcard tier plus a named user list means exactly that list);
+`model_quotas` merge per model. An omitted field inherits; `{}` clears
+the layer. Changes surface to live traffic within the auth cache TTL.
+The static `BREAKWATER_IDENTITY` mode supports `role` and a
+tenant-level `overrides` document, but has no administration surface.
+
 ## Fault injection interface
 
 Per-request directives via headers:

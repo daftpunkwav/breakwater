@@ -86,7 +86,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// the static identity set otherwise. Either way the steady state
 	// resolves through the process-local LRU. Identity configuration is
 	// what arms the governance pipeline.
-	authStore, staticIdentity, closeIdentity, identityReady, err := newAuthStore(ctx, cfg)
+	authStore, staticIdentity, identityAdmin, closeIdentity, identityReady, err := newAuthStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -98,8 +98,14 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		pipeline.ObservationStage(metrics, accessLog.sink),
 	}
 	if authStore != nil {
+		// One gate for the process lifetime: its slot map IS the
+		// in-flight state.
+		concurrencyGate := limiter.NewConcurrency()
 		governance = append(governance,
 			pipeline.AuthStage(authStore),
+			// Concurrency sits before the rate limit: a request rejected
+			// for concurrency must not consume rate budget or quota.
+			limiter.ConcurrencyMiddleware(concurrencyGate, metrics),
 			limiter.Middleware(gov.limiter, metrics),
 			quota.Middleware(gov.ledger, metrics),
 		)
@@ -178,7 +184,8 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
 		Admin: buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams),
-			server.WithRouting(routingSwitch)),
+			server.WithRouting(routingSwitch),
+			server.WithIdentityStore(identityAdmin)),
 		Readiness: mergeReadiness(gov.readiness, identityReady),
 		Version:   version,
 	})

@@ -70,7 +70,9 @@ jobs:
 
       # The coverage floor (>=95% per package) is a hard gate, matching
       # docs/TESTING.md. Plain -cover keeps this pass fast; the race
-      # detector already ran above.
+      # detector already ran above. The integration env is set here too:
+      # the identity store's SQL coverage only exists when the
+      # database-backed tests actually run.
       - name: Coverage floor
         run: |
           # The runner's default shell is bash -e (no pipefail); without
@@ -93,6 +95,9 @@ jobs:
             esac
           done < /tmp/cover.txt
           exit $failed
+        env:
+          BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
+          BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable
 
       # The compose deployment story builds these two images; a broken
       # Dockerfile must fail CI, not the next docker compose up.

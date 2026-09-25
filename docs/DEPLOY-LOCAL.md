@@ -106,12 +106,20 @@ block in `deploy/docker-compose.yml`) before `up`.
 | Take a misbehaving model out now    | `PUT /admin/models/{id}` `{"enabled": false}`      |
 | Drain a provider (maintenance)      | `PUT /admin/upstreams/{id}` `{"enabled": false}`   |
 | What is switched off?               | `GET /admin/routing`                               |
+| Onboard a user (admin or employee)  | `POST /admin/users` `{"name","tier","role"}`       |
+| Issue a key (max 5 per user)        | `POST /admin/users/{id}/keys` `{"name"}`           |
+| Deny a model for a user             | `PUT /admin/users/{id}/limits` `{"denied_models":[...]}` |
+| Tighten one key (quota/rpm/concurrency) | `PUT /admin/keys/{id}/limits` `{...}` |
+| Revoke one leaked key               | `PUT /admin/keys/{id}/status` `{"enabled": false}` |
 | Tenant balance / top-up             | `GET`/`PUT /admin/tenants/{id}/quota`              |
 | Per-request audit trail             | `BREAKWATER_ACCESS_LOG_PATH` JSONL, keyed by `X-Request-Id` |
 
-Guard the admin surface with `BREAKWATER_ADMIN_TOKEN` whenever the
-port is reachable beyond your own machine. Switches are in-memory and
-reset on restart; permanent removal is a config change.
+User and key management requires the PostgreSQL identity store; the
+limits layers merge tier → user → key (nearest scalar wins, denies
+union, allows only tighten) and take effect within the auth cache
+TTL. Guard the admin surface with `BREAKWATER_ADMIN_TOKEN` whenever
+the port is reachable beyond your own machine. Routing switches are
+in-memory and reset on restart; permanent removal is a config change.
 
 Set `BREAKWATER_ROUTING_STRATEGY=latency` to order same-model
 candidates by measured exchange latency instead of config order — the

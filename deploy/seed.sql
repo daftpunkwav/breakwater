@@ -12,9 +12,12 @@ INSERT INTO tiers (id, rpm, tpm, monthly_quota, per_request_max_tokens, allowed_
 VALUES ('free', 60, 200000, 10000000, 4096, ARRAY['*'])
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO tenants (id, name, tier_id)
-VALUES ('local-1', 'Local Tenant One', 'free'),
-       ('local-2', 'Local Tenant Two', 'free')
+-- local-2 shows the user-level override layer: a model denied for
+-- every key of the tenant plus a concurrency ceiling of 4.
+INSERT INTO tenants (id, name, role, tier_id, overrides)
+VALUES ('local-1', 'Local Tenant One', 'user', 'free', '{}'),
+       ('local-2', 'Local Tenant Two', 'user', 'free',
+        '{"denied_models":["secret-model"],"concurrency":4}')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO api_keys (id, tenant_id, key_hash)

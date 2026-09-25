@@ -33,20 +33,29 @@ type StaticConfig struct {
 
 // StaticTier is one tier entry.
 type StaticTier struct {
-	ID            string   `json:"id"`
-	RPM           int64    `json:"rpm"`
-	TPM           int64    `json:"tpm"`
-	MaxTokens     int64    `json:"max_tokens"`
-	MonthlyQuota  int64    `json:"monthly_quota"`
-	AllowedModels []string `json:"allowed_models"`
+	ID            string           `json:"id"`
+	RPM           int64            `json:"rpm"`
+	TPM           int64            `json:"tpm"`
+	MaxTokens     int64            `json:"max_tokens"`
+	MonthlyQuota  int64            `json:"monthly_quota"`
+	AllowedModels []string         `json:"allowed_models"`
+	DeniedModels  []string         `json:"denied_models"`
+	ModelQuotas   map[string]int64 `json:"model_quotas"`
+	Concurrency   int64            `json:"concurrency"`
 }
 
 // StaticTenant is one tenant entry with its raw keys.
 type StaticTenant struct {
-	ID   string   `json:"id"`
-	Name string   `json:"name"`
-	Tier string   `json:"tier"`
-	Keys []string `json:"keys"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Tier string `json:"tier"`
+	Role Role   `json:"role"`
+	// Overrides are the user-level limit deviations applied to every
+	// key of this tenant; omitted fields inherit the tier. The static
+	// mode has no per-key overrides — key-granular administration is a
+	// database deployment's feature.
+	Overrides LimitOverride `json:"overrides"`
+	Keys      []string      `json:"keys"`
 }
 
 // Static resolves keys against the configured identity set. It is
@@ -76,7 +85,17 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 		// StaticTier mirrors Tier field for field: the direct conversion
 		// keeps the wire config honest about the identity snapshot it
 		// feeds and fails to compile if the shapes drift apart.
-		tiers[t.ID] = Tier(t)
+		tiers[t.ID] = Tier{
+			ID:            t.ID,
+			RPM:           t.RPM,
+			TPM:           t.TPM,
+			MaxTokens:     t.MaxTokens,
+			MonthlyQuota:  t.MonthlyQuota,
+			AllowedModels: t.AllowedModels,
+			DeniedModels:  t.DeniedModels,
+			ModelQuotas:   t.ModelQuotas,
+			Concurrency:   t.Concurrency,
+		}
 	}
 
 	s := &Static{byKey: make(map[string]Tenant, len(cfg.Tenants)*2)}
@@ -88,7 +107,19 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 		if !ok {
 			return nil, fmt.Errorf("auth: tenant %s references unknown tier %q", tn.ID, tn.Tier)
 		}
-		tenant := Tenant{ID: tn.ID, Name: tn.Name, Tier: tier}
+		if tn.Role == "" {
+			tn.Role = RoleUser
+		}
+		if tn.Role != RoleUser && tn.Role != RoleAdmin {
+			return nil, fmt.Errorf("auth: tenant %s has unknown role %q", tn.ID, tn.Role)
+		}
+		tenant := Tenant{
+			ID:   tn.ID,
+			Name: tn.Name,
+			Role: tn.Role,
+			Tier: MergeTier(tier, tn.Overrides),
+		}
+		tenant.Tier.ID = tier.ID
 		for _, raw := range tn.Keys {
 			if raw == "" {
 				return nil, fmt.Errorf("auth: tenant %s has an empty api key", tn.ID)

@@ -88,6 +88,17 @@ func TestAdminModelSwitchEndpoint(t *testing.T) {
 	if rec := put("", `{"enabled":false}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("empty model id status = %d, want 404", rec.Code)
 	}
+
+	// Without an installed switch the endpoints close.
+	bare := NewAdmin("", nil, nil, nil)
+	for _, path := range []string{"/admin/models/m1", "/admin/upstreams/u1"} {
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"enabled":false}`))
+		rec := httptest.NewRecorder()
+		bare.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s without a switch = %d, want 404", path, rec.Code)
+		}
+	}
 }
 
 func TestAdminUpstreamSwitchEndpoint(t *testing.T) {

@@ -26,8 +26,13 @@ CREATE TABLE IF NOT EXISTS tenants (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     tier_id    TEXT NOT NULL REFERENCES tiers (id),
-    -- Per-tenant deviation from the tier defaults, applied sparsely for
-    -- individual cases; the regular path is changing the tier.
+    -- Management-surface privilege: 'user' (default) or 'admin'. The
+    -- role governs administration only; inference governance is the
+    -- same for both.
+    role       TEXT NOT NULL DEFAULT 'user',
+    -- User-level limit deviations (the auth.LimitOverride JSON shape),
+    -- applied to every key of this tenant on top of the tier defaults;
+    -- the regular path is changing the tier.
     overrides  JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -36,7 +41,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
     id         TEXT PRIMARY KEY,
     tenant_id  TEXT NOT NULL REFERENCES tenants (id),
     key_hash   TEXT NOT NULL UNIQUE,
+    -- Operator-facing label; the raw key is shown once at creation.
+    name       TEXT NOT NULL DEFAULT '',
     status     TEXT NOT NULL DEFAULT 'active',
+    -- Key-level limit deviations (the same auth.LimitOverride JSON
+    -- shape), applied on top of the tenant's overrides. Denied models
+    -- union across layers; scalar limits take the nearest set value.
+    overrides  JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

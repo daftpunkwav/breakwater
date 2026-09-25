@@ -40,6 +40,12 @@ func (r *fakeRow) Scan(dest ...any) error {
 				return fmt.Errorf("fakeRow: value %d is %T, want string", i, r.values[i])
 			}
 			*ptr = v
+		case *Role:
+			v, ok := r.values[i].(string)
+			if !ok {
+				return fmt.Errorf("fakeRow: value %d is %T, want string", i, r.values[i])
+			}
+			*ptr = Role(v)
 		case *int64:
 			v, ok := r.values[i].(int64)
 			if !ok {
@@ -52,6 +58,15 @@ func (r *fakeRow) Scan(dest ...any) error {
 				return fmt.Errorf("fakeRow: value %d is %T, want []string", i, r.values[i])
 			}
 			*ptr = v
+		case *[]byte:
+			switch v := r.values[i].(type) {
+			case []byte:
+				*ptr = v
+			case nil:
+				*ptr = nil
+			default:
+				return fmt.Errorf("fakeRow: value %d is %T, want bytes", i, r.values[i])
+			}
 		default:
 			return fmt.Errorf("fakeRow: unsupported scan destination %T", d)
 		}
@@ -59,17 +74,22 @@ func (r *fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fullRowValues is a healthy identity row: the tenant joined with its
-// tier.
+// fullRowValues is a healthy identity row: the tenant, its role, the
+// tier template and both override layers (user-level then key-level,
+// as JSON documents).
 var fullRowValues = []any{
-	"tenant-1", "Acme",
+	"tenant-1", "Acme", "user",
 	"tier-pro", int64(600), int64(90_000),
 	int64(4096), int64(50_000_000),
 	[]string{"m1", "m2"},
+	[]byte(`{"denied_models":["m2"],"monthly_quota":1000}`),
+	[]byte(`{"rpm":30}`),
 }
 
 // TestResolveTenantRowMapsFullRow: the tenant snapshot is built from
-// the joined row, tier attached.
+// the joined row with both override layers merged in — the key's rpm
+// wins over the tier's, the user's quota wins, the user's deny removes
+// a model the tier allows.
 func TestResolveTenantRowMapsFullRow(t *testing.T) {
 	t.Parallel()
 
@@ -80,13 +100,24 @@ func TestResolveTenantRowMapsFullRow(t *testing.T) {
 	if tenant.ID != "tenant-1" || tenant.Name != "Acme" {
 		t.Fatalf("tenant identity = %s/%s", tenant.ID, tenant.Name)
 	}
+	if tenant.Role != RoleUser {
+		t.Fatalf("role = %q, want user", tenant.Role)
+	}
 	tier := tenant.Tier
-	if tier.ID != "tier-pro" || tier.RPM != 600 || tier.TPM != 90_000 ||
-		tier.MaxTokens != 4096 || tier.MonthlyQuota != 50_000_000 {
+	if tier.ID != "tier-pro" || tier.MaxTokens != 4096 {
 		t.Fatalf("tier snapshot = %+v, want the row's tier columns", tier)
 	}
-	if len(tier.AllowedModels) != 2 || tier.AllowedModels[0] != "m1" {
-		t.Fatalf("allowed models = %v, want the row's list", tier.AllowedModels)
+	if tier.RPM != 30 {
+		t.Fatalf("rpm = %d, want the key override's 30", tier.RPM)
+	}
+	if tier.MonthlyQuota != 1000 {
+		t.Fatalf("quota = %d, want the user override's 1000", tier.MonthlyQuota)
+	}
+	if !tier.AllowsModel("m1") {
+		t.Fatal("m1 must survive the merge")
+	}
+	if tier.AllowsModel("m2") {
+		t.Fatal("the user-level deny must remove m2")
 	}
 }
 
@@ -104,7 +135,8 @@ func TestResolveTenantRowMappings(t *testing.T) {
 	}{
 		{"unknown key", &fakeRow{err: pgx.ErrNoRows}, ErrUnauthorized, ""},
 		{"scan failure wraps the cause", &fakeRow{err: scanErr}, scanErr, "resolve key"},
-		{"target mismatch wraps the scan error", &fakeRow{values: []any{"t", "n", "tier", "not-an-int"}}, nil, "fakeRow"},
+		{"target mismatch wraps the scan error", &fakeRow{values: []any{"t", "n", "user", "tier", "not-an-int"}}, nil, "fakeRow"},
+		{"broken user override fails the resolution", &fakeRow{values: append(append([]any{}, fullRowValues[:9]...), []byte("{broken"), []byte(nil))}, nil, "overrides"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
