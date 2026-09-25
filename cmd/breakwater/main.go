@@ -20,11 +20,14 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/config"
 )
 
+// version is injected at build time (Makefile: -ldflags -X ...).
+var version = "dev"
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(context.Background(), logger); err != nil {
+	if err := run(context.Background(), logger, version); err != nil {
 		logger.Error("gateway terminated", "error", err)
 		os.Exit(1)
 	}
@@ -33,10 +36,10 @@ func main() {
 // run assembles and serves the gateway until the process is signalled
 // or a startup step fails; configuration errors and assembly failures
 // surface as returned errors.
-func run(ctx context.Context, logger *slog.Logger) error {
+func run(ctx context.Context, logger *slog.Logger, version string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	return serve(ctx, cfg, logger)
+	return serve(ctx, cfg, logger, version)
 }

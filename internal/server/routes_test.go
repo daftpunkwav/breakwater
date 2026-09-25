@@ -16,7 +16,7 @@ import (
 
 func TestRootHandlerProbes(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(newRootHandler(nil, nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(nil, nil, nil, "test", nil))
 	t.Cleanup(srv.Close)
 
 	for _, path := range []string{"/healthz", "/readyz"} {
@@ -33,7 +33,7 @@ func TestRootHandlerProbes(t *testing.T) {
 
 func TestRootHandlerUnknownPath(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(newRootHandler(nil, nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(nil, nil, nil, "test", nil))
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Get(srv.URL + "/nope")
@@ -53,7 +53,7 @@ func TestRootHandlerMountsMetrics(t *testing.T) {
 	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("breakwater_metrics"))
 	})
-	srv := httptest.NewServer(newRootHandler(nil, metrics, nil, nil))
+	srv := httptest.NewServer(newRootHandler(nil, metrics, nil, "test", nil))
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Get(srv.URL + "/metrics")
@@ -81,7 +81,7 @@ func TestRootHandlerRegistersEveryFormatRoute(t *testing.T) {
 		protocol.FormatOpenAIResponses:   labeled("responses"),
 		protocol.FormatAnthropicMessages: labeled("messages"),
 	}
-	srv := httptest.NewServer(newRootHandler(inference, nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inference, nil, nil, "test", nil))
 	t.Cleanup(srv.Close)
 
 	for _, tc := range []struct{ path, want string }{
@@ -112,7 +112,7 @@ func TestRootHandlerRoutesAdminWrites(t *testing.T) {
 		topped = true
 		return nil
 	}
-	srv := httptest.NewServer(newRootHandler(nil, nil, NewAdmin("", nil, setter, nil), nil))
+	srv := httptest.NewServer(newRootHandler(nil, nil, NewAdmin("", nil, setter, nil), "test", nil))
 	t.Cleanup(srv.Close)
 
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/admin/tenants/t1/quota",

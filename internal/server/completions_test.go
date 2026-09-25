@@ -102,7 +102,7 @@ func TestCompletionsBufferedRoundTrip(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -128,7 +128,7 @@ func TestCompletionsStreamedRoundTrip(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -156,7 +156,7 @@ func TestCompletionsUnknownModel(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -202,7 +202,7 @@ func TestCompletionsAllUpstreamsCircuitOpenIsUnavailable(t *testing.T) {
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
 	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
 
-	srv := httptest.NewServer(newRootHandler(inferenceMap(handler), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(handler), nil, nil, "test", nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
@@ -222,7 +222,7 @@ func TestCompletionsMalformedBody(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, nil))
+	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader("{not json"))

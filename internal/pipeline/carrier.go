@@ -29,6 +29,10 @@ type Carrier struct {
 	// Tenant is the authenticated identity; zero until the auth stage
 	// passed.
 	Tenant auth.Tenant
+	// RequestID identifies this request across response headers, the
+	// access log and the upstream exchange; set by the request-ID stage
+	// at chain entry.
+	RequestID string
 	// Format is the client-facing API surface of this request; the
 	// format stage sets it before any body parsing.
 	Format protocol.Format

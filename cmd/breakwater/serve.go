@@ -58,7 +58,7 @@ var formats = []protocol.Format{
 
 // serve assembles the gateway from cfg and serves it until ctx or a
 // process signal ends the run.
-func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -151,6 +151,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	for _, format := range formats {
 		stages := append([]pipeline.Middleware{
 			pipeline.CarrierStage(),
+			pipeline.RequestIDStage(),
 			pipeline.FormatStage(format),
 		}, governance...)
 		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer))
@@ -163,11 +164,13 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		Metrics:       metricsHandler(metrics),
 		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams)),
 		Readiness:     mergeReadiness(gov.readiness, identityReady),
+		Version:       version,
 	})
 
 	publishLogDrops(ctx, metrics, accessLog.logger, dropPublishInterval)
 
 	logger.Info("gateway starting",
+		"version", version,
 		"addr", cfg.Server.Addr,
 		"upstreams", len(cfg.Upstreams),
 		"governance", gov.mode)

@@ -41,10 +41,11 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 			duration := time.Since(start)
 			carrier := CarrierFrom(r.Context())
 
-			tenant, model := "", ""
+			tenant, model, requestID := "", "", ""
 			if carrier != nil {
 				tenant = carrier.Tenant.ID
 				model = carrier.Chat.Model
+				requestID = carrier.RequestID
 			}
 			upstream := "-"
 			aborted, cacheHit := false, false
@@ -64,15 +65,16 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 
 			if sink != nil {
 				sink.Record(obs.Entry{
-					Time:     start,
-					TenantID: tenant,
-					Model:    model,
-					Upstream: upstream,
-					Method:   r.Method,
-					Path:     r.URL.Path,
-					Status:   tee.Status(),
-					Duration: duration,
-					CacheHit: cacheHit,
+					Time:      start,
+					TenantID:  tenant,
+					RequestID: requestID,
+					Model:     model,
+					Upstream:  upstream,
+					Method:    r.Method,
+					Path:      r.URL.Path,
+					Status:    tee.Status(),
+					Duration:  duration,
+					CacheHit:  cacheHit,
 				})
 			}
 		})

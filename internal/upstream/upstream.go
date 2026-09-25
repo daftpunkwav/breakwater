@@ -39,6 +39,9 @@ type Request struct {
 	// the provider's wire format is the adapter's job, so failover can
 	// re-translate the same body for a different provider.
 	Body []byte
+	// RequestID, when set, is forwarded as X-Request-Id so providers can
+	// correlate their logs with the gateway's.
+	RequestID string
 }
 
 // Response is an upstream reply. Body is streamed and must be closed by

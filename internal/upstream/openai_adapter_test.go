@@ -150,6 +150,37 @@ func TestForwardRequestHeaders(t *testing.T) {
 	}
 }
 
+func TestForwardPropagatesRequestID(t *testing.T) {
+	t.Parallel()
+	var gotIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIDs = append(gotIDs, r.Header.Get("X-Request-Id"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter, err := NewOpenAI(OpenAIConfig{ID: "up", BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewOpenAI: %v", err)
+	}
+
+	resp, err := adapter.Forward(context.Background(), Request{RequestID: "req-abc"})
+	if err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	_ = resp.Body.Close()
+	// Absent ids must not leak an empty header upstream.
+	resp2, err := adapter.Forward(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("second Forward: %v", err)
+	}
+	_ = resp2.Body.Close()
+
+	if len(gotIDs) != 2 || gotIDs[0] != "req-abc" || gotIDs[1] != "" {
+		t.Fatalf("upstream X-Request-Id values = %q, want [req-abc, empty]", gotIDs)
+	}
+}
+
 // TestForwardReturnsCompletedFailures: a completed 4xx/5xx exchange is
 // a non-nil Response with the upstream status, headers and body — the
 // port's result convention.

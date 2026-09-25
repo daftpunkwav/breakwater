@@ -30,9 +30,10 @@ import (
 // outcome alongside the loop error.
 func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream) (circuit.Outcome, error) {
 	req := upstream.Request{
-		Model:  r.job.Model,
-		Stream: r.job.Stream,
-		Body:   r.job.Body,
+		Model:     r.job.Model,
+		Stream:    r.job.Stream,
+		Body:      r.job.Body,
+		RequestID: r.job.RequestID,
 	}
 	if !r.job.Stream {
 		resp, err := cand.Forward(attemptCtx, req)

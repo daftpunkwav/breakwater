@@ -103,6 +103,9 @@ type Job struct {
 	Stream bool
 	// Body is the neutral OpenAI request body, forwarded verbatim.
 	Body []byte
+	// RequestID is propagated to the upstream exchange as X-Request-Id
+	// so one client-visible identifier correlates the whole path.
+	RequestID string
 	// Candidates are the upstream instances to try, priority ordered;
 	// attempt n uses candidate min(n, len)-1, so failover walks the list
 	// once and extra attempts re-hit the last fallback.

@@ -100,6 +100,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Body:       carrier.UpstreamBody,
 		Candidates: candidates,
 		Wire:       wire,
+		RequestID:  carrier.RequestID,
 		Out:        w,
 	})
 

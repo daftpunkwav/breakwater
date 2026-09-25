@@ -94,6 +94,9 @@ func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
 	if o.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
 	}
+	if req.RequestID != "" {
+		httpReq.Header.Set("X-Request-Id", req.RequestID)
+	}
 
 	httpResp, err := o.client.Do(httpReq)
 	if err != nil {

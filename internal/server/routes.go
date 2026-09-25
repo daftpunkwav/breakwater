@@ -19,9 +19,10 @@ import (
 // missing format leaves that route unregistered. Readiness gates on
 // the injected probe; nil always reports ready. Metrics and Admin
 // expose their endpoints when non-nil.
-func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin http.Handler, readiness func() error) http.Handler {
+func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin http.Handler, version string, readiness func() error) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleLiveness)
+	mux.HandleFunc("GET /version", makeVersion(version))
 	mux.HandleFunc("GET /readyz", makeReadiness(readiness))
 	if metrics != nil {
 		mux.Handle("GET /metrics", metrics)

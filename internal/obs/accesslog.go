@@ -20,8 +20,9 @@ import (
 // Entry is one access record for a finished request. Fields are append
 // only across releases; consumers must tolerate additions.
 type Entry struct {
-	Time     time.Time
-	TenantID string
+	Time      time.Time
+	TenantID  string
+	RequestID string
 	// Model and Upstream carry the dimensions the evidence documents are
 	// derived from: per-model traffic, per-upstream errors, cache
 	// economics.

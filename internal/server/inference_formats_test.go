@@ -46,7 +46,7 @@ func buildAllRoutes(t *testing.T, backendURL string) http.Handler {
 		)(NewInference(format, rt, relayer))
 		inference[format] = handler
 	}
-	return newRootHandler(inference, nil, nil, nil)
+	return newRootHandler(inference, nil, nil, "test", nil)
 }
 
 func post(t *testing.T, handler http.Handler, path, key, body string) *httptest.ResponseRecorder {

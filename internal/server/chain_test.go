@@ -68,6 +68,7 @@ func buildChainWithIdentity(t *testing.T, backendURL string, ledger quota.Ledger
 
 	stages := []pipeline.Middleware{
 		pipeline.CarrierStage(),
+		pipeline.RequestIDStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		pipeline.AuthStage(identity),
 		limiter.Middleware(limiter.NewMemory(), nil),
@@ -129,6 +130,41 @@ func TestChainAuthenticatesAndForwards(t *testing.T) {
 	bal, err := ledger.Balance(context.Background(), "t1")
 	if err != nil || bal != 1_000_000-3 {
 		t.Fatalf("balance = %d err = %v, want 999997 (settled by usage)", bal, err)
+	}
+}
+
+// TestChainEchoesRequestID pins the correlation contract: the client's
+// X-Request-Id is echoed verbatim; an absent one is minted (req- prefix).
+func TestChainEchoesRequestID(t *testing.T) {
+	t.Parallel()
+	backend := testUpstreamBackend(t)
+	defer backend.Close()
+	ledger := quota.NewMemory()
+	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	handler := buildChain(t, backend.URL, ledger)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer "+keyT1)
+	req.Header.Set("X-Request-Id", "my-trace-77")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Request-Id"); got != "my-trace-77" {
+		t.Fatalf("echoed id = %q, want the client value", got)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer "+keyT1)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Request-Id"); !strings.HasPrefix(got, "req-") {
+		t.Fatalf("minted id = %q, want the req- prefix", got)
 	}
 }
 
@@ -274,6 +310,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	relayer := relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
+		pipeline.RequestIDStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		pipeline.AuthStage(identity),
 		limiter.Middleware(limiter.NewMemory(), nil),

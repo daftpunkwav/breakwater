@@ -36,6 +36,9 @@ type Options struct {
 	// Readiness reports whether business traffic may be served; nil
 	// always reports ready.
 	Readiness func() error
+	// Version is the build identifier exposed at GET /version (set via
+	// ldflags at build time); empty reports "dev".
+	Version string
 }
 
 // Server runs the gateway HTTP endpoint.
@@ -53,7 +56,7 @@ func New(opts Options) *Server {
 func (s *Server) Run(ctx context.Context) error {
 	return httpserver.Run(ctx, httpserver.Options{
 		Addr:          s.opts.Addr,
-		Handler:       newRootHandler(s.opts.Inference, s.opts.Metrics, s.opts.Admin, s.opts.Readiness),
+		Handler:       newRootHandler(s.opts.Inference, s.opts.Metrics, s.opts.Admin, s.opts.Version, s.opts.Readiness),
 		ShutdownGrace: s.opts.ShutdownGrace,
 	})
 }
