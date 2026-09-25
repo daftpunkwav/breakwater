@@ -112,10 +112,12 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | Upstream attempts per request                              |
 | `BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT` | `64`         | Process-wide concurrent retry cap                          |
+| `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | Ceiling of a committed stream's body (after the headers); `0` lets the client own the stream's lifetime |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | Exact-match response cache      |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
+| `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing (PRD Q6); needs Redis + PostgreSQL; `0` disables |
 
 ## Operations surface
 
@@ -124,6 +126,7 @@ All configuration is environment-based; core knobs:
   limiter depends on; it never lies)
 - `GET /metrics` — Prometheus text exposition (hand-written registry)
 - `GET /admin/tenants/{id}/quota` — current balance
+- `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
 
 ## Fault injection interface
@@ -154,8 +157,11 @@ chunks and terminates honestly with one in-stream error event and
 
     docker compose -f deploy/docker-compose.yml up -d
 
-Starts Redis, PostgreSQL (identity schema applied on first boot) and the
-mock upstream.
+Starts Redis, PostgreSQL (identity schema and local seed applied on
+first boot), the mock upstream and the gateway itself. Send a request
+through the composed gateway:
+
+    curl -s http://127.0.0.1:8080/v1/chat/completions       -H 'Authorization: Bearer bw-local-dev-key'       -H 'Content-Type: application/json'       -d '{"model":"mock-gpt","messages":[{"role":"user","content":"hi"}]}' 
 
 ## Quality gate
 
