@@ -73,11 +73,17 @@ jobs:
       # detector already ran above.
       - name: Coverage floor
         run: |
+          # The runner's default shell is bash -e (no pipefail); without
+          # pipefail a failing go test would be masked by tee and the
+          # gate would parse a half-written report as if it were green.
+          set -eo pipefail
           go test -cover ./... | tee /tmp/cover.txt
           failed=0
           while IFS= read -r line; do
+            # The trailing % keeps "[no statements]" lines (no ratio)
+            # out of the parse and guarantees the grep below matches.
             case "$line" in
-              *"coverage:"*)
+              *"coverage:"*"%"*)
                 pct=$(printf '%s' "$line" | grep -oE '[0-9]+(\.[0-9]+)?%' | tr -d '%')
                 if awk -v p="$pct" 'BEGIN { exit !(p + 0 < 95) }'; then
                   echo "::error::coverage below 95%: $line"

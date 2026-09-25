@@ -1,0 +1,16 @@
+# Keep secrets and local artifacts out of the image build context:
+# a persisted .git carries checkout credentials, docs-local holds
+# internal design notes, and the rest is local build output.
+.git
+.gitattributes
+.github
+*.exe
+docs-local/
+docs/
+loadtest/
+README.md
+AGENTS.md
+AGENTS.local.md
+CLAUDE.md
+CLAUDE.local.md
+.zcodeignore
