@@ -1,6 +1,7 @@
 -- Release one lease without consumption (cancel or sweeper expiry).
 --
--- KEYS[1] = balance key, KEYS[2] = lease hash key, KEYS[3] = sweep zset
+-- KEYS[1] = balance key, KEYS[2] = lease hash key, KEYS[3] = sweep zset,
+-- KEYS[4] = refunded counter
 -- ARGV[1] = lease id, ARGV[2] = target state ('CANCELLED' or 'EXPIRED'),
 -- ARGV[3] = audit ttl_ms
 --
@@ -19,6 +20,7 @@ end
 local amount = tonumber(redis.call('HGET', KEYS[2], 'amount'))
 redis.call('INCRBY', KEYS[1], amount)
 redis.call('HSET', KEYS[2], 'state', ARGV[2])
+redis.call('INCRBY', KEYS[4], string.format('%d', amount))
 -- The terminal record stays for a bounded audit window, then expires.
 redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[3]))
 return 1

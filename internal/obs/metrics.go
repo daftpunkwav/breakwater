@@ -127,6 +127,7 @@ func NewMetrics() *Metrics {
 	reg("breakwater_quota_refunded_tokens_total", "Tokens refunded at settlement.", "counter",
 		[]string{"tenant"}, nil)
 	reg("breakwater_quota_reservation_expired_total", "Leases reclaimed by the sweeper.", "counter", nil, nil)
+	reg("breakwater_quota_reconciliation_error", "Ledger identity drifts detected by the reconcile protocol; always zero when the ledger is healthy.", "counter", nil, nil)
 
 	reg("breakwater_cache_hit_total", "Responses served from the cache.", "counter", nil, nil)
 	reg("breakwater_cache_miss_total", "Cache lookups that missed.", "counter", nil, nil)
@@ -218,6 +219,14 @@ func (m *Metrics) QuotaRefunded(tenant string, tokens int64) {
 		return
 	}
 	m.inc("breakwater_quota_refunded_tokens_total", float64(tokens), tenant)
+}
+
+// QuotaReconciliationError records one detected ledger drift.
+func (m *Metrics) QuotaReconciliationError() {
+	if m == nil {
+		return
+	}
+	m.inc("breakwater_quota_reconciliation_error", 1)
 }
 
 // QuotaExpired records a lease reclaimed by the sweeper.

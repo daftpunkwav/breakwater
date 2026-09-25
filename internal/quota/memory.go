@@ -59,11 +59,13 @@ func (m *Memory) WithClock(now func() time.Time) *Memory {
 	return m
 }
 
-// SetBalance provisions a tenant balance (admin and test surface).
-func (m *Memory) SetBalance(tenantID string, balance int64) {
+// SetBalance implements Ledger: provisions or resets a tenant balance
+// (admin surface).
+func (m *Memory) SetBalance(_ context.Context, tenantID string, balance int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.balances[tenantID] = balance
+	return nil
 }
 
 // EnsureBalance provisions the balance only when the tenant has none;

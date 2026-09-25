@@ -1,6 +1,7 @@
 -- Settle a live lease against actual usage.
 --
--- KEYS[1] = balance key, KEYS[2] = lease hash key, KEYS[3] = sweep zset
+-- KEYS[1] = balance key, KEYS[2] = lease hash key, KEYS[3] = sweep zset,
+-- KEYS[4] = consumed counter, KEYS[5] = refunded counter
 -- ARGV[1] = used tokens, ARGV[2] = lease id, ARGV[3] = audit ttl_ms
 --
 -- Returns {settled(0|1), refund_or_state}.
@@ -23,6 +24,12 @@ if refund > 0 then
     redis.call('INCRBY', KEYS[1], refund)
 end
 redis.call('HSET', KEYS[2], 'state', 'SETTLED')
+-- The reconcile protocol reads these lifetime totals alongside the
+-- balance; all three move inside this one atomic step.
+redis.call('INCRBY', KEYS[4], string.format('%d', used))
+if refund > 0 then
+    redis.call('INCRBY', KEYS[5], string.format('%d', refund))
+end
 -- The terminal record stays for a bounded audit window, then expires:
 -- the hash set must not grow without bound.
 redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[3]))

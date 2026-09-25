@@ -18,7 +18,9 @@ func TestMemoryReserveSettleRefundsDifference(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 1000)
+	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	lease, err := m.Reserve(ctx, "t", 400)
 	if err != nil {
@@ -39,7 +41,9 @@ func TestMemorySettleNeverSurcharges(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 1000)
+	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	lease, _ := m.Reserve(ctx, "t", 100)
 	if err := m.Settle(ctx, lease.ID, 500); err != nil {
@@ -54,7 +58,9 @@ func TestMemoryInsufficientBalanceAndNoOverDraft(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 100)
+	if err := m.SetBalance(context.Background(), "t", 100); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	if _, err := m.Reserve(ctx, "t", 200); err != ErrInsufficientBalance {
 		t.Fatalf("oversized reserve err = %v, want ErrInsufficientBalance", err)
@@ -72,7 +78,9 @@ func TestMemoryCancelReleasesFullReservation(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 100)
+	if err := m.SetBalance(context.Background(), "t", 100); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	lease, _ := m.Reserve(ctx, "t", 100)
 	if err := m.Cancel(ctx, lease.ID); err != nil {
@@ -87,7 +95,9 @@ func TestMemoryTerminalTransitionsAreNoOps(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 300)
+	if err := m.SetBalance(context.Background(), "t", 300); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	lease, _ := m.Reserve(ctx, "t", 300)
 	if err := m.Settle(ctx, lease.ID, 100); err != nil {
@@ -109,7 +119,9 @@ func TestMemorySweeperReclaimsAbandonedLeases(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 1000)
+	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	if _, err := m.Reserve(ctx, "t", 400); err != nil {
 		t.Fatalf("reserve: %v", err)
@@ -143,7 +155,9 @@ func TestMemorySweeperReclaimsAbandonedLeases(t *testing.T) {
 func TestMemoryBalanceUnknownTenant(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
-	m.SetBalance("t", 7)
+	if err := m.SetBalance(context.Background(), "t", 7); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	ctx := context.Background()
 
 	if _, err := m.Balance(ctx, "ghost"); !errors.Is(err, ErrUnknownTenant) {
@@ -163,7 +177,9 @@ func TestMemoryTerminalLeasesPurgeAfterAuditWindow(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	m.SetBalance("t", 1000)
+	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	first, err := m.Reserve(ctx, "t", 100)
 	if err != nil {
@@ -237,7 +253,9 @@ func TestMemoryConcurrentDrainReconciles(t *testing.T) {
 		workers    = 64
 		rounds     = 25
 	)
-	m.SetBalance("t", initial)
+	if err := m.SetBalance(context.Background(), "t", initial); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	var consumed atomic.Int64
 	var wg sync.WaitGroup

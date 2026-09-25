@@ -69,13 +69,29 @@ func (r *Redis) Ping(ctx context.Context) error {
 func balanceKey(tenantID string) string { return keyPrefix + "bal:" + tenantID }
 func leaseKey(leaseID string) string    { return keyPrefix + "lease:" + leaseID }
 
+// consumedKey and refundedKey hold the lifetime totals the reconcile
+// protocol diffs between snapshots.
+func consumedKey(tenantID string) string { return keyPrefix + "consumed:" + tenantID }
+func refundedKey(tenantID string) string { return keyPrefix + "refunded:" + tenantID }
+
+// epochKey counts balance corrections (admin SetBalance): the
+// reconciler skips the interval across an epoch bump, since a manual
+// balance change is not consumable drift.
+func epochKey(tenantID string) string { return keyPrefix + "epoch:" + tenantID }
+
 // sweepKey is the process-shared zset of live leases scored by their
 // expiry instant in milliseconds.
 func sweepKey() string { return keyPrefix + "sweep" }
 
-// SetBalance provisions a tenant balance (admin and dev surface).
+// SetBalance implements Ledger. It also bumps the reconcile epoch so
+// the reconciler skips the interval across a manual correction — a
+// top-up is not consumable drift.
 func (r *Redis) SetBalance(ctx context.Context, tenantID string, balance int64) error {
-	return r.rdb.Set(ctx, balanceKey(tenantID), balance, 0).Err()
+	pipe := r.rdb.TxPipeline()
+	pipe.Set(ctx, balanceKey(tenantID), balance, 0)
+	pipe.Incr(ctx, epochKey(tenantID))
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // EnsureBalance provisions the balance only when the tenant has none,
@@ -129,7 +145,7 @@ func (r *Redis) Settle(ctx context.Context, leaseID string, usedTokens int64) er
 		return fmt.Errorf("quota: settle lease lookup: %w", err)
 	}
 	res, err := r.settleScript.Run(ctx, r.rdb,
-		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey()},
+		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey(), consumedKey(tenant), refundedKey(tenant)},
 		usedTokens, leaseID, leaseAuditTTL.Milliseconds(),
 	).Slice()
 	if err != nil {
@@ -176,7 +192,7 @@ func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState)
 		return false, fmt.Errorf("quota: lease lookup: %w", err)
 	}
 	res, err := r.releaseScript.Run(ctx, r.rdb,
-		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey()},
+		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey(), refundedKey(tenant)},
 		leaseID, string(state), leaseAuditTTL.Milliseconds(),
 	).Int64()
 	if err != nil {
@@ -197,6 +213,48 @@ func (r *Redis) Balance(ctx context.Context, tenantID string) (int64, error) {
 		return 0, fmt.Errorf("quota: balance: %w", err)
 	}
 	return bal, nil
+}
+
+// TenantSnapshot implements the reconcile SnapshotSource: balance,
+// lifetime totals and correction epoch read in one pipeline. A tenant
+// without a balance key yields a nil snapshot (nothing provisioned).
+func (r *Redis) TenantSnapshot(ctx context.Context, tenantID string, takenAt time.Time) (*Snapshot, error) {
+	pipe := r.rdb.Pipeline()
+	balCmd := pipe.Get(ctx, balanceKey(tenantID))
+	consumedCmd := pipe.Get(ctx, consumedKey(tenantID))
+	refundedCmd := pipe.Get(ctx, refundedKey(tenantID))
+	epochCmd := pipe.Get(ctx, epochKey(tenantID))
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("quota: snapshot read: %w", err)
+	}
+
+	if errors.Is(balCmd.Err(), redis.Nil) {
+		return nil, nil
+	}
+	balance, err := balCmd.Int64()
+	if err != nil {
+		return nil, fmt.Errorf("quota: snapshot balance: %w", err)
+	}
+	consumed := counterValue(consumedCmd)
+	refunded := counterValue(refundedCmd)
+	epoch := counterValue(epochCmd)
+	return &Snapshot{
+		TenantID: tenantID,
+		Balance:  balance,
+		Consumed: consumed,
+		Refunded: refunded,
+		Epoch:    epoch,
+		TakenAt:  takenAt,
+	}, nil
+}
+
+// counterValue reads a lifetime counter; a missing key counts zero.
+func counterValue(cmd *redis.StringCmd) int64 {
+	v, err := cmd.Int64()
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // defaultLeaseTTL bounds how long a RESERVED lease may live before the

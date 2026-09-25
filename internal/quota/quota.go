@@ -86,4 +86,9 @@ type Ledger interface {
 	// the request path. A tenant without a ledger reports
 	// ErrUnknownTenant; any other error is a backend failure.
 	Balance(ctx context.Context, tenantID string) (int64, error)
+	// SetBalance provisions or resets a tenant balance. It is the write
+	// half of the admin surface (top-up, correction) and must never be
+	// called on the request path; the reconcile protocol treats the
+	// balance as its single source of truth between snapshots.
+	SetBalance(ctx context.Context, tenantID string, balance int64) error
 }

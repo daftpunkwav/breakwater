@@ -112,8 +112,12 @@ func TestChainAuthenticatesAndForwards(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 	ledger := quota.NewMemory()
-	ledger.SetBalance("t1", 1_000_000)
-	ledger.SetBalance("t2", 1_000_000)
+	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := ledger.SetBalance(context.Background(), "t2", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	handler := buildChain(t, backend.URL, ledger)
 
 	status, body, _ := completionRequest(t, handler, keyT1, okBody)
@@ -154,7 +158,9 @@ func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	t.Parallel()
 	backend, hits := countingBackend(t)
 	ledger := quota.NewMemory()
-	ledger.SetBalance("t1", 1_000_000)
+	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	handler := buildChain(t, backend.URL, ledger)
 
 	// Tier RPM = 2: the first two pass, everything after is rejected.
@@ -193,7 +199,9 @@ func TestChainFailedRequestSettlesAtZero(t *testing.T) {
 	}))
 	defer failing.Close()
 	ledger := quota.NewMemory()
-	ledger.SetBalance("t1", 1_000_000)
+	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	handler := buildChain(t, failing.URL, ledger)
 
 	status, _, _ := completionRequest(t, handler, keyT1, okBody)
@@ -214,7 +222,9 @@ func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {
 	ledger := quota.NewMemory()
 	// The estimate of okBody (1 prompt word + clamped 50) is 51 tokens;
 	// ten cannot cover it.
-	ledger.SetBalance("t2", 10)
+	if err := ledger.SetBalance(context.Background(), "t2", 10); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	handler := buildChain(t, backend.URL, ledger)
 
 	status, body, _ := completionRequest(t, handler, keyT2, okBody)
@@ -242,7 +252,9 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 	ledger := quota.NewMemory()
-	ledger.SetBalance("t1", 1_000_000)
+	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}}},
@@ -302,7 +314,9 @@ func TestChainDeniesModelOutsideTier(t *testing.T) {
 	t.Parallel()
 	backend, hits := countingBackend(t)
 	ledger := quota.NewMemory()
-	ledger.SetBalance("t1", 1_000_000)
+	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers: []auth.StaticTier{
@@ -371,7 +385,9 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 	defer backend.Close()
 
 	ledger := quota.NewMemory()
-	ledger.SetBalance("t1", initial)
+	if err := ledger.SetBalance(context.Background(), "t1", initial); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	handler := buildChain(t, backend.URL, ledger)
 
 	srv := httptest.NewServer(handler)

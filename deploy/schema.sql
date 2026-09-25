@@ -41,3 +41,20 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys (tenant_id);
+
+-- Ledger snapshots taken by the reconcile protocol (PRD Q6): every
+-- interval the Redis hot ledger is appended here, and consecutive
+-- snapshots must satisfy the balance identity (balance moves only by
+-- consumption minus refund). Epoch skips the identity check across
+-- manual balance corrections.
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+    id         BIGSERIAL PRIMARY KEY,
+    tenant_id  TEXT NOT NULL,
+    balance    BIGINT NOT NULL,
+    consumed   BIGINT NOT NULL,
+    refunded   BIGINT NOT NULL,
+    epoch      BIGINT NOT NULL DEFAULT 0,
+    taken_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quota_snapshots_tenant ON quota_snapshots (tenant_id, taken_at DESC);
