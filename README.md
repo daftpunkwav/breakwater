@@ -58,6 +58,12 @@ existing packages, never as new top-level directories. The zoning rules:
 | `POST /v1/responses`       | OpenAI Responses      | `Authorization: Bearer`  | Translated: input/instructions/max_output_tokens in, Responses objects and `response.*` events out |
 | `POST /v1/messages`        | Anthropic Messages    | `x-api-key` or Bearer    | Translated: system/blocks/required `max_tokens` in, Messages objects and `message_*` events out; `stop_sequences` refused rather than silently dropped |
 
+Every response carries an `X-Request-Id` header: a well-formed
+client-supplied id is adopted verbatim, otherwise one is minted
+(`req-` prefix). The id travels to the upstream exchange and into the
+access log, so one identifier joins the client-visible outcome, the
+gateway's log line and the provider's records.
+
 All three walk the identical governance pipeline (auth → rate limit →
 quota → cache) and the identical relay engine; only the wire differs.
 The canonical wire is openai-chat: unknown request fields survive byte
@@ -125,6 +131,7 @@ All configuration is environment-based; core knobs:
 - `GET /readyz` — readiness (gates on the backend the fail-closed
   limiter depends on; it never lies)
 - `GET /metrics` — Prometheus text exposition (hand-written registry)
+- `GET /version` — build identifier and Go version
 - `GET /admin/tenants/{id}/quota` — current balance
 - `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
@@ -152,6 +159,12 @@ chunks and terminates honestly with one in-stream error event and
       -H 'X-Mockllm-Stream-Mode: abort' \
       -H 'Content-Type: application/json' \
       -d '{"model":"mock-gpt","stream":true,"messages":[{"role":"user","content":"hi"}]}'
+
+## Developer tasks
+
+A Makefile wraps the common loop (`make test`, `make race`, `make
+cover`, `make lint`, `make build`, `make up`). `make build` injects the
+git-derived version into the binaries.
 
 ## Local stack
 

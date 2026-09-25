@@ -64,7 +64,7 @@ func TestServeRunsAndStops(t *testing.T) {
 		time.Sleep(150 * time.Millisecond) // let the listener come up
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler)); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestServeRedisModeWithIdentityAndReconciliation(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler)); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestServeWithoutIdentity(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler)); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 	t.Run("identity store", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_POSTGRES_DSN", "not a valid dsn")
-		if err := run(context.Background(), slog.New(slog.DiscardHandler)); err == nil {
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 			t.Fatal("assembly failure must surface as a returned error")
 		}
 	})
@@ -130,7 +130,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 	t.Run("access log path", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0")) // DSN stays empty: static identity
 		t.Setenv("BREAKWATER_ACCESS_LOG_PATH", filepath.Join(t.TempDir(), "missing-dir", "a.log"))
-		if err := run(context.Background(), slog.New(slog.DiscardHandler)); err == nil {
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 			t.Fatal("an unopenable access log must fail assembly")
 		}
 	})
@@ -138,7 +138,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 	t.Run("dead redis", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_REDIS_ADDR", "127.0.0.1:1")
-		if err := run(context.Background(), slog.New(slog.DiscardHandler)); err == nil {
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 			t.Fatal("dead redis: assembly failure must surface as a returned error")
 		}
 	})
@@ -151,7 +151,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		blocker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 		defer blocker.Close()
 		setEnv(t, baseEnv(blocker.Listener.Addr().String()))
-		if err := run(context.Background(), slog.New(slog.DiscardHandler)); err == nil {
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 			t.Fatal("a busy port must surface as a returned error")
 		}
 	})
@@ -162,7 +162,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 func TestRunRejectsBadConfiguration(t *testing.T) {
 	setEnv(t, baseEnv("127.0.0.1:0"))
 	t.Setenv("BREAKWATER_STREAM_TIMEOUT", "-5s")
-	if err := run(context.Background(), slog.New(slog.DiscardHandler)); err == nil {
+	if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 		t.Fatal("run must reject an invalid configuration")
 	}
 }
