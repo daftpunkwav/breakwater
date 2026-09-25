@@ -123,7 +123,13 @@ func (s *PG) CreateKey(ctx context.Context, userID, name string) (IssuedKey, err
 		return IssuedKey{}, fmt.Errorf("auth: begin create key: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	return createKeyTx(ctx, tx, userID, name)
+}
 
+// createKeyTx is CreateKey's transaction body, split so the failure
+// paths a live database only reaches under fault conditions stay
+// testable against a scripted pgx.Tx.
+func createKeyTx(ctx context.Context, tx pgx.Tx, userID, name string) (IssuedKey, error) {
 	// Lock the tenant's row for the check-then-insert span. A missing
 	// row is the unknown-user sentinel — the same answer the foreign
 	// key would give, one query earlier.
