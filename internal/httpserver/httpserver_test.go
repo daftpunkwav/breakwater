@@ -118,12 +118,19 @@ func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 		runErr <- Run(ctx, Options{Addr: addr, Handler: handler, ShutdownGrace: 150 * time.Millisecond})
 	}()
 
-	// Open one in-flight request so Shutdown has a connection to wait for.
+	// Open one in-flight request so Shutdown has a connection to wait
+	// for. Ephemeral-port reuse can refuse the first dial on Windows,
+	// so dialing retries until the handler is serving.
 	go func() {
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Get("http://" + addr + "/")
-		if err == nil {
-			_ = resp.Body.Close()
+		client := &http.Client{Timeout: 2 * time.Second}
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			resp, err := client.Get("http://" + addr + "/")
+			if err == nil {
+				_ = resp.Body.Close()
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
 	}()
 
