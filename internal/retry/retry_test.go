@@ -32,6 +32,14 @@ func TestBudgetCapsInFlightRetries(t *testing.T) {
 	}
 }
 
+func TestBudgetNegativeCapAdmitsNothing(t *testing.T) {
+	t.Parallel()
+	b := NewBudget(-5)
+	if b.Acquire() {
+		t.Fatal("a negative cap must clamp to a budget that admits nothing")
+	}
+}
+
 func TestBudgetReleaseAbsorbsImbalance(t *testing.T) {
 	t.Parallel()
 	b := NewBudget(2)

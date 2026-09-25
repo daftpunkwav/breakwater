@@ -8,6 +8,7 @@ package retry
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,6 +158,46 @@ func TestExecuteBudgetReleasesAcrossAttempts(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("attempts = %d, want 3: slots must be released between attempts", calls)
+	}
+}
+
+func TestExecuteFiresOnRetryWithAttemptErrorAndDelay(t *testing.T) {
+	t.Parallel()
+	type retryCall struct {
+		attempt int
+		err     error
+		delay   time.Duration
+	}
+	var calls []retryCall
+	attempts := 0
+	policy := Policy{MaxAttempts: 3, BackoffInitial: time.Millisecond, BackoffMax: time.Millisecond}
+	err := Execute(context.Background(), policy, nil, DefaultClassifier{},
+		func(attempt int, rerr error, delay time.Duration) {
+			calls = append(calls, retryCall{attempt, rerr, delay})
+		},
+		func(context.Context, int) error {
+			attempts++
+			if attempts <= 2 {
+				return errors.New("connection reset")
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("onRetry fired %d times, want 2 (one per retried failure)", len(calls))
+	}
+	for i, call := range calls {
+		if call.attempt != i+1 {
+			t.Errorf("onRetry %d reports attempt %d", i, call.attempt)
+		}
+		if call.err == nil || !strings.Contains(call.err.Error(), "connection reset") {
+			t.Errorf("onRetry %d carries err %v, want the triggering failure", i, call.err)
+		}
+		if call.delay < 0 || call.delay > time.Millisecond {
+			t.Errorf("onRetry %d delay %v outside the [0, BackoffMax] ceiling", i, call.delay)
+		}
 	}
 }
 
