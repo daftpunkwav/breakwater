@@ -58,10 +58,23 @@ func (s *PG) Resolve(ctx context.Context, apiKey string) (Tenant, error) {
 		JOIN tiers  tr  ON tr.id = t.tier_id
 		WHERE k.key_hash = $1 AND k.status = 'active'`,
 		hashKey(apiKey))
+	return resolveTenantRow(rows)
+}
 
+// rowScanner is the subset of a single-row query result the identity
+// mapping needs; pgx.Row satisfies it.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// resolveTenantRow maps one identity query row — the key's tenant
+// joined with its tier — to the tenant snapshot. ErrNoRows maps to the
+// definitive ErrUnauthorized (an unknown or revoked key), any other
+// scan failure is wrapped as a transient resolution error.
+func resolveTenantRow(row rowScanner) (Tenant, error) {
 	var tenant Tenant
 	var tier Tier
-	err := rows.Scan(&tenant.ID, &tenant.Name, &tier.ID, &tier.RPM, &tier.TPM,
+	err := row.Scan(&tenant.ID, &tenant.Name, &tier.ID, &tier.RPM, &tier.TPM,
 		&tier.MaxTokens, &tier.MonthlyQuota, &tier.AllowedModels)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
