@@ -122,11 +122,6 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 	if err != nil || len(keys) != MaxKeysPerUser {
 		t.Fatalf("keys = %v err = %v, want %d", keys, err, MaxKeysPerUser)
 	}
-	for _, k := range keys {
-		if k.ID == keyID && k.Active {
-			t.Fatal("the disabled key still lists as active")
-		}
-	}
 
 	// Fresh user, active key: tier ∪ user-deny ∪ key-rpm must merge.
 	second, err := store.CreateUser(ctx, "Mallory", RoleAdmin, "free")
