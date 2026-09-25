@@ -161,7 +161,10 @@ Starts Redis, PostgreSQL (identity schema and local seed applied on
 first boot), the mock upstream and the gateway itself. Send a request
 through the composed gateway:
 
-    curl -s http://127.0.0.1:8080/v1/chat/completions       -H 'Authorization: Bearer bw-local-dev-key'       -H 'Content-Type: application/json'       -d '{"model":"mock-gpt","messages":[{"role":"user","content":"hi"}]}' 
+    curl -s http://127.0.0.1:8080/v1/chat/completions \
+      -H 'Authorization: Bearer bw-local-dev-key' \
+      -H 'Content-Type: application/json' \
+      -d '{"model":"mock-gpt","messages":[{"role":"user","content":"hi"}]}'
 
 ## Quality gate
 

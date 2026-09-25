@@ -3,7 +3,8 @@
 -- the loadtest scenarios' default API_KEYs: 'bw-local-t1' (local-1)
 -- and 'bw-local-t2' (local-2). The README quick start uses a separate
 -- BREAKWATER_IDENTITY key and does not need this seed.
--- Applied manually after the first-boot schema:
+-- docker-compose.yml mounts this file as 02-seed.sql so the first boot
+-- applies it after the schema; it stays idempotent if applied manually:
 --   docker compose -f deploy/docker-compose.yml exec -T postgres \
 --     psql -U breakwater -d breakwater < deploy/seed.sql
 
