@@ -27,7 +27,11 @@ func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin h
 		mux.Handle("GET /metrics", metrics)
 	}
 	if admin != nil {
-		mux.Handle("GET /admin/", admin)
+		// Deliberately not method-qualified: the admin handler guards
+		// methods itself (GET reads, PUT tops up), while a "GET /admin/"
+		// pattern would bounce PUT at the mux with a 405 the top-up
+		// endpoint could never see.
+		mux.Handle("/admin/", admin)
 	}
 	for format, handler := range inference {
 		mux.Handle(routeOfFormat(format), handler)
