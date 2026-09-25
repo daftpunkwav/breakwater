@@ -175,3 +175,79 @@ func TestAdminBreakersEndpoint(t *testing.T) {
 		t.Fatalf("body = %s err = %v", rec.Body.String(), err)
 	}
 }
+
+// TestAdminBreakersNilListRendersEmptyArray pins that an empty breaker
+// table renders as [], never as JSON null.
+func TestAdminBreakersNilListRendersEmptyArray(t *testing.T) {
+	t.Parallel()
+	admin := NewAdmin("", nil, nil, func(_ *http.Request) []BreakerView { return nil })
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/breakers", nil)
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"breakers":[]`) {
+		t.Fatalf("status = %d body = %s, want an empty JSON array", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAdminUnknownPathsReturnNotFound pins the surface boundary: paths
+// outside the three endpoints 404, including the quota path with an
+// empty tenant id.
+func TestAdminUnknownPathsReturnNotFound(t *testing.T) {
+	t.Parallel()
+	admin := NewAdmin("", nil, nil, nil)
+
+	for _, path := range []string{"/admin/unknown", "/admin", "/admin/tenants//quota"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		admin.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s status = %d, want 404", path, rec.Code)
+		}
+	}
+}
+
+// TestAdminDisabledEndpointsReturnNotFound pins that a nil dependency
+// removes its endpoint instead of failing cryptically at call time.
+func TestAdminDisabledEndpointsReturnNotFound(t *testing.T) {
+	t.Parallel()
+	admin := NewAdmin("", nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/tenants/t1/quota", nil)
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("quota read without a lookup = %d, want 404", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+		strings.NewReader(`{"balance":5}`))
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("top-up without a writer = %d, want 404", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/breakers", nil)
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("breakers without a state source = %d, want 404", rec.Code)
+	}
+}
+
+// TestAdminTopUpLedgerFailureIsUnavailable pins that a write-path ledger
+// outage renders as 503, never as a client-side status.
+func TestAdminTopUpLedgerFailureIsUnavailable(t *testing.T) {
+	t.Parallel()
+	setter := func(_ *http.Request, _ string, _ int64) error { return errors.New("redis: connection refused") }
+	admin := NewAdmin("", nil, setter, nil)
+
+	req := httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+		strings.NewReader(`{"balance":5}`))
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "balance_unavailable") {
+		t.Fatalf("status = %d body = %s, want 503 envelope", rec.Code, rec.Body.String())
+	}
+}
