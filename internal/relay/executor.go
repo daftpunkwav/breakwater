@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/obs"
@@ -47,6 +48,9 @@ type Executor struct {
 	classifier retry.Classifier
 	breaker    circuit.Breaker
 	metrics    *obs.Metrics
+	// streamTimeout bounds a committed stream's whole body; zero means
+	// the client owns the stream's lifetime outright.
+	streamTimeout time.Duration
 }
 
 // Option customizes an Executor.
@@ -66,6 +70,14 @@ func WithClassifier(c retry.Classifier) Option {
 // WithMetrics installs the observation recorder; nil disables.
 func WithMetrics(m *obs.Metrics) Option {
 	return func(e *Executor) { e.metrics = m }
+}
+
+// WithStreamTimeout sets the ceiling of a committed stream's body: a
+// stream that runs longer is terminated honestly through the error
+// contract (upstream_timeout). Zero, the default, lets the client own
+// the stream's lifetime.
+func WithStreamTimeout(d time.Duration) Option {
+	return func(e *Executor) { e.streamTimeout = d }
 }
 
 // New builds an Executor. A nil budget means retries are unbounded by
@@ -262,7 +274,8 @@ func (r *run) finish(err error) Result {
 
 	case r.terminal != nil:
 		r.wire.RenderUpstreamError(job.Out, r.terminal.status, r.terminal.header, r.terminal.body)
-		return Result{Status: r.terminal.status, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
+		return Result{Status: r.terminal.status, UpstreamID: r.servedBy,
+			Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, errCircuitOpen):
 		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "circuit_open",
@@ -277,7 +290,8 @@ func (r *run) finish(err error) Result {
 
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
 		r.wire.RenderUpstreamError(job.Out, r.lastFailed.status, r.lastFailed.header, r.lastFailed.body)
-		return Result{Status: r.lastFailed.status, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
+		return Result{Status: r.lastFailed.status, UpstreamID: r.servedBy,
+			Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	default:
 		r.wire.RenderError(job.Out, http.StatusBadGateway, "upstream_unreachable",

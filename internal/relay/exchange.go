@@ -29,18 +29,48 @@ import (
 // exchange performs one upstream attempt and returns the breaker
 // outcome alongside the loop error.
 func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream) (circuit.Outcome, error) {
-	resp, err := cand.Forward(attemptCtx, upstream.Request{
+	req := upstream.Request{
 		Model:  r.job.Model,
 		Stream: r.job.Stream,
 		Body:   r.job.Body,
-	})
+	}
+	if !r.job.Stream {
+		resp, err := cand.Forward(attemptCtx, req)
+		if err != nil {
+			return transportOutcome(r.ctx, err), err
+		}
+		return r.exchangeBuffered(cand, resp)
+	}
+
+	// A streamed reply may legitimately run for minutes: the attempt
+	// timeout must not bound its body. It bounds time-to-first-byte
+	// instead (a timer on the lease); the body is bound by the client
+	// context plus the optional stream ceiling. The overall deadline
+	// keeps governing the attempt loop only — once a stream commits,
+	// the client owns its lifetime.
+	lease, fwdCtx := r.beginStream()
+	resp, err := cand.Forward(fwdCtx, req)
 	if err != nil {
+		lease.end()
+		if lease.ttftFired {
+			// Classified as a timeout so the loop may retry or fail
+			// over to the next candidate.
+			return circuit.OutcomeServerFault, fmt.Errorf(
+				"time-to-first-byte exceeded %v: %w", r.exec.policy.AttemptTimeout, context.DeadlineExceeded)
+		}
 		return transportOutcome(r.ctx, err), err
 	}
-	if r.job.Stream {
-		return r.exchangeStream(attemptCtx, cand, resp)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		lease.end()
+		body, readErr := readBounded(resp.Body, maxResponseBytes)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return circuit.OutcomeServerFault, fmt.Errorf("relay: upstream %s read body: %w", cand.ID(), readErr)
+		}
+		return r.stashUpstreamError(cand, resp, body)
 	}
-	return r.exchangeBuffered(cand, resp)
+	lease.ttftPassed()
+	return r.exchangeStream(cand, resp, lease)
 }
 
 // exchangeBuffered handles a non-streaming exchange: the body is
@@ -54,7 +84,7 @@ func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return r.stashUpstreamError(resp, body)
+		return r.stashUpstreamError(cand, resp, body)
 	}
 
 	r.success = snapshot(resp.StatusCode, resp.Header, body)
@@ -64,20 +94,13 @@ func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) 
 	return circuit.OutcomeSuccess, nil
 }
 
-// exchangeStream handles a streaming exchange. The commit point is the
-// first byte written to the client: before it, failures loop back as
-// retryable; after it, any failure terminates through the SSE error
-// event contract and is reported as committed (no transparent retry).
-func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream, resp *upstream.Response) (circuit.Outcome, error) {
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		body, readErr := readBounded(resp.Body, maxResponseBytes)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return circuit.OutcomeServerFault, fmt.Errorf("relay: upstream %s read body: %w", cand.ID(), readErr)
-		}
-		return r.stashUpstreamError(resp, body)
-	}
-
+// exchangeStream handles a streaming exchange whose headers already
+// arrived (the time-to-first-byte budget is spent). The commit point is
+// the first byte written to the client: before it, failures loop back
+// as retryable; after it, any failure terminates through the client
+// format's honest termination and is reported as committed (no
+// transparent retry).
+func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, lease *streamLease) (circuit.Outcome, error) {
 	// Commit: from here on the loop must never see a plain error.
 	header := r.job.Out.Header()
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -114,8 +137,10 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 	r.streamBytes = streamBytes
 
 	if pumpErr == nil {
+		lease.end()
 		return circuit.OutcomeSuccess, nil
 	}
+	defer lease.end()
 
 	// Mid-stream failure: honest termination per the frozen contract —
 	// one error frame in the client's format; chunks already sent stay
@@ -125,6 +150,9 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 		return circuit.OutcomeClientFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
 	code := abortCode(pumpErr)
+	if lease.ceilingFired {
+		code = protocol.CodeUpstreamTimeout
+	}
 	message := "upstream stream failed mid-flight: " + pumpErr.Error()
 	if transcoder != nil {
 		_ = transcoder.Abort(r.job.Out, code, message)
@@ -136,8 +164,11 @@ func (r *run) exchangeStream(attemptCtx context.Context, cand upstream.Upstream,
 
 // stashUpstreamError files a completed error exchange: retryable
 // statuses wait as the passthrough candidate of the final attempt,
-// client faults become the terminal passthrough immediately.
-func (r *run) stashUpstreamError(resp *upstream.Response, body []byte) (circuit.Outcome, error) {
+// client faults become the terminal passthrough immediately. The
+// serving upstream is recorded: error passthroughs must still carry
+// their upstream dimension for observation and negative caching.
+func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response, body []byte) (circuit.Outcome, error) {
+	r.servedBy = cand.ID()
 	statusErr := retry.NewStatusError(resp.StatusCode)
 	if r.exec.classifier.Retryable(statusErr) {
 		r.lastFailed = snapshot(resp.StatusCode, resp.Header, body)
