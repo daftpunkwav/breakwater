@@ -138,6 +138,61 @@ func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
 	}
 }
 
+// TestCacheMiddlewareNegativeCachesUpstreamErrors pins spec §6.3's
+// penetration guard: an upstream-produced error is stored for a short
+// TTL, so a flood of identical bad requests stops at the cache.
+func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
+	t.Parallel()
+	var fetches atomic.Int64
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		// Mirror the inference handler's contract: the relay result is
+		// on the carrier by the time the cache stage stores.
+		pipeline.CarrierFrom(r.Context()).Relay = &relay.Result{
+			Status:     http.StatusNotFound,
+			UpstreamID: "u1",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"no such model"}}`))
+	})
+	handler := cacheStage(t, upstream)
+
+	body := `{"model":"ghost","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	if rec := fireRequest(handler, body); rec.Code != http.StatusNotFound {
+		t.Fatalf("first status = %d, want 404", rec.Code)
+	}
+	second := fireRequest(handler, body)
+	if second.Code != http.StatusNotFound {
+		t.Fatalf("second status = %d, want the replayed 404", second.Code)
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("fetches = %d, want 1 (negative entry served the second)", got)
+	}
+}
+
+// TestCacheMiddlewareNeverNegativeCachesGatewayEnvelopes pins the other
+// half: a gateway envelope is a transient state, not a fact about the
+// request — every request must reach the upstream again.
+func TestCacheMiddlewareNeverNegativeCachesGatewayEnvelopes(t *testing.T) {
+	t.Parallel()
+	var fetches atomic.Int64
+	// A handler that dies before its first byte produces a response-less
+	// fetch: no status, nothing shareable, nothing cacheable.
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		_ = r // never write anything
+	})
+	handler := cacheStage(t, upstream)
+
+	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	fireRequest(handler, body)
+	fireRequest(handler, body)
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetches = %d, want 2: nothing response-less may be cached", got)
+	}
+}
+
 func TestCacheMiddlewareIneligibleRequestsBypass(t *testing.T) {
 	t.Parallel()
 	var fetches atomic.Int64

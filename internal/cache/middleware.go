@@ -130,9 +130,14 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 			if owner {
 				// The owner's response was already written through the
 				// tee, and the completions handler already accounted its
-				// consumption. Only storage remains.
-				if storeWorthyFromEntry(entry) {
+				// consumption. Only storage remains: a full entry for the
+				// base TTL, an upstream failure or empty success for a
+				// short negative one.
+				switch {
+				case storeWorthyFromEntry(entry):
 					_ = store.Set(r.Context(), key, entry, ttl)
+				case negativelyCacheable(entry, carrier):
+					_ = store.Set(r.Context(), key, entry, ttl/10)
 				}
 				return
 			}
@@ -189,6 +194,27 @@ func storeWorthy(tee *httpserver.TeeResponseWriter) bool {
 // frame — never a replayable completion, whatever the HTTP status says.
 func relayAborted(carrier *pipeline.Carrier) bool {
 	return carrier.Relay != nil && carrier.Relay.Aborted
+}
+
+// negativelyCacheable reports whether a failed exchange is a fact about
+// the request worth remembering briefly (spec §6.3 negative caching):
+// an error the upstream itself produced, or an empty success. Gateway
+// envelopes (circuit open, budget exhausted, unreachable) are transient
+// gateway states, never facts, and never qualify.
+func negativelyCacheable(entry Entry, carrier *pipeline.Carrier) bool {
+	relayResult := carrier.Relay
+	if relayResult == nil || relayResult.UpstreamID == "" ||
+		relayResult.UpstreamID == observedUpstreamCache ||
+		relayResult.UpstreamID == observedUpstreamSharedFetch {
+		return false
+	}
+	switch {
+	case entry.Status >= http.StatusBadRequest && entry.Status <= http.StatusInsufficientStorage:
+		return true
+	case entry.Status >= 200 && entry.Status < 300:
+		return len(entry.Body) == 0
+	}
+	return false
 }
 
 // storeWorthyFromEntry applies the same rule to a fetched entry.
