@@ -90,7 +90,7 @@ func main() {
 	// the static identity set otherwise. Either way the steady state
 	// resolves through the process-local LRU. Identity configuration is
 	// what arms the governance pipeline.
-	authStore, staticIdentity, closeIdentity, err := newAuthStore(ctx, cfg)
+	authStore, staticIdentity, closeIdentity, identityReady, err := newAuthStore(ctx, cfg)
 	if err != nil {
 		logger.Error("assemble identity store", "error", err)
 		os.Exit(1)
@@ -121,6 +121,9 @@ func main() {
 				metrics.QuotaExpired()
 			})
 		}
+		if staticIdentity != nil && gov.snapshotSource != nil && cfg.Postgres.DSN != "" && cfg.ReconcileInterval > 0 {
+			startReconciler(ctx, cfg, gov.snapshotSource, staticIdentity.Tenants(), metrics, logger)
+		}
 		if staticIdentity != nil {
 			seedBalances(ctx, staticIdentity, gov.ledger, logger)
 		}
@@ -148,6 +151,7 @@ func main() {
 	}, retry.NewBudget(cfg.Retry.BudgetMaxInFlight),
 		relay.WithBreaker(breaker),
 		relay.WithMetrics(metrics),
+		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
 	)
 
 	// One chain per client format, one route per chain.
@@ -166,7 +170,7 @@ func main() {
 		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
 		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams)),
-		Readiness:     gov.readiness,
+		Readiness:     mergeReadiness(gov.readiness, identityReady),
 	})
 
 	publishLogDrops(ctx, metrics, accessLog.logger)
@@ -183,6 +187,28 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("gateway stopped")
+}
+
+// startReconciler wires the quota reconciliation protocol (PRD Q6):
+// the Redis hot ledger is snapshotted into PostgreSQL on an interval
+// and consecutive snapshots must satisfy the balance identity.
+func startReconciler(ctx context.Context, cfg config.Config, source quota.SnapshotSource, tenants []string, metrics *obs.Metrics, logger *slog.Logger) {
+	store, err := quota.NewPGSnapshots(ctx, cfg.Postgres.DSN)
+	if err != nil {
+		logger.Error("assemble quota snapshot store", "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		<-ctx.Done()
+		store.Close()
+	}()
+
+	reconciler := quota.NewReconciler(source, tenants, store)
+	quota.StartReconciler(ctx, reconciler, cfg.ReconcileInterval, func(drift quota.TenantDrift) {
+		metrics.QuotaReconciliationError()
+	})
+	logger.Info("quota reconciliation enabled",
+		"interval", cfg.ReconcileInterval, "tenants", len(tenants))
 }
 
 // buildBreaker assembles the breaker registry with its metric hooks.
@@ -214,6 +240,28 @@ func stateValue(s circuit.State) float64 {
 		return 1
 	default:
 		return 0
+	}
+}
+
+// mergeReadiness combines probes: ready only when every live probe is
+// ready. Nil probes drop out; an all-nil set reports ready.
+func mergeReadiness(probes ...func() error) func() error {
+	var live []func() error
+	for _, probe := range probes {
+		if probe != nil {
+			live = append(live, probe)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	return func() error {
+		for _, probe := range live {
+			if err := probe(); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 }
 

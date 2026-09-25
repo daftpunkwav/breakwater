@@ -25,9 +25,12 @@ type Config struct {
 	// deployments without a database; its schema is owned by the auth
 	// package, keeping this package a leaf.
 	Identity string
-	Cache    Cache
-	Circuit  Circuit
-	Security Security
+	// ReconcileInterval paces the quota ledger reconciliation (PRD Q6);
+	// zero disables the protocol.
+	ReconcileInterval time.Duration
+	Cache             Cache
+	Circuit           Circuit
+	Security          Security
 }
 
 // Cache configures the exact-match response cache.
@@ -78,6 +81,11 @@ type Retry struct {
 	BackoffMax     time.Duration
 	// BudgetMaxInFlight caps concurrent retry attempts process-wide.
 	BudgetMaxInFlight int
+	// StreamTimeout bounds a committed stream's whole body once the
+	// reply headers arrived; zero lets the client own the stream's
+	// lifetime. It exists because the per-attempt timeout would
+	// otherwise kill legitimate long completions mid-stream.
+	StreamTimeout time.Duration
 }
 
 // Server holds HTTP listener settings.

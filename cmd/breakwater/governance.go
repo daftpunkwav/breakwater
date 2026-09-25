@@ -34,7 +34,10 @@ type governance struct {
 	limiter     limiter.Limiter
 	ledger      quota.Ledger
 	sweepTarget quota.SweepTarget
-	redisClient *redis.Client
+	// snapshotSource exposes the Redis ledger's reconcile readings; nil
+	// in memory mode.
+	snapshotSource quota.SnapshotSource
+	redisClient    *redis.Client
 	// readiness gates business traffic on the backend the fail-closed
 	// limiter depends on; nil in memory mode (always ready).
 	readiness func() error
@@ -70,13 +73,14 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 		return nil, err
 	}
 
-	ledger := quota.NewRedis(rdb)
+	redisLedger := quota.NewRedis(rdb)
 	return &governance{
-		mode:        "redis",
-		limiter:     limiter.NewRedis(rdb),
-		ledger:      ledger,
-		sweepTarget: ledger,
-		redisClient: rdb,
+		mode:           "redis",
+		limiter:        limiter.NewRedis(rdb),
+		ledger:         redisLedger,
+		sweepTarget:    redisLedger,
+		snapshotSource: redisLedger,
+		redisClient:    rdb,
 		readiness: func() error {
 			pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -86,31 +90,37 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 	}, nil
 }
 
-// newAuthStore resolves the identity source. A nil store (and nil
-// closer) means no identity is configured and the gateway runs without
-// governance stages.
-func newAuthStore(ctx context.Context, cfg config.Config) (auth.Store, *auth.Static, func(), error) {
+// newAuthStore resolves the identity source. A nil store means no
+// identity is configured and the gateway runs without governance
+// stages. The readiness probe covers the dependency authentication
+// fail-closes on (the identity database); nil for the static set.
+func newAuthStore(ctx context.Context, cfg config.Config) (auth.Store, *auth.Static, func(), func() error, error) {
 	switch {
 	case cfg.Postgres.DSN != "":
 		pg, err := auth.NewPG(ctx, cfg.Postgres.DSN)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		return auth.NewCachedStore(pg, authPosTTL, authNegTTL), nil, pg.Close, nil
+		probe := func() error {
+			pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			return pg.Ping(pingCtx)
+		}
+		return auth.NewCachedStore(pg, authPosTTL, authNegTTL), nil, pg.Close, probe, nil
 
 	case cfg.Identity != "":
 		staticCfg, err := auth.ParseStaticConfig([]byte(cfg.Identity))
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		staticStore, err := auth.NewStatic(staticCfg)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		return auth.NewCachedStore(staticStore, authPosTTL, authNegTTL), staticStore, func() {}, nil
+		return auth.NewCachedStore(staticStore, authPosTTL, authNegTTL), staticStore, func() {}, nil, nil
 
 	default:
-		return nil, nil, func() {}, nil
+		return nil, nil, func() {}, nil, nil
 	}
 }
 

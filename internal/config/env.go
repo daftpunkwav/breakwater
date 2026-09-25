@@ -37,6 +37,8 @@ const (
 	defaultCircuitThreshold = 5
 	defaultCircuitCooldown  = 30 * time.Second
 	defaultCircuitProbe     = 5 * time.Second
+	defaultStreamTimeout    = 10 * time.Minute
+	defaultReconcileEvery   = time.Minute
 )
 
 // Environment variable names.
@@ -54,6 +56,8 @@ const (
 	envRetryBackoffInitial = "BREAKWATER_RETRY_BACKOFF_INITIAL"
 	envRetryBackoffMax     = "BREAKWATER_RETRY_BACKOFF_MAX"
 	envRetryBudget         = "BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT"
+	envStreamTimeout       = "BREAKWATER_STREAM_TIMEOUT"
+	envReconcileInterval   = "BREAKWATER_RECONCILE_INTERVAL"
 	envIdentity            = "BREAKWATER_IDENTITY"
 
 	envCacheEnabled  = "BREAKWATER_CACHE_ENABLED"
@@ -97,7 +101,9 @@ func Load() (Config, error) {
 			BackoffInitial:    defaultBackoffInitial,
 			BackoffMax:        defaultBackoffMax,
 			BudgetMaxInFlight: defaultRetryBudgetCap,
+			StreamTimeout:     defaultStreamTimeout,
 		},
+		ReconcileInterval: defaultReconcileEvery,
 		Cache: Cache{
 			Enabled:  true,
 			TTL:      defaultCacheTTL,
@@ -138,6 +144,18 @@ func Load() (Config, error) {
 	}
 	if cfg.Retry.BudgetMaxInFlight, err = envInt(envRetryBudget, cfg.Retry.BudgetMaxInFlight); err != nil {
 		return Config{}, err
+	}
+	if cfg.Retry.StreamTimeout, err = envDuration(envStreamTimeout, cfg.Retry.StreamTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.StreamTimeout < 0 {
+		return Config{}, fmt.Errorf("config: %s must not be negative", envStreamTimeout)
+	}
+	if cfg.ReconcileInterval, err = envDuration(envReconcileInterval, cfg.ReconcileInterval); err != nil {
+		return Config{}, err
+	}
+	if cfg.ReconcileInterval < 0 {
+		return Config{}, fmt.Errorf("config: %s must not be negative", envReconcileInterval)
 	}
 	if cfg.Cache.Enabled, err = envBool(envCacheEnabled, cfg.Cache.Enabled); err != nil {
 		return Config{}, err
