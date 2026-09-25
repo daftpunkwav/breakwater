@@ -7,6 +7,8 @@
 package relay
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -57,5 +59,37 @@ func TestPumpStreamPreservesBytesAcrossLineShapes(t *testing.T) {
 				t.Fatalf("stream bytes altered\n got %d bytes\nwant %d bytes", len(got), len(tc.want))
 			}
 		})
+	}
+}
+
+// failingWriter rejects every write, simulating a client connection
+// that died under the passthrough pump.
+type failingWriter struct {
+	header http.Header
+}
+
+func (f failingWriter) Header() http.Header { return f.header }
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("client write failed")
+}
+
+func (failingWriter) WriteHeader(int) {}
+
+// TestPumpStreamWriteFailureStopsThePump pins the pump's failure path:
+// a broken client write ends the pump with the error instead of
+// spinning on the remaining upstream bytes.
+func TestPumpStreamWriteFailureStopsThePump(t *testing.T) {
+	t.Parallel()
+	stream := "data: {\"a\":1}\n\ndata: {\"b\":2}\n\ndata: [DONE]\n\n"
+	usage, known, total, err := pumpStream(failingWriter{}, strings.NewReader(stream))
+	if err == nil {
+		t.Fatal("write failure swallowed")
+	}
+	if known {
+		t.Fatalf("usage = %+v, want unknown: the failing frame carried none", usage)
+	}
+	if total != 0 {
+		t.Fatalf("byte count = %d, want 0: nothing was delivered", total)
 	}
 }
