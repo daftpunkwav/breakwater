@@ -9,6 +9,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -81,4 +82,65 @@ func TestRunSurfacesStartupFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected startup failure for occupied port")
 	}
+}
+
+// TestRunRejectsMissingHandler pins the startup guard: a nil handler is
+// a configuration error surfaced before any listener is opened.
+func TestRunRejectsMissingHandler(t *testing.T) {
+	t.Parallel()
+	err := Run(context.Background(), Options{Addr: "127.0.0.1:0"})
+	if err == nil {
+		t.Fatal("nil handler accepted")
+	}
+	if got := err.Error(); !strings.Contains(got, "no handler") {
+		t.Fatalf("err = %v, want the missing-handler message", err)
+	}
+}
+
+// TestRunDrainTimeoutSurfacesError pins the drain bound: a handler
+// holding its connection open past the shutdown grace makes Run return
+// the drain failure instead of hanging forever.
+func TestRunDrainTimeoutSurfacesError(t *testing.T) {
+	t.Parallel()
+	addr := freePort(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) }) // let the stuck handler finish
+	started := make(chan struct{})
+
+	handler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- Run(ctx, Options{Addr: addr, Handler: handler, ShutdownGrace: 150 * time.Millisecond})
+	}()
+
+	// Open one in-flight request so Shutdown has a connection to wait for.
+	go func() {
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get("http://" + addr + "/")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	<-started // the request is being served; the drain window will bound it
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if err == nil {
+			t.Fatal("drain timeout not reported")
+		}
+		if !strings.Contains(err.Error(), "drain connections") {
+			t.Fatalf("err = %v, want the drain failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after the drain window")
+	}
+	// The stuck request goroutine finishes on the client timeout or at
+	// cleanup (release closed); it must not block the test's exit path.
 }

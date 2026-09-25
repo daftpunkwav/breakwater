@@ -96,3 +96,50 @@ func TestTeeRecordsFlush(t *testing.T) {
 		t.Fatal("flush not recorded")
 	}
 }
+
+// TestBufferingTeeClampsNegativeLimit pins the constructor guard: a
+// negative capture limit degenerates to counting mode, never a panic.
+func TestBufferingTeeClampsNegativeLimit(t *testing.T) {
+	t.Parallel()
+	inner := httptest.NewRecorder()
+	tee := NewBufferingTee(inner, -1)
+
+	if _, err := tee.Write([]byte("kept nowhere")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(tee.Body()) != 0 {
+		t.Fatalf("negative-limit tee retained %q", tee.Body())
+	}
+	if got := tee.BytesWritten(); got != 12 {
+		t.Fatalf("bytes written = %d, want 12", got)
+	}
+}
+
+// TestBufferingTeeMarksTruncationOnLaterWrites pins the truncation flag
+// for writes that arrive after the capture buffer is already full: the
+// early-write prefix stays retained, later writes only pass through.
+func TestBufferingTeeMarksTruncationOnLaterWrites(t *testing.T) {
+	t.Parallel()
+	inner := httptest.NewRecorder()
+	tee := NewBufferingTee(inner, 4)
+
+	if _, err := tee.Write([]byte("abcd")); err != nil {
+		t.Fatalf("write 1: %v", err)
+	}
+	if tee.Truncated() {
+		t.Fatal("truncation reported while the buffer had room")
+	}
+	if _, err := tee.Write([]byte("efgh")); err != nil {
+		t.Fatalf("write 2: %v", err)
+	}
+
+	if string(tee.Body()) != "abcd" {
+		t.Fatalf("retained = %q, want the pre-cap prefix", tee.Body())
+	}
+	if !tee.Truncated() {
+		t.Fatal("post-cap write not reported as truncated")
+	}
+	if inner.Body.String() != "abcdefgh" {
+		t.Fatalf("forwarded = %q, want the full body", inner.Body.String())
+	}
+}
