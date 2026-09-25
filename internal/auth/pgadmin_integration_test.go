@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,9 +103,22 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 	if err := store.SetKeyStatus(ctx, keyID, false); err != nil {
 		t.Fatalf("disable key: %v", err)
 	}
-
-	// The listing reflects the cap and the disabled status.
+	// Re-enabling flips the status back.
+	if err := store.SetKeyStatus(ctx, keyID, true); err != nil {
+		t.Fatalf("re-enable key: %v", err)
+	}
 	keys, err := store.Keys(ctx, userID)
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	for _, k := range keys {
+		if k.ID == keyID && !k.Active {
+			t.Fatal("the re-enabled key still lists as disabled")
+		}
+	}
+
+	// The listing reflects the cap and the re-enabled status.
+	keys, err = store.Keys(ctx, userID)
 	if err != nil || len(keys) != MaxKeysPerUser {
 		t.Fatalf("keys = %v err = %v, want %d", keys, err, MaxKeysPerUser)
 	}
@@ -141,6 +155,20 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 	}
 	if !tenant.Tier.AllowsModel("any-model") {
 		t.Fatal("unlisted models must stay allowed by the tier wildcard")
+	}
+
+	// A corrupted overrides document in the database is a data
+	// corruption error on every read path, never a silent skip to
+	// defaults.
+	if _, err := conn.Exec(ctx,
+		`UPDATE tenants SET overrides = '{broken' WHERE id = $1`, second); err != nil {
+		t.Fatalf("corrupt overrides: %v", err)
+	}
+	if _, err := store.Users(ctx); err == nil || !strings.Contains(err.Error(), "overrides") {
+		t.Fatalf("users err = %v, want the overrides corruption to surface", err)
+	}
+	if _, err := store.Resolve(ctx, issued.Raw); err == nil || !strings.Contains(err.Error(), "overrides") {
+		t.Fatalf("resolve err = %v, want the corrupted layer to fail the resolution", err)
 	}
 }
 

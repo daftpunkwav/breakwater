@@ -39,6 +39,7 @@ func TestNewStaticRejectsBrokenIdentitySets(t *testing.T) {
 		{"tier without id", func(c *StaticConfig) { c.Tiers[0].ID = "" }, "tier without id"},
 		{"tenant without id", func(c *StaticConfig) { c.Tenants[0].ID = "" }, "tenant without id"},
 		{"unknown tier reference", func(c *StaticConfig) { c.Tenants[0].Tier = "missing" }, "unknown tier"},
+		{"unknown role", func(c *StaticConfig) { c.Tenants[0].Role = "owner" }, "unknown role"},
 		{"empty api key", func(c *StaticConfig) { c.Tenants[0].Keys[0] = "" }, "empty api key"},
 		{"duplicate api key", func(c *StaticConfig) { c.Tenants[1].Keys[0] = "sk-1" }, "duplicate api key"},
 		{"duplicate api key within a tenant", func(c *StaticConfig) { c.Tenants[0].Keys[1] = "sk-1" }, "duplicate api key"},

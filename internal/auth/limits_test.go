@@ -29,6 +29,29 @@ func TestMergeTierScalarsNearestLayerWins(t *testing.T) {
 	}
 }
 
+// TestMergeTierEveryScalarField: each scalar override lands, including
+// the ones the precedence test leaves to the tier.
+func TestMergeTierEveryScalarField(t *testing.T) {
+	t.Parallel()
+	tpm := int64(7)
+	maxTokens := int64(8)
+	concurrency := int64(9)
+	got := MergeTier(Tier{}, LimitOverride{TPM: &tpm, MaxTokens: &maxTokens, Concurrency: &concurrency})
+	if got.TPM != 7 || got.MaxTokens != 8 || got.Concurrency != 9 {
+		t.Fatalf("merged = %+v, want tpm 7 max_tokens 8 concurrency 9", got)
+	}
+}
+
+// TestMergeTierQuotasIntoEmptyBase: a base without a quota map gains
+// the override's entries.
+func TestMergeTierQuotasIntoEmptyBase(t *testing.T) {
+	t.Parallel()
+	got := MergeTier(Tier{}, LimitOverride{ModelQuotas: map[string]int64{"m": 5}})
+	if got.ModelQuotas["m"] != 5 {
+		t.Fatalf("quotas = %v, want m=5", got.ModelQuotas)
+	}
+}
+
 func TestMergeTierDenyUnions(t *testing.T) {
 	t.Parallel()
 	base := Tier{AllowedModels: []string{"*"}}
@@ -96,13 +119,19 @@ func TestMergeTierAllowTightensOnly(t *testing.T) {
 }
 
 // TestMergeTierWildcardParentChild: a wildcard parent plus a named
-// child admits exactly the named child set.
+// child admits exactly the named child set, and a parent-child pair
+// with no overlap forbids everything.
 func TestMergeTierWildcardParentChild(t *testing.T) {
 	t.Parallel()
 	base := Tier{AllowedModels: []string{"*"}}
 	got := MergeTier(base, LimitOverride{AllowedModels: &[]string{"m1", "m2"}})
 	if !got.AllowsModel("m1") || !got.AllowsModel("m2") || got.AllowsModel("m3") {
 		t.Fatalf("wildcard parent + named child = %v, want exactly the child set", got.AllowedModels)
+	}
+
+	disjoint := MergeTier(Tier{AllowedModels: []string{"a"}}, LimitOverride{AllowedModels: &[]string{"b"}})
+	if len(disjoint.AllowedModels) != 0 || disjoint.AllowsModel("a") || disjoint.AllowsModel("b") {
+		t.Fatalf("disjoint intersection = %v, want an explicit empty allow", disjoint.AllowedModels)
 	}
 }
 

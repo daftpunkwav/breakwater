@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-// TestGenerateKeyShape: keys are bw-prefixed hex, unique across calls.
+// TestGenerateKeyShape pins the identifier and key generators; the
+// role validation sits before any database contact.
 func TestGenerateKeyShape(t *testing.T) {
 	t.Parallel()
 	a, err := GenerateKey()
@@ -29,6 +30,20 @@ func TestGenerateKeyShape(t *testing.T) {
 	}
 	if a == b {
 		t.Fatal("two generated keys collided")
+	}
+}
+
+// TestCreateUserRejectsUnknownRole: the role check precedes any
+// database exchange, so a bad role fails even against a dead store.
+func TestCreateUserRejectsUnknownRole(t *testing.T) {
+	t.Parallel()
+	store, err := NewPG(context.Background(), unreachableDSN)
+	if err != nil {
+		t.Fatalf("NewPG: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.CreateUser(context.Background(), "Alice", Role("owner"), "free"); err == nil || strings.Contains(err.Error(), "dial") {
+		t.Fatalf("err = %v, want the role validation, not a dial failure", err)
 	}
 }
 

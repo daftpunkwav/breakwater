@@ -133,7 +133,8 @@ func intersect(parent, child []string) []string {
 		parentSet[m] = struct{}{}
 	}
 	// Deterministic order: follow the parent list, then the child list
-	// order for entries the parent admitted via its wildcard.
+	// order for entries the parent admitted via its wildcard. The child
+	// cannot carry the wildcard here — that case returned above.
 	var out []string
 	for _, m := range parent {
 		if _, ok := childSet[m]; ok {
@@ -142,9 +143,6 @@ func intersect(parent, child []string) []string {
 	}
 	if containsWildcard(parent) {
 		for _, m := range child {
-			if m == wildcardModel {
-				continue
-			}
 			if _, done := parentSet[m]; !done {
 				out = append(out, m)
 				parentSet[m] = struct{}{}
