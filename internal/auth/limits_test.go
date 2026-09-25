@@ -1,8 +1,9 @@
 /**
  * @file limits_test
  * @description The layered merge semantics: scalar precedence (key
- * over user over tier), the deny union, the allow tightening and the
- * per-model quota merge.
+ * over user over tier), the deny union (including a deny that removes
+ * the last tightened allow), the allow tightening and the per-model
+ * quota merge.
  */
 package auth
 
@@ -132,6 +133,26 @@ func TestMergeTierWildcardParentChild(t *testing.T) {
 	disjoint := MergeTier(Tier{AllowedModels: []string{"a"}}, LimitOverride{AllowedModels: &[]string{"b"}})
 	if len(disjoint.AllowedModels) != 0 || disjoint.AllowsModel("a") || disjoint.AllowsModel("b") {
 		t.Fatalf("disjoint intersection = %v, want an explicit empty allow", disjoint.AllowedModels)
+	}
+}
+
+// TestMergeTierDenyRemovesTheLastAllowedModel pins the layered path
+// the admin surface enables: the user layer tightens the wildcard
+// allow list to one model and the key layer denies exactly that model.
+// The surviving non-empty allow list must not resurrect it.
+func TestMergeTierDenyRemovesTheLastAllowedModel(t *testing.T) {
+	t.Parallel()
+	got := MergeTier(
+		Tier{AllowedModels: []string{"*"}},
+		LimitOverride{AllowedModels: &[]string{"m1"}}, // user layer tightens
+		LimitOverride{DeniedModels: []string{"m1"}},   // key layer denies it
+	)
+	if got.AllowsModel("m1") || got.AllowsModel("m2") {
+		t.Fatalf("allow %v deny %v still admits a model", got.AllowedModels, got.DeniedModels)
+	}
+	if !reflect.DeepEqual(got.AllowedModels, []string{"m1"}) || !reflect.DeepEqual(got.DeniedModels, []string{"m1"}) {
+		t.Fatalf("layers = allow %v deny %v, want both layers preserved verbatim",
+			got.AllowedModels, got.DeniedModels)
 	}
 }
 

@@ -63,6 +63,15 @@ func TestAdminModelSwitchEndpoint(t *testing.T) {
 		return rec
 	}
 
+	// A typo'd extra member must fail the write loudly — never a silent
+	// no-op on a governance switch.
+	if rec := put("m1", `{"enabled":true,"disabld":false}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown member status = %d, want 400", rec.Code)
+	}
+	if !sw.ModelEnabled("m1") {
+		t.Fatal("a rejected payload toggled the switch")
+	}
+
 	if rec := put("m1", `{"enabled":false}`); rec.Code != http.StatusOK {
 		t.Fatalf("disable status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -118,6 +127,17 @@ func TestAdminUpstreamSwitchEndpoint(t *testing.T) {
 	admin.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown upstream status = %d, want 404", rec.Code)
+	}
+
+	// A malformed switch payload is a 400 and never touches the switch.
+	req = httptest.NewRequest(http.MethodPut, "/admin/upstreams/u1", strings.NewReader(`not json`))
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad payload status = %d, want 400", rec.Code)
+	}
+	if sw.UpstreamEnabled("u1") {
+		t.Fatal("a rejected payload toggled the switch")
 	}
 
 	req = httptest.NewRequest(http.MethodPut, "/admin/upstreams/", strings.NewReader(`{"enabled":false}`))

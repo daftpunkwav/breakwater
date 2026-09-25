@@ -10,7 +10,9 @@
  * Two chains exist in the gateway; only the request side is composed
  * here:
  *
- *	request side:  auth -> limiter -> quota(reserve) -> cache -> route -> forward
+ *	request side:  carrier -> request id -> format -> observation
+ *	               -> auth -> model authorization -> concurrency
+ *	               -> limiter -> quota(reserve) -> cache -> route -> forward
  *	response side: forward -> retry/circuit -> quota(settle) -> cache write -> obs
  *
  * Retry, circuit breaking and failover wrap the upstream call INSIDE

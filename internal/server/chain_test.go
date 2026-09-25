@@ -71,6 +71,7 @@ func buildChainWithIdentity(t *testing.T, backendURL string, ledger quota.Ledger
 		pipeline.RequestIDStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		pipeline.AuthStage(identity),
+		pipeline.ModelAuthzStage(),
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
 	}

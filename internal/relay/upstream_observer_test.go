@@ -7,11 +7,13 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
@@ -89,6 +91,33 @@ func TestObserverSparedOnClientDisconnect(t *testing.T) {
 		if call.failed {
 			t.Fatalf("call = %+v, want a canceled exchange kept off the failure record", call)
 		}
+	}
+}
+
+// TestObserverRecordsServerSourcedCancel pins the client-fault rule the
+// observer shares with the breaker accounting (clientFault): a
+// cancel-flavored exchange error while the client context is still
+// alive is not the client's doing and must hit the failure record.
+func TestObserverRecordsServerSourcedCancel(t *testing.T) {
+	t.Parallel()
+	flaky := &stubUpstream{id: "flaky", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		return nil, fmt.Errorf("transport tore down: %w", context.Canceled)
+	}}
+	obs := &recordingObserver{}
+	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithUpstreamObserver(obs))
+
+	rec := httptest.NewRecorder()
+	exec.Execute(context.Background(), Job{
+		Model:      "m",
+		Body:       []byte("{}"),
+		Candidates: []upstream.Upstream{flaky},
+		Out:        rec,
+	})
+	if len(obs.calls) != 1 {
+		t.Fatalf("observer saw %d calls, want one", len(obs.calls))
+	}
+	if !obs.calls[0].failed {
+		t.Fatalf("call = %+v, want a non-client cancel recorded as a failure", obs.calls[0])
 	}
 }
 

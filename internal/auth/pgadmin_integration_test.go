@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,15 +31,7 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	for _, file := range []string{"../../deploy/schema.sql"} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
-		}
-		if _, err := conn.Exec(ctx, string(raw)); err != nil {
-			t.Fatalf("apply %s: %v", file, err)
-		}
-	}
+	applyIdentitySchema(t, ctx, conn)
 
 	store, err := NewPG(ctx, dsn)
 	if err != nil {
@@ -70,8 +63,8 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 	if first.Raw == "" || len(first.Raw) < 20 {
 		t.Fatalf("issued raw key = %q, want a real secret", first.Raw)
 	}
-	// A key for a nonexistent user fails at the foreign key, mapped to
-	// the sentinel — not at the count query.
+	// A key for a nonexistent user fails at the tenant row lock, mapped
+	// to the sentinel — before the count query ever runs.
 	if _, err := store.CreateKey(ctx, "u_ghost", "ghost"); !errors.Is(err, ErrUnknownUser) {
 		t.Fatalf("ghost-user key err = %v, want ErrUnknownUser", err)
 	}
@@ -157,3 +150,80 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// applyIdentitySchema loads the deploy schema into the test database;
+// the DDL is idempotent (IF NOT EXISTS throughout).
+func applyIdentitySchema(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+	t.Helper()
+	raw, err := os.ReadFile("../../deploy/schema.sql")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(raw)); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+}
+
+// TestPGAdminCreateKeyCapIsConcurrencySafe pins the cap under a race:
+// concurrent issuances for one user serialize on the tenant row lock,
+// so exactly MaxKeysPerUser keys are granted and every extra racer is
+// refused with ErrTooManyKeys — a plain check-then-insert would let a
+// burst slip past the count.
+func TestPGAdminCreateKeyCapIsConcurrencySafe(t *testing.T) {
+	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	applyIdentitySchema(t, ctx, conn)
+
+	store, err := NewPG(ctx, dsn)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	userID, err := store.CreateUser(ctx, "Racer", RoleUser, "free")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	const racers = 3 * MaxKeysPerUser
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = store.CreateKey(ctx, userID, "racing")
+		}(i)
+	}
+	wg.Wait()
+
+	granted := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			granted++
+		case errors.Is(err, ErrTooManyKeys):
+			// The cap refusing the surplus is the point.
+		default:
+			t.Fatalf("racer failed with an unexpected error: %v", err)
+		}
+	}
+	if granted != MaxKeysPerUser {
+		t.Fatalf("granted = %d, want exactly %d under concurrency", granted, MaxKeysPerUser)
+	}
+	keys, err := store.Keys(ctx, userID)
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	if len(keys) != MaxKeysPerUser {
+		t.Fatalf("stored keys = %d, want %d", len(keys), MaxKeysPerUser)
+	}
+}

@@ -15,16 +15,22 @@ package limiter
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
+// concurrencyRetryAfterSeconds is the Retry-After floor the
+// concurrency rejection advertises: a slot can free at any moment, so
+// anything below one second only invites a spin.
+const concurrencyRetryAfterSeconds = 1
+
 // ConcurrencyMiddleware returns the concurrency stage. The metrics
-// recorder may be nil to disable. Stage order: auth -> concurrency ->
-// limiter — a rejected request must not consume the identities' rate
-// budget for work it never did.
+// recorder may be nil to disable. Stage order: auth -> model
+// authorization -> concurrency -> limiter — a rejected request must not
+// consume the identities' rate budget for work it never did.
 func ConcurrencyMiddleware(g *Concurrency, metrics *obs.Metrics) pipeline.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +43,13 @@ func ConcurrencyMiddleware(g *Concurrency, metrics *obs.Metrics) pipeline.Middle
 				if metrics != nil {
 					metrics.ConcurrencyLimited(carrier.Tenant.ID)
 				}
+				// The same 429 discipline as the rate-limit stage: the
+				// response carries Retry-After guidance. The wait here is
+				// not computable — a slot frees when any in-flight
+				// request of the tenant finishes — so the floor of one
+				// second is the honest minimum: retrying sooner cannot
+				// succeed, and the value advises, not promises.
+				w.Header().Set("Retry-After", strconv.Itoa(concurrencyRetryAfterSeconds))
 				wire := protocol.WireFor(carrier.Format)
 				wire.RenderError(w, http.StatusTooManyRequests, "concurrency_limit_exceeded",
 					"tenant concurrency limit exceeded; wait for an in-flight request to finish")

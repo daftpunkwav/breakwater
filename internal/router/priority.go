@@ -148,8 +148,19 @@ func (p *Priority) Candidates(ctx context.Context, model string) ([]upstream.Ups
 		return nil, fmt.Errorf("router: no upstream serves model %q", model)
 	}
 	if p.strategy == StrategyLatency && p.tracker != nil {
+		// Snapshot the scores once per candidate: the sort then reads a
+		// plain slice instead of re-locking the tracker O(n log n)
+		// times. At routing-table candidate counts the mutex is not a
+		// bottleneck either way — Record fires once per upstream
+		// exchange, orders of magnitude less often than Candidates —
+		// so the snapshot is a fixed ordering (scores cannot shift
+		// mid-sort) rather than a contention fix.
+		scores := make([]float64, len(candidates))
+		for i, c := range candidates {
+			scores[i] = p.tracker.Score(c.ID())
+		}
 		sort.SliceStable(candidates, func(i, j int) bool {
-			return p.tracker.Score(candidates[i].ID()) < p.tracker.Score(candidates[j].ID())
+			return scores[i] < scores[j]
 		})
 	}
 	return candidates, nil

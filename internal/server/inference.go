@@ -58,23 +58,12 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wire := protocol.WireFor(carrier.Format)
-	if !pipeline.EnsureBody(w, r, carrier) {
-		return
-	}
-
-	if carrier.Chat.Model == "" {
-		wire.RenderError(w, http.StatusBadRequest, "invalid_request", "model is required")
-		return
-	}
-
-	// Tier model authorization: the fail-closed rule lives on the tier
-	// (empty list allows nothing) and applies to authenticated requests
-	// only — a deployment without an identity store runs no governance
-	// at all, so its zero tenant must not trip the check. Enforcement
-	// happens before any routing or upstream contact.
-	if carrier.Tenant.ID != "" && !carrier.Tenant.Tier.AllowsModel(carrier.Chat.Model) {
-		wire.RenderError(w, http.StatusForbidden, string(protocol.CodeModelNotAllowed),
-			"the tenant tier does not allow model "+carrier.Chat.Model)
+	// Tier model authorization — defense in depth: the pipeline's authz
+	// stage applies the same rule earlier (before any governance spend),
+	// and this is the fail-closed last line for the ungoverned mode (no
+	// identity store, no stage installed). AuthorizeModel is the one
+	// authority both call, so the verdicts cannot drift.
+	if !pipeline.AuthorizeModel(w, r, carrier) {
 		return
 	}
 

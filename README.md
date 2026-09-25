@@ -15,13 +15,13 @@ tests, metrics and fault-injection experiments.
 | --------------------- | --------------------------------------------------------- |
 | `cmd/breakwater`      | Gateway binary (composition root)                         |
 | `cmd/mockllm`         | Mock OpenAI-compatible upstream with fault injection      |
-| `internal/server`     | Route assembly, the three inference endpoints, minimal admin API |
+| `internal/server`     | Route assembly, the three inference endpoints, admin API (operations + identity administration) |
 | `internal/relay`      | Response-side execution engine: attempts, failover, SSE passthrough, honest stream termination |
-| `internal/pipeline`   | Middleware chain, per-request carrier, observation stage  |
+| `internal/pipeline`   | Middleware chain, per-request carrier, model authorization, observation stage |
 | `internal/httpserver` | Shared HTTP lifecycle and the response tee                |
 | `internal/protocol`   | Wire contracts: the canonical chat form, the translator wires (openai-chat passthrough, openai-responses and anthropic-messages transcoding), SSE codecs |
-| `internal/auth`       | Identity: static/PostgreSQL stores, process-local LRU     |
-| `internal/limiter`    | RPM/TPM token buckets (in-memory + Redis Lua), 429 stage  |
+| `internal/auth`       | Identity: users, roles, layered key limits (static/PostgreSQL stores, process-local LRU) |
+| `internal/limiter`    | RPM/TPM token buckets (in-memory + Redis Lua), per-tenant concurrency gate, 429 stages |
 | `internal/quota`      | Lease ledger (in-memory + Redis Lua), sweeper, 402 stage  |
 | `internal/cache`      | Exact-match cache, hand-written singleflight, eligibility |
 | `internal/circuit`    | Three-state breaker (plus a nop for breaker-less runs)    |
@@ -78,8 +78,8 @@ request carries its own failover chain — and because each upstream
 rewrites to its own real name, a mid-request failover can cross
 providers and models, not just hosts.
 
-All three walk the identical governance pipeline (auth → rate limit →
-quota → cache) and the identical relay engine; only the wire differs.
+All three walk the identical governance pipeline (auth → model
+authorization → concurrency → rate limit → quota → cache) and the identical relay engine; only the wire differs.
 The canonical wire is openai-chat: unknown request fields survive byte
 passthrough, while translated formats ingest a declared subset and
 reject what they cannot express honestly. Text content only — image or
@@ -128,7 +128,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_ADDR`                     | `:8080`        | Listen address                                             |
 | `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `models`; list order = failover priority; `"client=real"` entries alias model names) |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | Candidate order: `static` (configured order) or `latency` (measured exchange latency first, configured order as tie-break; untried upstreams are explored first) |
-| `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants`); arms the governance pipeline |
+| `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants` with `role` and user-level `overrides`); arms the governance pipeline |
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | Upstream attempts per request                              |

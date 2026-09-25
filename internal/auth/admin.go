@@ -60,7 +60,7 @@ type KeyView struct {
 	ID        string        `json:"id"`
 	Name      string        `json:"name"`
 	Active    bool          `json:"active"`
-	Override  LimitOverride `json:"overrides"`
+	Overrides LimitOverride `json:"overrides"`
 	CreatedAt time.Time     `json:"created_at"`
 }
 

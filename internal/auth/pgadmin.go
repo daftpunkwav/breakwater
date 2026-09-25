@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// CreateKeyLengthID namespaces generated identifiers.
+// Identifier prefixes keep generated user ids and key ids in distinct
+// namespaces.
 const (
 	userIDPrefix = "u_"
 	keyIDPrefix  = "k_"
@@ -111,12 +113,32 @@ func (s *PG) SetUserLimits(ctx context.Context, userID string, o LimitOverride) 
 	return nil
 }
 
-// CreateKey implements AdminStore.
+// CreateKey implements AdminStore. The cap check and the insert run in
+// one transaction holding the tenant row lock: two concurrent CreateKey
+// calls for one user serialize, so the MaxKeysPerUser ceiling cannot be
+// raced past the way a plain check-then-insert allows.
 func (s *PG) CreateKey(ctx context.Context, userID, name string) (IssuedKey, error) {
-	var count int64
-	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM api_keys WHERE tenant_id = $1`, userID).Scan(&count)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return IssuedKey{}, fmt.Errorf("auth: begin create key: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the tenant's row for the check-then-insert span. A missing
+	// row is the unknown-user sentinel — the same answer the foreign
+	// key would give, one query earlier.
+	var locked string
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM tenants WHERE id = $1 FOR UPDATE`, userID).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return IssuedKey{}, fmt.Errorf("%w: %s", ErrUnknownUser, userID)
+		}
+		return IssuedKey{}, fmt.Errorf("auth: lock user: %w", err)
+	}
+
+	var count int64
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM api_keys WHERE tenant_id = $1`, userID).Scan(&count); err != nil {
 		return IssuedKey{}, fmt.Errorf("auth: count keys: %w", err)
 	}
 	if count >= MaxKeysPerUser {
@@ -133,13 +155,12 @@ func (s *PG) CreateKey(ctx context.Context, userID, name string) (IssuedKey, err
 		return IssuedKey{}, err
 	}
 	var createdAt time.Time
-	err = s.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO api_keys (id, tenant_id, key_hash, name) VALUES ($1, $2, $3, $4)
 		 RETURNING created_at`,
 		id, userID, hashKey(raw), name).Scan(&createdAt)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-		return IssuedKey{}, fmt.Errorf("%w: %s", ErrUnknownUser, userID)
+	if err == nil {
+		err = tx.Commit(ctx)
 	}
 	if err != nil {
 		return IssuedKey{}, fmt.Errorf("auth: create key: %w", err)
@@ -169,7 +190,7 @@ func (s *PG) Keys(ctx context.Context, userID string) ([]KeyView, error) {
 			return nil, fmt.Errorf("auth: scan key: %w", err)
 		}
 		v.Active = status == "active"
-		if v.Override, err = ParseOverride(raw); err != nil {
+		if v.Overrides, err = ParseOverride(raw); err != nil {
 			return nil, fmt.Errorf("auth: key %s overrides: %w", v.ID, err)
 		}
 		out = append(out, v)

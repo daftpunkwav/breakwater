@@ -192,12 +192,20 @@ func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response
 	return circuit.OutcomeClientFault, statusErr
 }
 
+// clientFault reports whether a failed exchange was the client's own
+// doing: a cancel-flavored error while the client request context is
+// canceled. Breaker accounting and the routing observer apply this one
+// verdict, so a disconnect is judged identically wherever it surfaces.
+func clientFault(requestCtx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && requestCtx != nil &&
+		requestCtx.Err() != nil && errors.Is(requestCtx.Err(), context.Canceled)
+}
+
 // transportOutcome maps a failed exchange to the breaker accounting:
 // a client disconnect is nobody's fault but the network's; every other
 // failed exchange — timeout, reset, refused — indicts the upstream.
 func transportOutcome(requestCtx context.Context, err error) circuit.Outcome {
-	if errors.Is(err, context.Canceled) && requestCtx.Err() != nil &&
-		errors.Is(requestCtx.Err(), context.Canceled) {
+	if clientFault(requestCtx, err) {
 		return circuit.OutcomeClientFault
 	}
 	return circuit.OutcomeServerFault

@@ -13,8 +13,9 @@
  * - Enforce the degradation policy: a limiter backend error is
  *   fail-closed (a gateway that cannot limit must not forward)
  *
- * Stage order: auth -> limiter -> quota; the limiter stage owns the
- * single body read the quota stage also relies on.
+ * Stage order: auth -> model authorization -> concurrency -> limiter
+ * -> quota -> cache; the limiter stage owns the single body read the
+ * quota stage also relies on.
  */
 package limiter
 

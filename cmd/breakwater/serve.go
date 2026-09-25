@@ -103,6 +103,10 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		concurrencyGate := limiter.NewConcurrency()
 		governance = append(governance,
 			pipeline.AuthStage(authStore),
+			// Tier model authorization before every spend and before the
+			// cache: the cache key is the request body alone, so a replay
+			// must never bypass the tier's allow/deny decision.
+			pipeline.ModelAuthzStage(),
 			// Concurrency sits before the rate limit: a request rejected
 			// for concurrency must not consume rate budget or quota.
 			limiter.ConcurrencyMiddleware(concurrencyGate, metrics),

@@ -97,6 +97,19 @@ func TestAdminQuotaTopUp(t *testing.T) {
 			t.Fatalf("body %q status = %d, want 400", body, rec.Code)
 		}
 	}
+
+	// A typo'd extra member is rejected instead of silently ignored on
+	// a balance write.
+	req = httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+		strings.NewReader(`{"balance":1,"persist":false}`))
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown member status = %d, want 400", rec.Code)
+	}
+	if received != 500 {
+		t.Fatalf("a rejected top-up reached the ledger: %d", received)
+	}
 	if received == -1 {
 		t.Fatal("a rejected top-up must not reach the ledger")
 	}

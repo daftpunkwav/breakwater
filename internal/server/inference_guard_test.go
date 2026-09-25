@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -87,6 +88,29 @@ func TestInferenceRejectsMissingModel(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "model is required") {
 		t.Fatalf("body = %s, want the model-presence rejection", rec.Body.String())
+	}
+}
+
+// TestInferenceDeniesModelOutsideTier pins the handler's own tier check:
+// in the ungoverned assembly (no pipeline authz stage in front — the
+// no-identity deployment mode) the inference handler is the last line
+// of the fail-closed model rule. When the stage IS installed, it
+// rejects first and this branch is defense in depth.
+func TestInferenceDeniesModelOutsideTier(t *testing.T) {
+	t.Parallel()
+	handler := chatHandler(t, []upstream.Upstream{usageLessUpstream{}})
+	carrier := &pipeline.Carrier{
+		Format: protocol.FormatOpenAIChat,
+		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"m1"}}},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"m2","messages":[{"role":"user","content":"hi"}]}`))
+	req = req.WithContext(pipeline.WithCarrier(req.Context(), carrier))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "model_not_allowed") {
+		t.Fatalf("status = %d body = %s, want 403 model_not_allowed", rec.Code, rec.Body.String())
 	}
 }
 

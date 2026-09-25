@@ -13,8 +13,9 @@
  * - Nothing else: balance provisioning belongs to the admin surface,
  *   abandoned leases to the sweeper
  *
- * Stage order: auth -> limiter -> quota; this stage reuses the token
- * estimate the limiter stage computed.
+ * Stage order: auth -> model authorization -> concurrency -> limiter
+ * -> quota -> cache; this stage reuses the token estimate the limiter
+ * stage computed.
  */
 package quota
 

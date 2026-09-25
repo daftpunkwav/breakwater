@@ -6,6 +6,8 @@
  * needs (PRD F9), never more.
  *
  * Responsibilities:
+ * - Own the surface's shared machinery: the bearer guard, the route
+ *   dispatch, the strict body decoder and the JSON writer
  * - Serve GET /admin/tenants/{id}/quota, PUT the same path (top-up or
  *   correction), GET /admin/breakers, GET /admin/routing and PUT
  *   /admin/models/{id} and /admin/upstreams/{id} (enable/disable)
@@ -13,7 +15,8 @@
  *   disables authentication (local development only)
  * - Nothing else: quota and breaker data come from injected lookups;
  *   the switches are the one mutable control object, and the only
- *   place a live request path and the admin surface meet
+ *   place a live request path and the admin surface meet; the identity
+ *   management endpoints live in identityadmin.go
  *
  * The PUT paths are the surface's writes. They exist because prepaid
  * balances with no way to top up are a dead end, and because routing
@@ -109,50 +112,9 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.guarded(w, r, http.MethodGet, a.serveBreakers)
 	case r.URL.Path == "/admin/routing":
 		a.guarded(w, r, http.MethodGet, a.serveRouting)
-	case r.URL.Path == "/admin/users":
-		if r.Method == http.MethodPost {
-			a.guarded(w, r, http.MethodPost, a.serveCreateUser)
-		} else {
-			a.guarded(w, r, http.MethodGet, a.serveListUsers)
-		}
-	case strings.HasPrefix(r.URL.Path, "/admin/users/"):
-		rest := strings.TrimPrefix(r.URL.Path, "/admin/users/")
-		switch {
-		case strings.HasSuffix(rest, "/limits"):
-			id := strings.TrimSuffix(rest, "/limits")
-			a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-				a.serveUserLimits(w, r, id)
-			})
-		case strings.HasSuffix(rest, "/keys"):
-			id := strings.TrimSuffix(rest, "/keys")
-			if r.Method == http.MethodPost {
-				a.guarded(w, r, http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
-					a.serveCreateKey(w, r, id)
-				})
-			} else {
-				a.guarded(w, r, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-					a.serveListKeys(w, r, id)
-				})
-			}
-		default:
-			http.NotFound(w, r)
-		}
-	case strings.HasPrefix(r.URL.Path, "/admin/keys/"):
-		rest := strings.TrimPrefix(r.URL.Path, "/admin/keys/")
-		switch {
-		case strings.HasSuffix(rest, "/limits"):
-			id := strings.TrimSuffix(rest, "/limits")
-			a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-				a.serveKeyLimits(w, r, id)
-			})
-		case strings.HasSuffix(rest, "/status"):
-			id := strings.TrimSuffix(rest, "/status")
-			a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-				a.serveKeyStatus(w, r, id)
-			})
-		default:
-			http.NotFound(w, r)
-		}
+	case r.URL.Path == "/admin/users" || strings.HasPrefix(r.URL.Path, "/admin/users/") ||
+		strings.HasPrefix(r.URL.Path, "/admin/keys/"):
+		a.serveIdentity(w, r)
 	case strings.HasPrefix(r.URL.Path, "/admin/models/"):
 		a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
 			a.serveModelSwitch(w, r, strings.TrimPrefix(r.URL.Path, "/admin/models/"))
@@ -239,7 +201,10 @@ func (a *Admin) serveQuotaTopUp(w http.ResponseWriter, r *http.Request, tenantID
 	var body struct {
 		Balance *int64 `json:"balance"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes)).Decode(&body); err != nil || body.Balance == nil {
+	if !decodeAdminJSON(w, r, &body) {
+		return
+	}
+	if body.Balance == nil {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
 			"body must be {\"balance\": <non-negative integer>}")
 		return
@@ -328,12 +293,18 @@ func (a *Admin) serveUpstreamSwitch(w http.ResponseWriter, r *http.Request, id s
 	writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "enabled": enabled})
 }
 
-// decodeEnabled parses the {"enabled": bool} switch payload.
+// decodeEnabled parses the {"enabled": bool} switch payload shared by
+// /admin/models, /admin/upstreams and /admin/keys/{id}/status. A
+// typo'd extra member is rejected like on every other governance
+// write, never silently ignored.
 func decodeEnabled(w http.ResponseWriter, r *http.Request) (bool, bool) {
 	var body struct {
 		Enabled *bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes)).Decode(&body); err != nil || body.Enabled == nil {
+	if !decodeAdminJSON(w, r, &body) {
+		return false, false
+	}
+	if body.Enabled == nil {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
 			"body must be {\"enabled\": true|false}")
 		return false, false
@@ -341,164 +312,34 @@ func decodeEnabled(w http.ResponseWriter, r *http.Request) (bool, bool) {
 	return *body.Enabled, true
 }
 
-// serveCreateUser handles POST /admin/users.
-func (a *Admin) serveCreateUser(w http.ResponseWriter, r *http.Request) {
-	if a.identity == nil {
-		http.NotFound(w, r)
-		return
-	}
-	var body struct {
-		Name string `json:"name"`
-		Role string `json:"role"`
-		Tier string `json:"tier"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes)).Decode(&body); err != nil || body.Name == "" || body.Tier == "" {
+// decodeAdminJSON parses one admin write body within the size cap.
+// Unknown fields are rejected: a typo'd member (say "rpms" for "rpm")
+// must fail the write loudly, never land as a silent no-op on a
+// governance surface.
+func decodeAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-			`body must be {"name": string, "tier": string, "role": "user"|"admin" (default user)}`)
-		return
+			"malformed or unexpected request body")
+		return false
 	}
-	role := auth.RoleUser
-	if body.Role != "" && body.Role != string(auth.RoleUser) {
-		role = auth.Role(body.Role)
-	}
-	id, err := a.identity.CreateUser(r.Context(), body.Name, role, body.Tier)
-	if err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "name": body.Name, "role": string(role), "tier": body.Tier})
+	return true
 }
 
-func (a *Admin) serveListUsers(w http.ResponseWriter, r *http.Request) {
-	if a.identity == nil {
-		http.NotFound(w, r)
-		return
-	}
-	users, err := a.identity.Users(r.Context())
-	if err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	if users == nil {
-		users = []auth.UserView{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users})
-}
-
-// serveUserLimits handles PUT /admin/users/{id}/limits: the body is a
-// full LimitOverride document and replaces the user's layer. Every key
-// of the user resolves through it; changes surface within the auth
-// cache TTL.
-func (a *Admin) serveUserLimits(w http.ResponseWriter, r *http.Request, userID string) {
-	if a.identity == nil || userID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	o, ok := decodeOverride(w, r)
-	if !ok {
-		return
-	}
-	if err := a.identity.SetUserLimits(r.Context(), userID, o); err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": userID, "overrides": o})
-}
-
-// serveCreateKey handles POST /admin/users/{id}/keys. The raw key is
-// returned exactly once — the store keeps only the hash.
-func (a *Admin) serveCreateKey(w http.ResponseWriter, r *http.Request, userID string) {
-	if a.identity == nil || userID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	var body struct {
-		Name string `json:"name"`
-	}
-	_ = json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes)).Decode(&body)
-	issued, err := a.identity.CreateKey(r.Context(), userID, body.Name)
-	if err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, issued)
-}
-
-func (a *Admin) serveListKeys(w http.ResponseWriter, r *http.Request, userID string) {
-	if a.identity == nil || userID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	keys, err := a.identity.Keys(r.Context(), userID)
-	if err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	if keys == nil {
-		keys = []auth.KeyView{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
-}
-
-// serveKeyLimits handles PUT /admin/keys/{id}/limits: the body is a
-// full LimitOverride document for the key's layer.
-func (a *Admin) serveKeyLimits(w http.ResponseWriter, r *http.Request, keyID string) {
-	if a.identity == nil || keyID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	o, ok := decodeOverride(w, r)
-	if !ok {
-		return
-	}
-	if err := a.identity.SetKeyLimits(r.Context(), keyID, o); err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": keyID, "overrides": o})
-}
-
-func (a *Admin) serveKeyStatus(w http.ResponseWriter, r *http.Request, keyID string) {
-	if a.identity == nil || keyID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	active, ok := decodeEnabled(w, r)
-	if !ok {
-		return
-	}
-	if err := a.identity.SetKeyStatus(r.Context(), keyID, active); err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": keyID, "active": active})
-}
-
-// decodeOverride parses a LimitOverride payload (an omitted field
-// means "inherit"; the caller may also send {} to clear a layer).
-func decodeOverride(w http.ResponseWriter, r *http.Request) (auth.LimitOverride, bool) {
-	var o auth.LimitOverride
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes)).Decode(&o); err != nil {
+// decodeAdminJSONOptional is decodeAdminJSON for the endpoints whose
+// payload is optional (the unnamed-key issuance): an absent body (EOF)
+// decodes as the zero value, every other malformed or unknown-member
+// document is rejected exactly the same way.
+func decodeAdminJSONOptional(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-			"body must be a limits override document")
-		return auth.LimitOverride{}, false
+			"malformed or unexpected request body")
+		return false
 	}
-	return o, true
-}
-
-// renderIdentityError maps the admin store's sentinel errors onto the
-// management surface's status codes.
-func (a *Admin) renderIdentityError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownKey),
-		errors.Is(err, auth.ErrUnknownTier):
-		protocol.WriteError(w, http.StatusNotFound, "identity_unknown", err.Error())
-	case errors.Is(err, auth.ErrTooManyKeys):
-		protocol.WriteError(w, http.StatusConflict, "key_limit_reached", err.Error())
-	default:
-		protocol.WriteError(w, http.StatusServiceUnavailable, "identity_store_unavailable",
-			"identity store unavailable")
-	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

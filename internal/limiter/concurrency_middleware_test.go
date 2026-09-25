@@ -20,7 +20,8 @@ import (
 )
 
 // serveThroughConcurrency runs one carrier-backed request through the
-// stage; the terminal handler blocks on the channel until released.
+// stage and returns the recorder; the terminal handler answers
+// immediately, so each call takes and releases its slot synchronously.
 func serveThroughConcurrency(t *testing.T, g *Concurrency, tenant auth.Tenant) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(threeWordBody))
@@ -53,6 +54,11 @@ func TestConcurrencyMiddlewareRejectsOverCeiling(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "concurrency_limit_exceeded") {
 		t.Fatalf("body = %s, want the concurrency envelope", rec.Body.String())
+	}
+	// The same 429 header discipline as the rate-limit stage: the
+	// rejection carries Retry-After guidance.
+	if after := rec.Header().Get("Retry-After"); after != "1" {
+		t.Fatalf("Retry-After = %q, want \"1\"", after)
 	}
 }
 

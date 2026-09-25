@@ -246,7 +246,9 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	if r.exec.observer != nil {
 		// A client walking away cancels the exchange; that is nobody's
 		// fault but the network's own and must not demote the upstream.
-		failed := err != nil && !errors.Is(err, context.Canceled)
+		// The verdict is the same clientFault rule the breaker
+		// accounting applies — one story for a disconnect.
+		failed := err != nil && !clientFault(r.ctx, err)
 		r.exec.observer.ObserveUpstream(cand.ID(), time.Since(started), failed)
 	}
 	if perm != nil {
