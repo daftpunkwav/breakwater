@@ -90,6 +90,13 @@ func ingestAnthropic(body []byte) (IngestResult, error) {
 		chat.Messages = append(chat.Messages, ChatMessage{Role: msg.Role, Content: text})
 	}
 
+	// Translated streams depend on the final usage chunk for settlement
+	// (PRD Q2): providers only send it when the canonical request asks
+	// for it. The client-facing Messages stream never carries this
+	// option — it is gateway-internal plumbing.
+	if chat.Stream {
+		chat.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
 	upstream, err := json.Marshal(chat)
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("encode canonical request: %w", err)

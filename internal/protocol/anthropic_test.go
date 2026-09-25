@@ -47,6 +47,22 @@ func TestIngestAnthropic(t *testing.T) {
 	}
 }
 
+func TestIngestAnthropicStreamRequestsUsage(t *testing.T) {
+	t.Parallel()
+	result, err := Ingest(FormatAnthropicMessages, []byte(
+		`{"model":"m","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	chat, err := ParseChatRequest(result.UpstreamBody)
+	if err != nil {
+		t.Fatalf("canonical body: %v", err)
+	}
+	if chat.StreamOptions == nil || !chat.StreamOptions.IncludeUsage {
+		t.Fatalf("canonical body = %s, want stream_options.include_usage", result.UpstreamBody)
+	}
+}
+
 func TestIngestAnthropicRequiresMaxTokens(t *testing.T) {
 	t.Parallel()
 	if _, err := Ingest(FormatAnthropicMessages, []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)); err == nil {
