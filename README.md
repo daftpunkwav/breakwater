@@ -26,7 +26,7 @@ tests, metrics and fault-injection experiments.
 | `internal/cache`      | Exact-match cache, hand-written singleflight, eligibility |
 | `internal/circuit`    | Three-state breaker (plus a nop for breaker-less runs)    |
 | `internal/retry`      | Attempt loop, budgets, retryability classifier            |
-| `internal/router`     | Static priority routing with breaker pre-filtering        |
+| `internal/router`     | Candidate selection: static priority or measured-latency order, breaker pre-filtering, runtime operator switches |
 | `internal/upstream`   | Provider port + OpenAI-compatible adapter                 |
 | `internal/config`     | Configuration schema and loading                          |
 | `internal/obs`        | Bounded async access log, hand-written metrics registry   |
@@ -63,6 +63,20 @@ client-supplied id is adopted verbatim, otherwise one is minted
 (`req-` prefix). The id travels to the upstream exchange and into the
 access log, so one identifier joins the client-visible outcome, the
 gateway's log line and the provider's records.
+
+### Model names and aliases
+
+The gateway routes on the model name the client sends. A `models`
+entry of the form `"client=real"` serves the client-facing name by
+forwarding the provider-real name — the adapter rewrites the request
+body's `model` field, everything else passes through verbatim:
+
+    "models": ["claude-sonnet=claude-sonnet-4-20250514", "deepseek-chat"]
+
+With the same client-facing name bound to several upstreams, one
+request carries its own failover chain — and because each upstream
+rewrites to its own real name, a mid-request failover can cross
+providers and models, not just hosts.
 
 All three walk the identical governance pipeline (auth → rate limit →
 quota → cache) and the identical relay engine; only the wire differs.
@@ -112,7 +126,8 @@ All configuration is environment-based; core knobs:
 | Variable                              | Default        | Effect                                                     |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
 | `BREAKWATER_ADDR`                     | `:8080`        | Listen address                                             |
-| `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `models`; list order = failover priority) |
+| `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `models`; list order = failover priority; `"client=real"` entries alias model names) |
+| `BREAKWATER_ROUTING_STRATEGY`         | `static`       | Candidate order: `static` (configured order) or `latency` (measured exchange latency first, configured order as tie-break; untried upstreams are explored first) |
 | `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants`); arms the governance pipeline |
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
@@ -135,6 +150,9 @@ All configuration is environment-based; core knobs:
 - `GET /admin/tenants/{id}/quota` — current balance
 - `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
+- `GET /admin/routing` — every known model and upstream with its current eligibility
+- `PUT /admin/models/{id}` — enable or disable a model (`{"enabled": false}`); disabled models refuse requests with `403 model_disabled`
+- `PUT /admin/upstreams/{id}` — enable or disable an upstream; disabled upstreams drop out of every candidate list. Switches are in-memory and reset on restart.
 
 ## Fault injection interface
 
@@ -193,6 +211,8 @@ libraries are rejected by lint rule.
 ## Documentation
 
 Evidence methodology and scenario sets live in `docs/`:
-`docs/BENCHMARK.md` (load test numbers) and `docs/CHAOS-REPORT.md`
-(fault-injection timelines). They are filled from real runs of the
-`loadtest/` scenarios — see `loadtest/README.md`.
+`docs/BENCHMARK.md` (load test numbers), `docs/CHAOS-REPORT.md`
+(fault-injection timelines) and `docs/DEPLOY-LOCAL.md` (wiring real
+providers and agent applications into a local gateway). BENCHMARK and
+CHAOS-REPORT are filled from real runs of the `loadtest/` scenarios —
+see `loadtest/README.md`.

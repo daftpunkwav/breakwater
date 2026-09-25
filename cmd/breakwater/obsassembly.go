@@ -72,8 +72,9 @@ func newAccessLog(cfg config.Config, logger *slog.Logger) (*accessLog, error) {
 	return &accessLog{sink: l, logger: l, file: file}, nil
 }
 
-// buildAdmin binds the admin endpoints to the live backends.
-func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, upstreamIDs []string) http.Handler {
+// buildAdmin binds the admin endpoints to the live backends; options
+// forward to server.NewAdmin (e.g. the routing switches).
+func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, upstreamIDs []string, opts ...server.AdminOption) http.Handler {
 	balances := func(r *http.Request, tenantID string) (int64, error) {
 		return gov.ledger.Balance(r.Context(), tenantID)
 	}
@@ -90,7 +91,7 @@ func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, ups
 		}
 		return views
 	}
-	return server.NewAdmin(cfg.Security.AdminToken, balances, setBalance, states)
+	return server.NewAdmin(cfg.Security.AdminToken, balances, setBalance, states, opts...)
 }
 
 // upstreamIDs lists the configured upstream identifiers in order.

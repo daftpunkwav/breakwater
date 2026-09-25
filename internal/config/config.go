@@ -31,6 +31,16 @@ type Config struct {
 	Cache             Cache
 	Circuit           Circuit
 	Security          Security
+	// Routing selects the candidate ordering policy of the router.
+	Routing Routing
+}
+
+// Routing configures how the router orders eligible candidates.
+type Routing struct {
+	// Strategy is "static" (configured order, the default) or "latency"
+	// (prefer the lowest measured upstream exchange latency). Health
+	// gating (breakers) and operator switches apply in both modes.
+	Strategy string
 }
 
 // Cache configures the exact-match response cache.
@@ -64,7 +74,10 @@ type Upstream struct {
 	APIKey string `json:"api_key"`
 	// ProbeURL is the health endpoint; empty disables probing.
 	ProbeURL string `json:"probe_url"`
-	// Models are the model identifiers served; "*" is the wildcard.
+	// Models are the model identifiers served; "*" is the wildcard. An
+	// entry of the form "client=real" serves the client-facing name
+	// "client" by forwarding the provider-real name "real" — the
+	// gateway routes on the client name, the adapter rewrites the body.
 	Models []string `json:"models"`
 }
 

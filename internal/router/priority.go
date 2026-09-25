@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
@@ -27,10 +28,11 @@ import (
 // wildcardModel matches every requested model.
 const wildcardModel = "*"
 
-// ErrUnavailable reports that the model has bound upstreams but every
-// one of them is currently circuit-open. Callers map it to 503; the
-// model-not-found 404 is reserved for models with no binding at all.
-var ErrUnavailable = errors.New("router: every upstream for the model is circuit-open")
+// ErrUnavailable reports that the model has bound upstreams but none
+// of them is currently eligible — every one is circuit-open or
+// operator-disabled. Callers map it to 503; the model-not-found 404 is
+// reserved for models with no binding at all.
+var ErrUnavailable = errors.New("router: every upstream for the model is unavailable")
 
 // entry binds one upstream to the models it serves.
 type entry struct {
@@ -38,11 +40,15 @@ type entry struct {
 	upstream upstream.Upstream
 }
 
-// Priority is the static model-to-upstreams router. It is immutable
-// after construction and therefore safe for concurrent use.
+// Priority is the static model-to-upstreams router. Binding order is
+// immutable after construction; the optional switch and latency
+// tracker overlay runtime state on top of it. Safe for concurrent use.
 type Priority struct {
-	entries []entry
-	breaker circuit.Breaker
+	entries  []entry
+	breaker  circuit.Breaker
+	control  *Switch
+	strategy Strategy
+	tracker  *Tracker
 }
 
 // PriorityOption customizes a Priority.
@@ -53,6 +59,28 @@ type PriorityOption func(*Priority)
 // accounting happen at the attempt).
 func WithBreaker(b circuit.Breaker) PriorityOption {
 	return func(p *Priority) { p.breaker = b }
+}
+
+// WithSwitch installs the runtime traffic control. A model disabled by
+// an operator fails the candidate lookup with ErrDisabled; a disabled
+// upstream drops out of the candidate list like a breaker-open one.
+func WithSwitch(s *Switch) PriorityOption {
+	return func(p *Priority) { p.control = s }
+}
+
+// WithStrategy sets the candidate ordering. StrategyStatic (the
+// default) keeps the configured order; StrategyLatency sorts the
+// eligible candidates by their measured exchange latency, keeping the
+// configured order as the tie-break.
+func WithStrategy(s Strategy) PriorityOption {
+	return func(p *Priority) { p.strategy = s }
+}
+
+// WithTracker installs the latency tracker consulted by
+// StrategyLatency. Without a tracker the latency strategy degrades to
+// the static order.
+func WithTracker(t *Tracker) PriorityOption {
+	return func(p *Priority) { p.tracker = t }
 }
 
 // NewPriority builds a router from ordered model bindings. Bindings
@@ -87,10 +115,15 @@ type Binding struct {
 }
 
 // Candidates implements Router: every upstream bound to the model (or
-// the wildcard), in binding order, with breaker-open upstreams excluded.
-// When the model has bindings but all of them are breaker-open, the
-// error is ErrUnavailable, not a no-binding failure.
+// the wildcard), in binding order, with operator-disabled and
+// breaker-open upstreams excluded. A model disabled by an operator
+// fails with ErrDisabled. When the model has bindings but none of them
+// is currently eligible, the error is ErrUnavailable, not a
+// no-binding failure.
 func (p *Priority) Candidates(ctx context.Context, model string) ([]upstream.Upstream, error) {
+	if p.control != nil && !p.control.ModelEnabled(model) {
+		return nil, ErrDisabled
+	}
 	candidates := make([]upstream.Upstream, 0, len(p.entries))
 	bound := 0
 	for _, e := range p.entries {
@@ -100,6 +133,9 @@ func (p *Priority) Candidates(ctx context.Context, model string) ([]upstream.Ups
 			continue
 		}
 		bound++
+		if p.control != nil && !p.control.UpstreamEnabled(e.upstream.ID()) {
+			continue
+		}
 		if p.breaker != nil && p.breaker.StateOf(ctx, e.upstream.ID()) == circuit.StateOpen {
 			continue
 		}
@@ -110,6 +146,11 @@ func (p *Priority) Candidates(ctx context.Context, model string) ([]upstream.Ups
 			return nil, ErrUnavailable
 		}
 		return nil, fmt.Errorf("router: no upstream serves model %q", model)
+	}
+	if p.strategy == StrategyLatency && p.tracker != nil {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return p.tracker.Score(candidates[i].ID()) < p.tracker.Score(candidates[j].ID())
+		})
 	}
 	return candidates, nil
 }

@@ -71,6 +71,7 @@ const (
 
 	envAccessLogPath = "BREAKWATER_ACCESS_LOG_PATH"
 	envAdminToken    = "BREAKWATER_ADMIN_TOKEN"
+	envRouting       = "BREAKWATER_ROUTING_STRATEGY"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -114,6 +115,9 @@ func Load() (Config, error) {
 			FailThreshold: defaultCircuitThreshold,
 			Cooldown:      defaultCircuitCooldown,
 			ProbeTimeout:  defaultCircuitProbe,
+		},
+		Routing: Routing{
+			Strategy: envString(envRouting, "static"),
 		},
 	}
 
@@ -182,6 +186,11 @@ func Load() (Config, error) {
 	if cfg.Server.ShutdownGrace <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envShutdownGrace)
 	}
+	switch cfg.Routing.Strategy {
+	case "", "static", "latency":
+	default:
+		return Config{}, fmt.Errorf("config: %s must be \"static\" or \"latency\"", envRouting)
+	}
 	if cfg.Obs.AccessLogQueueSize <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envAccessLogQueue)
 	}
@@ -216,6 +225,11 @@ func Load() (Config, error) {
 		}
 		if len(u.Models) == 0 {
 			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
+		}
+		for _, m := range u.Models {
+			if client, real, ok := strings.Cut(m, "="); ok && (client == "" || real == "" || client == "*") {
+				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
+			}
 		}
 	}
 	return cfg, nil

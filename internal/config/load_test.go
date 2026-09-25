@@ -21,7 +21,7 @@ var envVars = []string{
 	envStreamTimeout, envReconcileInterval, envIdentity,
 	envCacheEnabled, envCacheTTL, envCacheCapacity,
 	envCircuitEnabled, envCircuitThreshold, envCircuitCooldown, envCircuitProbe,
-	envAccessLogPath, envAdminToken,
+	envAccessLogPath, envAdminToken, envRouting,
 }
 
 // cleanEnv sets every BREAKWATER_* variable to the empty string, which
@@ -68,6 +68,7 @@ func TestLoadDefaults(t *testing.T) {
 			Cooldown:      30 * time.Second,
 			ProbeTimeout:  5 * time.Second,
 		},
+		Routing: Routing{Strategy: "static"},
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("defaults =\n%+v\nwant\n%+v", cfg, want)
@@ -112,6 +113,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envCircuitThreshold, "9")
 	t.Setenv(envCircuitCooldown, "45s")
 	t.Setenv(envCircuitProbe, "3s")
+	t.Setenv(envRouting, "latency")
 
 	cfg, err := Load()
 	if err != nil {
@@ -160,6 +162,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.Circuit != (Circuit{Enabled: false, FailThreshold: 9, Cooldown: 45 * time.Second, ProbeTimeout: 3 * time.Second}) {
 		t.Fatalf("circuit = %+v", cfg.Circuit)
+	}
+	if cfg.Routing.Strategy != "latency" {
+		t.Fatalf("routing = %+v", cfg.Routing)
 	}
 }
 

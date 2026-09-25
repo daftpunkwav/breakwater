@@ -48,6 +48,9 @@ type Executor struct {
 	classifier retry.Classifier
 	breaker    circuit.Breaker
 	metrics    *obs.Metrics
+	// observer, when set, receives one outcome per upstream attempt for
+	// routing-layer performance tracking.
+	observer UpstreamObserver
 	// streamTimeout bounds a committed stream's whole body; zero means
 	// the client owns the stream's lifetime outright.
 	streamTimeout time.Duration
@@ -70,6 +73,18 @@ func WithClassifier(c retry.Classifier) Option {
 // WithMetrics installs the observation recorder; nil disables.
 func WithMetrics(m *obs.Metrics) Option {
 	return func(e *Executor) { e.metrics = m }
+}
+
+// UpstreamObserver receives one outcome per upstream exchange, for the
+// routing layer's performance tracking. Failed reports an exchange
+// that did not complete; a client disconnect is not a failure.
+type UpstreamObserver interface {
+	ObserveUpstream(upstreamID string, latency time.Duration, failed bool)
+}
+
+// WithUpstreamObserver installs the outcome observer; nil disables.
+func WithUpstreamObserver(o UpstreamObserver) Option {
+	return func(e *Executor) { e.observer = o }
 }
 
 // WithStreamTimeout sets the ceiling of a committed stream's body: a
@@ -226,7 +241,14 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 		perm = p
 	}
 
+	started := time.Now()
 	outcome, err := r.exchange(attemptCtx, cand)
+	if r.exec.observer != nil {
+		// A client walking away cancels the exchange; that is nobody's
+		// fault but the network's own and must not demote the upstream.
+		failed := err != nil && !errors.Is(err, context.Canceled)
+		r.exec.observer.ObserveUpstream(cand.ID(), time.Since(started), failed)
+	}
 	if perm != nil {
 		perm.Report(outcome)
 	}

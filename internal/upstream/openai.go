@@ -39,6 +39,10 @@ type OpenAIConfig struct {
 	APIKey string
 	// ProbeURL is the health endpoint consulted by Probe.
 	ProbeURL string
+	// ModelMap rewrites client-facing model names to the names this
+	// provider actually serves; requests for an unmapped name pass
+	// through unchanged. See ParseModelMap.
+	ModelMap map[string]string
 	// Transport overrides the shared tuned transport; nil selects the
 	// package default. Tests inject single-purpose transports here.
 	Transport *http.Transport
@@ -46,11 +50,12 @@ type OpenAIConfig struct {
 
 // OpenAI is one OpenAI-compatible upstream adapter.
 type OpenAI struct {
-	id      string
-	baseURL string
-	apiKey  string
-	probe   string
-	client  *http.Client
+	id       string
+	baseURL  string
+	apiKey   string
+	probe    string
+	modelMap map[string]string
+	client   *http.Client
 }
 
 // NewOpenAI builds an adapter. It returns an error for a missing ID or
@@ -67,11 +72,12 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error) {
 		transport = DefaultTransport()
 	}
 	return &OpenAI{
-		id:      cfg.ID,
-		baseURL: cfg.BaseURL,
-		apiKey:  cfg.APIKey,
-		probe:   cfg.ProbeURL,
-		client:  &http.Client{Transport: transport},
+		id:       cfg.ID,
+		baseURL:  cfg.BaseURL,
+		apiKey:   cfg.APIKey,
+		probe:    cfg.ProbeURL,
+		modelMap: cfg.ModelMap,
+		client:   &http.Client{Transport: transport},
 	}, nil
 }
 
@@ -79,11 +85,20 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error) {
 func (o *OpenAI) ID() string { return o.id }
 
 // Forward implements Upstream: one POST exchange with the neutral body
-// passed through verbatim. Attempt timeout and cancellation are owned
-// by the caller through ctx.
+// passed through verbatim, after a model rewrite when the client-facing
+// name maps to a provider-real one. Attempt timeout and cancellation
+// are owned by the caller through ctx.
 func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
+	body := req.Body
+	if real, ok := o.modelMap[req.Model]; ok && real != req.Model {
+		rewritten, err := rewriteModelBody(body, real)
+		if err != nil {
+			return nil, fmt.Errorf("upstream %s: %w", o.id, err)
+		}
+		body = rewritten
+	}
 	target := o.baseURL + completionPath
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(req.Body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("upstream %s: build request: %w", o.id, err)
 	}

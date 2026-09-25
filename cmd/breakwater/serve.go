@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -129,7 +130,20 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	if err != nil {
 		return err
 	}
-	rt, err := router.NewPriority(bindings, router.WithBreaker(breaker))
+	// Runtime routing controls and measured-performance tracking: the
+	// switch gates eligibility (admin API), the tracker only orders
+	// candidates when the latency strategy is on.
+	strategy, err := router.ParseStrategy(cfg.Routing.Strategy)
+	if err != nil {
+		return err
+	}
+	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams))
+	tracker := router.NewTracker()
+	rt, err := router.NewPriority(bindings,
+		router.WithBreaker(breaker),
+		router.WithSwitch(routingSwitch),
+		router.WithStrategy(strategy),
+		router.WithTracker(tracker))
 	if err != nil {
 		return err
 	}
@@ -144,6 +158,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		relay.WithBreaker(breaker),
 		relay.WithMetrics(metrics),
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
+		relay.WithUpstreamObserver(trackerObserver{tracker}),
 	)
 
 	// One chain per client format, one route per chain.
@@ -162,9 +177,10 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		ShutdownGrace: cfg.Server.ShutdownGrace,
 		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
-		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams)),
-		Readiness:     mergeReadiness(gov.readiness, identityReady),
-		Version:       version,
+		Admin: buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams),
+			server.WithRouting(routingSwitch)),
+		Readiness: mergeReadiness(gov.readiness, identityReady),
+		Version:   version,
 	})
 
 	publishLogDrops(ctx, metrics, accessLog.logger, dropPublishInterval)
@@ -298,7 +314,16 @@ func publishLogDrops(ctx context.Context, m *obs.Metrics, l *obs.Logger, every t
 	}()
 }
 
-// buildBindings turns configured upstreams into ordered router bindings.
+// trackerObserver adapts the router's tracker to the relay's outcome
+// port: one exchange latency report per attempt.
+type trackerObserver struct{ t *router.Tracker }
+
+func (a trackerObserver) ObserveUpstream(upstreamID string, latency time.Duration, failed bool) {
+	a.t.Record(upstreamID, latency, failed)
+}
+
+// buildBindings turns configured upstreams into ordered router bindings,
+// passing each adapter its "client=real" model rewrites.
 func buildBindings(cfgs []config.Upstream) ([]router.Binding, error) {
 	bindings := make([]router.Binding, 0, len(cfgs))
 	for _, c := range cfgs {
@@ -307,11 +332,48 @@ func buildBindings(cfgs []config.Upstream) ([]router.Binding, error) {
 			BaseURL:  c.BaseURL,
 			APIKey:   c.APIKey,
 			ProbeURL: c.ProbeURL,
+			ModelMap: upstream.ParseModelMap(c.Models),
 		})
 		if err != nil {
 			return nil, err
 		}
-		bindings = append(bindings, router.Binding{Models: c.Models, Upstream: adapter})
+		bindings = append(bindings, router.Binding{Models: clientModels(c.Models), Upstream: adapter})
 	}
 	return bindings, nil
+}
+
+// clientModels strips the "client=real" rewrites down to the
+// client-facing names the router resolves.
+func clientModels(models []string) []string {
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		if client, _, ok := strings.Cut(m, "="); ok && client != "" {
+			names = append(names, client)
+			continue
+		}
+		names = append(names, m)
+	}
+	return names
+}
+
+// knownModels lists every client-facing model name the configuration
+// serves, for the routing switch's typo protection. The wildcard is
+// not a model: disabling it would read as enabled for every concrete
+// request name, so it never enters the switch.
+func knownModels(cfgs []config.Upstream) []string {
+	seen := make(map[string]struct{})
+	var names []string
+	for _, c := range cfgs {
+		for _, m := range clientModels(c.Models) {
+			if m == "*" {
+				continue
+			}
+			if _, ok := seen[m]; ok {
+				continue
+			}
+			seen[m] = struct{}{}
+			names = append(names, m)
+		}
+	}
+	return names
 }

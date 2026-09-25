@@ -55,6 +55,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"zero circuit cooldown", envCircuitCooldown, "0s", "must be positive", false},
 		{"bad circuit probe", envCircuitProbe, "soon", "parse", false},
 		{"zero circuit probe", envCircuitProbe, "0s", "must be positive", false},
+		{"unknown routing strategy", envRouting, "cheapest", "static", false},
+		{"empty model alias half", envUpstreams, `[{"id":"u","base_url":"http://x","models":["=real"]}]`, "invalid model binding", true},
+		{"empty real alias half", envUpstreams, `[{"id":"u","base_url":"http://x","models":["client="]}]`, "invalid model binding", true},
+		{"wildcard alias", envUpstreams, `[{"id":"u","base_url":"http://x","models":["*=real"]}]`, "invalid model binding", true},
 	}
 
 	for _, tc := range cases {

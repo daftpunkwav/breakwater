@@ -1,20 +1,24 @@
 /**
  * @file admin
  * @description The minimal management API: tenant quota balances
- * (read + top-up) and breaker states — exactly what operating the
- * gateway needs (PRD F9), never more.
+ * (read + top-up), breaker states and the runtime traffic switches
+ * over models and upstreams — exactly what operating the gateway
+ * needs (PRD F9), never more.
  *
  * Responsibilities:
  * - Serve GET /admin/tenants/{id}/quota, PUT the same path (top-up or
- *   correction) and GET /admin/breakers
+ *   correction), GET /admin/breakers, GET /admin/routing and PUT
+ *   /admin/models/{id} and /admin/upstreams/{id} (enable/disable)
  * - Guard the surface with the configured admin token; an empty token
  *   disables authentication (local development only)
- * - Nothing else: the data comes from injected lookups; no governance
- *   decisions are made or changed here
+ * - Nothing else: quota and breaker data come from injected lookups;
+ *   the switches are the one mutable control object, and the only
+ *   place a live request path and the admin surface meet
  *
- * The PUT path is the only write on the surface. It exists because a
- * prepaid balance with no way to top up is a dead end: drained tenants
- * could never return.
+ * The PUT paths are the surface's writes. They exist because prepaid
+ * balances with no way to top up are a dead end, and because routing
+ * changes (disable a misbehaving model or provider) must not require
+ * a restart.
  */
 package server
 
@@ -29,6 +33,7 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/quota"
+	"github.com/daftpunkwav/breakwater/internal/router"
 )
 
 // maxAdminBodyBytes bounds the body of admin writes; they carry one
@@ -61,12 +66,26 @@ type Admin struct {
 	balances BalanceLookup
 	setter   BalanceWriter
 	breakers BreakerStates
+	routing  *router.Switch
+}
+
+// AdminOption customizes an Admin.
+type AdminOption func(*Admin)
+
+// WithRouting installs the runtime traffic switches; nil (the default)
+// omits the routing endpoints.
+func WithRouting(s *router.Switch) AdminOption {
+	return func(a *Admin) { a.routing = s }
 }
 
 // NewAdmin builds the admin handler. A nil lookup or writer omits the
 // corresponding endpoint.
-func NewAdmin(token string, balances BalanceLookup, setter BalanceWriter, breakers BreakerStates) *Admin {
-	return &Admin{token: token, balances: balances, setter: setter, breakers: breakers}
+func NewAdmin(token string, balances BalanceLookup, setter BalanceWriter, breakers BreakerStates, opts ...AdminOption) *Admin {
+	a := &Admin{token: token, balances: balances, setter: setter, breakers: breakers}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // ServeHTTP implements http.Handler: the bearer guard first, then the
@@ -79,6 +98,16 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/admin/breakers":
 		a.guarded(w, r, http.MethodGet, a.serveBreakers)
+	case r.URL.Path == "/admin/routing":
+		a.guarded(w, r, http.MethodGet, a.serveRouting)
+	case strings.HasPrefix(r.URL.Path, "/admin/models/"):
+		a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
+			a.serveModelSwitch(w, r, strings.TrimPrefix(r.URL.Path, "/admin/models/"))
+		})
+	case strings.HasPrefix(r.URL.Path, "/admin/upstreams/"):
+		a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
+			a.serveUpstreamSwitch(w, r, strings.TrimPrefix(r.URL.Path, "/admin/upstreams/"))
+		})
 	case strings.HasPrefix(r.URL.Path, "/admin/tenants/") && strings.HasSuffix(r.URL.Path, "/quota"):
 		tenantID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/tenants/"), "/quota")
 		if tenantID == "" {
@@ -190,6 +219,73 @@ func (a *Admin) serveBreakers(w http.ResponseWriter, r *http.Request) {
 		states = []BreakerView{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"breakers": states})
+}
+
+// serveRouting handles GET /admin/routing: every known model and
+// upstream with its current eligibility.
+func (a *Admin) serveRouting(w http.ResponseWriter, r *http.Request) {
+	if a.routing == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.routing.View())
+}
+
+// serveModelSwitch handles PUT /admin/models/{id}: the body is
+// {"enabled": false} and takes the model out of routing immediately.
+func (a *Admin) serveModelSwitch(w http.ResponseWriter, r *http.Request, model string) {
+	if a.routing == nil || model == "" {
+		http.NotFound(w, r)
+		return
+	}
+	enabled, ok := decodeEnabled(w, r)
+	if !ok {
+		return
+	}
+	if err := a.routing.SetModel(model, enabled); err != nil {
+		if errors.Is(err, router.ErrUnknownModel) {
+			protocol.WriteError(w, http.StatusNotFound, "model_unknown", err.Error())
+			return
+		}
+		protocol.WriteError(w, http.StatusInternalServerError, "routing_switch_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"model": model, "enabled": enabled})
+}
+
+// serveUpstreamSwitch handles PUT /admin/upstreams/{id}: the body is
+// {"enabled": false} and drops the upstream from every candidate list.
+func (a *Admin) serveUpstreamSwitch(w http.ResponseWriter, r *http.Request, id string) {
+	if a.routing == nil || id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	enabled, ok := decodeEnabled(w, r)
+	if !ok {
+		return
+	}
+	if err := a.routing.SetUpstream(id, enabled); err != nil {
+		if errors.Is(err, router.ErrUnknownUpstream) {
+			protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
+			return
+		}
+		protocol.WriteError(w, http.StatusInternalServerError, "routing_switch_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "enabled": enabled})
+}
+
+// decodeEnabled parses the {"enabled": bool} switch payload.
+func decodeEnabled(w http.ResponseWriter, r *http.Request) (bool, bool) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes)).Decode(&body); err != nil || body.Enabled == nil {
+		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"body must be {\"enabled\": true|false}")
+		return false, false
+	}
+	return *body.Enabled, true
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

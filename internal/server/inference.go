@@ -80,13 +80,21 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := s.router.Candidates(r.Context(), carrier.Chat.Model)
 	if err != nil {
+		if errors.Is(err, router.ErrDisabled) {
+			// An operator switched the model off: a deliberate refusal,
+			// distinct from a configuration gap (404) and a health
+			// condition (503).
+			wire.RenderError(w, http.StatusForbidden, "model_disabled",
+				"model "+carrier.Chat.Model+" is disabled by the operator")
+			return
+		}
 		if errors.Is(err, router.ErrUnavailable) {
-			// The model exists but every binding is circuit-open: the
+			// The model exists but every binding is ineligible: the
 			// same fast-fail contract the executor renders at attempt
 			// time, so the condition reads identically wherever it is
 			// detected.
 			wire.RenderError(w, http.StatusServiceUnavailable, "circuit_open",
-				"every upstream serving model "+carrier.Chat.Model+" is circuit-open")
+				"every upstream serving model "+carrier.Chat.Model+" is unavailable")
 			return
 		}
 		wire.RenderError(w, http.StatusNotFound, "model_not_found",
