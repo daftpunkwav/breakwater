@@ -66,3 +66,40 @@ func TestEstimatePartialTokensCountsPromptPlusBytes(t *testing.T) {
 		t.Fatalf("EstimatePartialTokens = %d, want 29 (4 words + 100/4 bytes)", got)
 	}
 }
+
+func TestEstimateTokensReservesDefaultForNonPositiveMaxTokens(t *testing.T) {
+	t.Parallel()
+	messages := []protocol.ChatMessage{{Role: "user", Content: "one two three"}}
+	// A declared budget that is zero or negative cannot be honored; the
+	// safe default reserves instead of reserving nothing.
+	zero, negative := int64(0), int64(-5)
+	for _, declared := range []*int64{nil, &zero, &negative} {
+		req := protocol.ChatRequest{Messages: messages, MaxTokens: declared}
+		if got := EstimateTokens(req, 0); got != 3+DefaultCompletionReserve {
+			t.Fatalf("EstimateTokens(declared=%v) = %d, want %d", declared, got, 3+DefaultCompletionReserve)
+		}
+	}
+}
+
+func TestEstimateTokensFloorsEmptyPromptAtOne(t *testing.T) {
+	t.Parallel()
+	// A request without messages still reserves one prompt token, so a
+	// zero-cost reservation can never ride through.
+	if got := EstimateTokens(protocol.ChatRequest{}, 0); got != 1+DefaultCompletionReserve {
+		t.Fatalf("EstimateTokens = %d, want %d", got, 1+DefaultCompletionReserve)
+	}
+}
+
+func TestEstimateTokensClampBoundaryKeepsEqualBudget(t *testing.T) {
+	t.Parallel()
+	maxTokens := int64(500)
+	req := protocol.ChatRequest{
+		Messages:  []protocol.ChatMessage{{Role: "user", Content: "one two three"}},
+		MaxTokens: &maxTokens,
+	}
+	// A declared budget equal to the tenant cap is kept as-is; only
+	// strictly larger budgets clamp.
+	if got := EstimateTokens(req, 500); got != 503 {
+		t.Fatalf("EstimateTokens = %d, want 503 (3 prompt words + 500)", got)
+	}
+}
