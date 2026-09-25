@@ -69,10 +69,13 @@ func (r *Redis) Ping(ctx context.Context) error {
 func balanceKey(tenantID string) string { return keyPrefix + "bal:" + tenantID }
 func leaseKey(leaseID string) string    { return keyPrefix + "lease:" + leaseID }
 
-// consumedKey and refundedKey hold the lifetime totals the reconcile
-// protocol diffs between snapshots.
+// consumedKey holds the lifetime actual-usage total (observation input;
+// not part of the reconcile identity), refundedKey the lifetime refunds
+// and debitedKey the lifetime reservation debits — the last two pair
+// with every balance movement and drive the reconcile identity.
 func consumedKey(tenantID string) string { return keyPrefix + "consumed:" + tenantID }
 func refundedKey(tenantID string) string { return keyPrefix + "refunded:" + tenantID }
+func debitedKey(tenantID string) string  { return keyPrefix + "debited:" + tenantID }
 
 // epochKey counts balance corrections (admin SetBalance): the
 // reconciler skips the interval across an epoch bump, since a manual
@@ -116,7 +119,7 @@ func (r *Redis) Reserve(ctx context.Context, tenantID string, amount int64) (Lea
 		CreatedAt: now,
 	}
 	res, err := r.reserveScript.Run(ctx, r.rdb,
-		[]string{balanceKey(tenantID), leaseKey(lease.ID), sweepKey()},
+		[]string{balanceKey(tenantID), leaseKey(lease.ID), sweepKey(), debitedKey(tenantID)},
 		now.UnixMilli(), amount, defaultLeaseTTL.Milliseconds(), lease.ID, tenantID,
 	).Slice()
 	if err != nil {
@@ -215,14 +218,16 @@ func (r *Redis) Balance(ctx context.Context, tenantID string) (int64, error) {
 	return bal, nil
 }
 
-// TenantSnapshot implements the reconcile SnapshotSource: balance,
-// lifetime totals and correction epoch read in one pipeline. A tenant
-// without a balance key yields a nil snapshot (nothing provisioned).
+// TenantSnapshot implements the reconcile SnapshotSource: the balance,
+// the identity totals and the correction epoch read in one pipeline. A
+// tenant without a balance key yields a nil snapshot (nothing
+// provisioned).
 func (r *Redis) TenantSnapshot(ctx context.Context, tenantID string, takenAt time.Time) (*Snapshot, error) {
 	pipe := r.rdb.Pipeline()
 	balCmd := pipe.Get(ctx, balanceKey(tenantID))
 	consumedCmd := pipe.Get(ctx, consumedKey(tenantID))
 	refundedCmd := pipe.Get(ctx, refundedKey(tenantID))
+	debitedCmd := pipe.Get(ctx, debitedKey(tenantID))
 	epochCmd := pipe.Get(ctx, epochKey(tenantID))
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		return nil, fmt.Errorf("quota: snapshot read: %w", err)
@@ -237,12 +242,14 @@ func (r *Redis) TenantSnapshot(ctx context.Context, tenantID string, takenAt tim
 	}
 	consumed := counterValue(consumedCmd)
 	refunded := counterValue(refundedCmd)
+	debited := counterValue(debitedCmd)
 	epoch := counterValue(epochCmd)
 	return &Snapshot{
 		TenantID: tenantID,
 		Balance:  balance,
 		Consumed: consumed,
 		Refunded: refunded,
+		Debited:  debited,
 		Epoch:    epoch,
 		TakenAt:  takenAt,
 	}, nil

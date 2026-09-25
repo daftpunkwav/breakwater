@@ -13,7 +13,7 @@
  *
  * Invariants carried by this contract:
  * - I3: no over-draft from concurrency; initial balance = current balance
- *   + consumed - refunded must always reconcile to zero error
+ *   + debits - refunds must always reconcile to zero error
  * - I9: every reservation has a lease record; reservations outside the
  *   settled set are reclaimed by the sweeper
  *

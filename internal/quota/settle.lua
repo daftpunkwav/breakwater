@@ -8,6 +8,12 @@
 -- Only a RESERVED lease settles: terminal leases are detectable no-ops
 -- (late settles after a sweeper expiry are expected), refunding
 -- (reserved - used) when positive and never surcharging.
+--
+-- The balance refund and the refunded counter move in the same atomic
+-- step: the reconcile identity (balance may only fall by debits minus
+-- refunds) pairs every balance movement with exactly one counter
+-- movement. The consumed counter records actual usage for observation
+-- and is deliberately not part of the identity.
 
 local state = redis.call('HGET', KEYS[2], 'state')
 if not state then
@@ -24,8 +30,6 @@ if refund > 0 then
     redis.call('INCRBY', KEYS[1], refund)
 end
 redis.call('HSET', KEYS[2], 'state', 'SETTLED')
--- The reconcile protocol reads these lifetime totals alongside the
--- balance; all three move inside this one atomic step.
 redis.call('INCRBY', KEYS[4], string.format('%d', used))
 if refund > 0 then
     redis.call('INCRBY', KEYS[5], string.format('%d', refund))

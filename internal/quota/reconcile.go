@@ -5,10 +5,14 @@
  * consecutive snapshots must satisfy the balance identity.
  *
  * Responsibilities:
- * - Read one tenant's reconcile inputs (balance, lifetime consumed and
- *   refunded totals, correction epoch) as an atomic-enough snapshot
+ * - Read one tenant's reconcile inputs (balance, lifetime debited and
+ *   refunded totals, actual-usage total, correction epoch) as an
+ *   atomic-enough snapshot
  * - Diff consecutive snapshots against the identity: the balance may
- *   only move by consumption minus refund
+ *   only fall by debits minus refunds, where every balance movement is
+ *   paired with exactly one counter movement inside the reserve /
+ *   settle / release scripts — so in-flight reservations and overage
+ *   settles never read as drift
  * - Persist snapshots through the injected store (PostgreSQL in
  *   production) so the identity survives restarts
  * - Nothing else: the totals move inside the settle/release scripts;
@@ -31,8 +35,15 @@ import (
 type Snapshot struct {
 	TenantID string
 	Balance  int64
+	// Consumed is the lifetime actual token usage: observation input,
+	// deliberately not part of the identity (an overage settle consumes
+	// more than the balance ever moved for its lease).
 	Consumed int64
+	// Refunded and Debited are the lifetime totals paired with the
+	// balance's movements: debits at reserve, credits at settle and
+	// release. The identity diffs these against the balance.
 	Refunded int64
+	Debited  int64
 	// Epoch counts manual balance corrections; a change between
 	// snapshots marks the interval as skip-by-design.
 	Epoch   int64
@@ -94,7 +105,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (checked, drifted int, d
 			continue // first sight, or a manual correction: skip by design
 		}
 		checked++
-		if drift := consumedDelta(prev, snap) - balanceDrop(prev, snap); drift != 0 {
+		if drift := debitedDelta(prev, snap) - refundedDelta(prev, snap) - balanceDrop(prev, snap); drift != 0 {
 			drifted++
 			drifts = append(drifts, TenantDrift{TenantID: tenantID, Drift: drift})
 		}
@@ -108,8 +119,11 @@ type TenantDrift struct {
 	Drift    int64
 }
 
-// consumedDelta is the token consumption between two snapshots.
-func consumedDelta(prev, snap *Snapshot) int64 { return snap.Consumed - prev.Consumed }
+// debitedDelta is the gross reservation debit between two snapshots.
+func debitedDelta(prev, snap *Snapshot) int64 { return snap.Debited - prev.Debited }
+
+// refundedDelta is the gross refund credit between two snapshots.
+func refundedDelta(prev, snap *Snapshot) int64 { return snap.Refunded - prev.Refunded }
 
 // balanceDrop is how much the balance fell between two snapshots.
 func balanceDrop(prev, snap *Snapshot) int64 { return prev.Balance - snap.Balance }

@@ -34,8 +34,12 @@ func TestPGSnapshotStoreIntegration(t *testing.T) {
 		balance    BIGINT NOT NULL,
 		consumed   BIGINT NOT NULL,
 		refunded   BIGINT NOT NULL,
+		debited    BIGINT NOT NULL DEFAULT 0,
 		epoch      BIGINT NOT NULL DEFAULT 0,
 		taken_at   TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+		t.Fatalf("apply snapshot table: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `ALTER TABLE quota_snapshots ADD COLUMN IF NOT EXISTS debited BIGINT NOT NULL DEFAULT 0`); err != nil {
 		t.Fatalf("apply snapshot table: %v", err)
 	}
 
@@ -54,6 +58,7 @@ func TestPGSnapshotStoreIntegration(t *testing.T) {
 		Balance:  900,
 		Consumed: 70,
 		Refunded: 30,
+		Debited:  100,
 		Epoch:    2,
 		TakenAt:  taken,
 	}
@@ -65,7 +70,7 @@ func TestPGSnapshotStoreIntegration(t *testing.T) {
 		t.Fatalf("latest: %v", err)
 	}
 	if latest == nil || latest.Balance != 900 || latest.Consumed != 70 ||
-		latest.Refunded != 30 || latest.Epoch != 2 {
+		latest.Refunded != 30 || latest.Debited != 100 || latest.Epoch != 2 {
 		t.Fatalf("latest = %+v", latest)
 	}
 }

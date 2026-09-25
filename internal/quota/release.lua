@@ -9,7 +9,9 @@
 -- and refunded its full amount; 0 otherwise (already terminal or
 -- missing).
 -- The state check and refund are one atomic step, so a sweeper and a
--- late settle can never both refund the same lease.
+-- late settle can never both refund the same lease. The balance credit
+-- and the refunded counter move together: the reconcile identity pairs
+-- every balance movement with exactly one counter movement.
 
 local state = redis.call('HGET', KEYS[2], 'state')
 redis.call('ZREM', KEYS[3], ARGV[1])

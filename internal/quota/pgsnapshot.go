@@ -41,18 +41,20 @@ func (s *PGSnapshots) Close() {
 	s.pool.Close()
 }
 
-// Latest implements SnapshotStore.
+// Latest implements SnapshotStore. The append sequence (id), not the
+// wall-clock taken_at, defines snapshot order: a backward clock step
+// must never make a stale snapshot masquerade as the latest.
 func (s *PGSnapshots) Latest(ctx context.Context, tenantID string) (*Snapshot, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT balance, consumed, refunded, epoch, taken_at
+		SELECT balance, consumed, refunded, debited, epoch, taken_at
 		FROM quota_snapshots
 		WHERE tenant_id = $1
-		ORDER BY taken_at DESC, id DESC
+		ORDER BY id DESC
 		LIMIT 1`, tenantID)
 
 	var snap Snapshot
 	var takenAt time.Time
-	err := row.Scan(&snap.Balance, &snap.Consumed, &snap.Refunded, &snap.Epoch, &takenAt)
+	err := row.Scan(&snap.Balance, &snap.Consumed, &snap.Refunded, &snap.Debited, &snap.Epoch, &takenAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -67,9 +69,9 @@ func (s *PGSnapshots) Latest(ctx context.Context, tenantID string) (*Snapshot, e
 // Append implements SnapshotStore.
 func (s *PGSnapshots) Append(ctx context.Context, snap Snapshot) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO quota_snapshots (tenant_id, balance, consumed, refunded, epoch, taken_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		snap.TenantID, snap.Balance, snap.Consumed, snap.Refunded, snap.Epoch, snap.TakenAt)
+		INSERT INTO quota_snapshots (tenant_id, balance, consumed, refunded, debited, epoch, taken_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		snap.TenantID, snap.Balance, snap.Consumed, snap.Refunded, snap.Debited, snap.Epoch, snap.TakenAt)
 	if err != nil {
 		return fmt.Errorf("quota: append snapshot: %w", err)
 	}
