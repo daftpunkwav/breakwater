@@ -170,9 +170,12 @@ through the composed gateway:
 
 CI enforces `gofmt`, `go vet`, `golangci-lint` and `go test -race ./...`
 (with Redis and PostgreSQL service containers for the Lua and identity
-integration tests). Reliability mechanisms (token bucket, circuit
-breaker, retry, singleflight) are implemented in this repository by
-discipline; third-party governance libraries are rejected by lint rule.
+integration tests). Statement coverage is held at or above 95% per
+package — the taxonomy (unit / functional / integration / concurrency /
+benchmark) and the naming rules live in `docs/TESTING.md`. Reliability
+mechanisms (token bucket, circuit breaker, retry, singleflight) are
+implemented in this repository by discipline; third-party governance
+libraries are rejected by lint rule.
 
 ## Documentation
 
