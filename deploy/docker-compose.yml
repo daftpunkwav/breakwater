@@ -1,6 +1,6 @@
 # Local development stack: governance state stores and the mock upstream.
-# The gateway binary runs on the host during development and joins this
-# file once containerized in the forwarding milestone.
+# The gateway joins this stack containerized; in-memory backends on the
+# host remain the zero-config alternative for quick smoke runs.
 services:
   redis:
     image: redis:7-alpine
@@ -22,7 +22,10 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # First boot applies the identity schema and the local seed in
+      # order; later boots keep the volume as-is.
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U breakwater -d breakwater"]
       interval: 5s
@@ -42,5 +45,32 @@ services:
       timeout: 3s
       retries: 5
 
+  breakwater:
+    build:
+      context: ..
+      dockerfile: deploy/breakwater.Dockerfile
+    image: breakwater/gateway:dev
+    depends_on:
+      redis:
+        condition: service_healthy
+      mockllm:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      BREAKWATER_ADDR: ":8080"
+      BREAKWATER_REDIS_ADDR: redis:6379
+      BREAKWATER_UPSTREAMS: '[{"id":"mock","base_url":"http://mockllm:8090","probe_url":"http://mockllm:8090/healthz","models":["*"]}]'
+      BREAKWATER_IDENTITY: '{"tiers":[{"id":"free","rpm":600,"tpm":900000,"max_tokens":4096,"monthly_quota":50000000,"allowed_models":["*"]}],"tenants":[{"id":"local","name":"Local","tier":"free","keys":["bw-local-dev-key"]}]}'
+      BREAKWATER_ACCESS_LOG_PATH: /data/access.log
+    volumes:
+      - accesslog:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
   pgdata:
+  accesslog:
