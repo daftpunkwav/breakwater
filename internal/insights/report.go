@@ -34,16 +34,30 @@ type windowSummaryRow struct {
 	cacheHits int64
 }
 
+// queryer is the subset of pgxpool the report queries need; the
+// concrete pool satisfies it, tests script it.
+type queryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // Report assembles the full assessment for [from, to). The queries
 // scan the window four times; the request_log is append-only and
 // indexed on time, which keeps the reads bounded by the window.
 func (s *PGStore) Report(ctx context.Context, from, to time.Time) (Report, error) {
+	return report(ctx, s.pool, from, to)
+}
+
+// report is Report's body over the query port, so every aggregation
+// branch — including the error paths a healthy database never takes —
+// stays testable against a scripted queryer.
+func report(ctx context.Context, q queryer, from, to time.Time) (Report, error) {
 	var rep Report
 	rep.Summary.From = from
 	rep.Summary.To = to
 
 	var row windowSummaryRow
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT count(*),
 		       count(*) FILTER (WHERE status < 200 OR (status > 299 AND status <> 499)),
 		       percentile_cont(0.5)  WITHIN GROUP (ORDER BY duration_ms),
@@ -66,26 +80,26 @@ func (s *PGStore) Report(ctx context.Context, from, to time.Time) (Report, error
 	}
 
 	if rep.Summary.Failures > 0 {
-		mix, err := s.failures(ctx, from, to)
+		mix, err := failures(ctx, q, from, to)
 		if err != nil {
 			return Report{}, err
 		}
 		rep.Summary.FailureMix = mix
 	}
 
-	if rep.Timeline, err = s.timeline(ctx, from, to); err != nil {
+	if rep.Timeline, err = timeline(ctx, q, from, to); err != nil {
 		return Report{}, err
 	}
-	if rep.ByTenant, err = s.dimension(ctx, from, to, "tenant_id"); err != nil {
+	if rep.ByTenant, err = dimension(ctx, q, from, to, "tenant_id"); err != nil {
 		return Report{}, err
 	}
-	if rep.ByKey, err = s.dimension(ctx, from, to, "key_id"); err != nil {
+	if rep.ByKey, err = dimension(ctx, q, from, to, "key_id"); err != nil {
 		return Report{}, err
 	}
-	if rep.ByModel, err = s.dimension(ctx, from, to, "model"); err != nil {
+	if rep.ByModel, err = dimension(ctx, q, from, to, "model"); err != nil {
 		return Report{}, err
 	}
-	if rep.ByUpstream, err = s.dimension(ctx, from, to, "upstream"); err != nil {
+	if rep.ByUpstream, err = dimension(ctx, q, from, to, "upstream"); err != nil {
 		return Report{}, err
 	}
 	return rep, nil
@@ -94,8 +108,8 @@ func (s *PGStore) Report(ctx context.Context, from, to time.Time) (Report, error
 // failures breaks the window's failures down by cause, most frequent
 // first. Rows without a recorded code are upstream error
 // passthroughs: their status is the classification.
-func (s *PGStore) failures(ctx context.Context, from, to time.Time) ([]Failure, error) {
-	rows, err := s.pool.Query(ctx, `
+func failures(ctx context.Context, q queryer, from, to time.Time) ([]Failure, error) {
+	rows, err := q.Query(ctx, `
 		SELECT COALESCE(NULLIF(error_code, ''),
 		                CASE WHEN status >= 500 THEN 'upstream_5xx' ELSE 'upstream_4xx' END) AS cause,
 		       count(*)
@@ -121,8 +135,8 @@ func (s *PGStore) failures(ctx context.Context, from, to time.Time) ([]Failure, 
 // timeline buckets the window into fixed 5-minute slots — coarse
 // enough to stay a bounded series, fine enough to see an incident.
 // date_bin keeps the query dependency-free (no timescaledb).
-func (s *PGStore) timeline(ctx context.Context, from, to time.Time) ([]SeriesPoint, error) {
-	rows, err := s.pool.Query(ctx, `
+func timeline(ctx context.Context, q queryer, from, to time.Time) ([]SeriesPoint, error) {
+	rows, err := q.Query(ctx, `
 		SELECT date_bin('5 minutes', time, $3) AS bucket, count(*),
 		       count(*) FILTER (WHERE status < 200 OR (status > 299 AND status <> 499)),
 		       percentile_cont(0.5)  WITHIN GROUP (ORDER BY duration_ms),
@@ -138,8 +152,8 @@ func (s *PGStore) timeline(ctx context.Context, from, to time.Time) ([]SeriesPoi
 
 // dimension is the shared per-slice breakdown query; column is one of
 // the fixed dimension names this file calls it with, never user input.
-func (s *PGStore) dimension(ctx context.Context, from, to time.Time, column string) ([]Dimension, error) {
-	rows, err := s.pool.Query(ctx, `
+func dimension(ctx context.Context, q queryer, from, to time.Time, column string) ([]Dimension, error) {
+	rows, err := q.Query(ctx, `
 		SELECT COALESCE(NULLIF(`+column+`, ''), '-') AS name,
 		       count(*),
 		       count(*) FILTER (WHERE status < 200 OR (status > 299 AND status <> 499)),
