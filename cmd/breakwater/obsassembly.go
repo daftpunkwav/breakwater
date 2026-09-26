@@ -190,8 +190,16 @@ func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, met
 			}
 			return server.ErrUnknownUpstream
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), cfg.Probe.Timeout)
-		defer cancel()
+		// A zero timeout means "no ceiling", matching the
+		// circuit.ActiveProbe convention: with the recovery loop
+		// disabled the operator may legitimately leave the knob unset,
+		// and WithTimeout(ctx, 0) would expire before the probe ran.
+		ctx := r.Context()
+		if cfg.Probe.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, cfg.Probe.Timeout)
+			defer cancel()
+		}
 		err := target.Probe(ctx)
 		metrics.UpstreamProbe(id, err == nil)
 		return err

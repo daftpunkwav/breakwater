@@ -100,6 +100,27 @@ func TestAdminProbeEndpointReportsFailures(t *testing.T) {
 	}
 }
 
+// TestAdminProbeWorksWithoutProbeTimeout: with the recovery loop
+// disabled the operator may leave the probe timeout unset (the config
+// only validates it when the loop is on) — the on-demand probe must
+// still run instead of expiring before it starts.
+func TestAdminProbeWorksWithoutProbeTimeout(t *testing.T) {
+	t.Parallel()
+	srv := statusServer(t, http.StatusOK)
+	gov := &governance{ledger: quota.NewMemory()}
+	cfg := testConfig("127.0.0.1:0")
+	cfg.Probe.Interval = 0
+	cfg.Probe.Timeout = 0
+	adapters := map[string]upstream.Upstream{"u1": probeAdapter(t, "u1", srv)}
+	admin := buildAdmin(cfg, gov, circuit.NopBreaker{}, obs.NewMetrics(), []string{"u1"}, adapters, adapters)
+
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/upstreams/u1/probe", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("probe = %d %s, want 200 ok without a configured timeout", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAdminBreakerResetEndpoint(t *testing.T) {
 	t.Parallel()
 	admin, breaker := adminActions(t, http.StatusOK)
