@@ -65,6 +65,10 @@ client-supplied id is adopted verbatim, otherwise one is minted
 access log, so one identifier joins the client-visible outcome, the
 gateway's log line and the provider's records.
 
+`GET /v1/models` lists the client-facing model names in the OpenAI
+list form, so OpenAI-compatible clients can discover what to ask for.
+The endpoint is unauthenticated and carries no tenant data.
+
 ### Model names and aliases
 
 The gateway routes on the model name the client sends. A `models`
@@ -137,6 +141,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | Ceiling of a committed stream's body (after the headers); `0` lets the client own the stream's lifetime |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | Exact-match response cache      |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
+| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` | `30s` / `5s` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic) |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing (PRD Q6); needs Redis + PostgreSQL; `0` disables |
@@ -153,9 +158,31 @@ All configuration is environment-based; core knobs:
 - `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
 - `GET /admin/insights?hours=N` — the stability report for the trailing window (default 24): success rate, failure mix by cause, latency percentiles, a 5-minute timeline and per-tenant/key/model/upstream breakdowns. Requires the monitoring store (any PostgreSQL DSN).
-- `GET /admin/routing` — every known model and upstream with its current eligibility
+- `GET /admin/routing` — every known model and upstream with its current eligibility, plus the auto-disabled upstreams with the reason and moment of each decision
 - `PUT /admin/models/{id}` — enable or disable a model (`{"enabled": false}`); disabled models refuse requests with `403 model_disabled`
-- `PUT /admin/upstreams/{id}` — enable or disable an upstream; disabled upstreams drop out of every candidate list. Switches are in-memory and reset on restart.
+- `PUT /admin/upstreams/{id}` — enable or disable an upstream; disabled upstreams drop out of every candidate list. Switches are in-memory and reset on restart. An operator enable clears both disable channels (see below).
+
+### Automatic upstream recovery
+
+Beyond the operator switches, the gateway keeps upstreams honest on
+its own:
+
+- A completed upstream exchange that proves a **fatal condition** —
+  rejected credentials (401, or a 403 with a provider-API error
+  envelope) or an exhausted budget (`insufficient_quota`, which OpenAI
+  reports as a 429) — takes the upstream out of rotation immediately,
+  with the reason recorded in `/admin/routing` and counted in
+  `breakwater_upstream_auto_disabled_total`.
+- An upstream 429 carrying a `Retry-After` header delays the next
+  retry **of that same upstream**; failover to a different candidate
+  never waits for the failed one's hint.
+- The recovery loop (if `BREAKWATER_PROBE_INTERVAL` is non-zero and
+  the upstream declares a `probe_url`) periodically probes
+  auto-disabled and breaker-ejected upstreams; a healthy answer
+  restores them. Only the system's own disables are lifted this way —
+  an operator disable survives until an operator lifts it. Point
+  `probe_url` at an authenticated endpoint if you want credential and
+  quota failures to self-heal.
 
 ### Identity administration (PostgreSQL deployments)
 
@@ -249,7 +276,8 @@ libraries are rejected by lint rule.
 
 Evidence methodology and scenario sets live in `docs/`:
 `docs/BENCHMARK.md` (load test numbers), `docs/CHAOS-REPORT.md`
-(fault-injection timelines) and `docs/DEPLOY-LOCAL.md` (wiring real
-providers and agent applications into a local gateway). BENCHMARK and
-CHAOS-REPORT are filled from real runs of the `loadtest/` scenarios —
-see `loadtest/README.md`.
+(fault-injection timelines), `docs/DEPLOY-LOCAL.md` (wiring real
+providers and agent applications into a local gateway) and
+`docs/PEER-LEARNING.md` (the patterns adopted from peer open-source
+gateways, with sources). BENCHMARK and CHAOS-REPORT are filled from
+real runs of the `loadtest/` scenarios — see `loadtest/README.md`.

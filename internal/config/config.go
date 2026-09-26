@@ -31,8 +31,21 @@ type Config struct {
 	Cache             Cache
 	Circuit           Circuit
 	Security          Security
+	// Probe configures the active recovery probing of upstreams.
+	Probe Probe
 	// Routing selects the candidate ordering policy of the router.
 	Routing Routing
+}
+
+// Probe configures the active recovery loop: upstreams that were
+// taken out of rotation (auto-disabled, or breaker-open) are probed
+// on an interval and restored when a probe answers. Interval zero
+// disables the loop — recovery then waits for real traffic.
+type Probe struct {
+	// Interval paces the recovery loop; zero disables it.
+	Interval time.Duration
+	// Timeout bounds one probe exchange.
+	Timeout time.Duration
 }
 
 // Routing configures how the router orders eligible candidates.

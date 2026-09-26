@@ -178,6 +178,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		relay.WithMetrics(metrics),
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
 		relay.WithUpstreamObserver(trackerObserver{tracker}),
+		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, metrics, logger)),
 	)
 
 	// One chain per client format, one route per chain.
@@ -209,10 +210,24 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		Metrics:       metricsHandler(metrics),
 		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams), adminOpts...),
 		Readiness:     mergeReadiness(gov.readiness, identityReady),
+		Models:        knownModels(cfg.Upstreams),
 		Version:       version,
 	})
 
 	publishLogDrops(ctx, metrics, accessLog.logger, dropPublishInterval)
+	// Active recovery probing: upstreams taken out of rotation (auto
+	// disabled, breaker ejected) are asked periodically whether they
+	// are back; only those with a configured probe_url can be asked.
+	probes := make(map[string]upstream.Upstream, len(cfg.Upstreams))
+	for _, b := range bindings {
+		probes[b.Upstream.ID()] = b.Upstream
+	}
+	for _, c := range cfg.Upstreams {
+		if c.ProbeURL == "" {
+			delete(probes, c.ID)
+		}
+	}
+	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, breaker, routingSwitch, probes, metrics, logger)
 
 	logger.Info("gateway starting",
 		"version", version,
@@ -349,6 +364,25 @@ type trackerObserver struct{ t *router.Tracker }
 
 func (a trackerObserver) ObserveUpstream(upstreamID string, latency time.Duration, failed bool) {
 	a.t.Record(upstreamID, latency, failed)
+}
+
+// autoDisableHook adapts the relay's fatal-condition reports to the
+// routing switch: a fatally broken upstream leaves rotation with the
+// reason recorded, counted, and logged — once per transition.
+func autoDisableHook(routingSwitch *router.Switch, metrics *obs.Metrics, logger *slog.Logger) func(upstreamID, reason string) {
+	return func(upstreamID, reason string) {
+		newly, err := routingSwitch.AutoDisableUpstream(upstreamID, reason)
+		if err != nil {
+			logger.Warn("upstream auto-disable rejected", "upstream", upstreamID, "reason", reason, "error", err)
+			return
+		}
+		if !newly {
+			return
+		}
+		metrics.UpstreamAutoDisabled(upstreamID, reason)
+		logger.Warn("upstream auto-disabled, dropping from rotation",
+			"upstream", upstreamID, "reason", reason)
+	}
 }
 
 // buildBindings turns configured upstreams into ordered router bindings,

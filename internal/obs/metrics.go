@@ -153,6 +153,11 @@ func NewMetrics() *Metrics {
 	reg("breakwater_sse_stream_aborted_total", "Streams terminated through the error event contract.", "counter",
 		[]string{"upstream"}, nil)
 
+	reg("breakwater_upstream_probe_total", "Active health probes by outcome.", "counter",
+		[]string{"upstream", "result"}, nil)
+	reg("breakwater_upstream_auto_disabled_total", "Upstreams taken out of rotation by a fatal upstream condition.", "counter",
+		[]string{"upstream", "reason"}, nil)
+
 	reg("breakwater_logs_dropped_total", "Access log entries dropped for capacity.", "counter", nil, nil)
 	// Pre-create the label-less child so the drop counter is exposed —
 	// as the healthy zero — from the first scrape, before the periodic
@@ -333,6 +338,27 @@ func (m *Metrics) StreamAborted(upstream string) {
 		return
 	}
 	m.inc("breakwater_sse_stream_aborted_total", 1, upstream)
+}
+
+// UpstreamProbe records one active health probe outcome.
+func (m *Metrics) UpstreamProbe(upstream string, ok bool) {
+	if m == nil {
+		return
+	}
+	result := "fail"
+	if ok {
+		result = "ok"
+	}
+	m.inc("breakwater_upstream_probe_total", 1, upstream, result)
+}
+
+// UpstreamAutoDisabled records an upstream taken out of rotation by a
+// fatal upstream condition.
+func (m *Metrics) UpstreamAutoDisabled(upstream, reason string) {
+	if m == nil {
+		return
+	}
+	m.inc("breakwater_upstream_auto_disabled_total", 1, upstream, reason)
 }
 
 // SetLogsDropped publishes the access log drop counter; Render sources

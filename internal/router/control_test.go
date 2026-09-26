@@ -109,3 +109,130 @@ func TestSwitchConcurrentToggleAndRead(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestAutoDisableTakesUpstreamOutOfRotation(t *testing.T) {
+	t.Parallel()
+	s := NewSwitch([]string{"m1"}, []string{"u1"})
+
+	newly, err := s.AutoDisableUpstream("u1", "upstream_auth_failure")
+	if err != nil || !newly {
+		t.Fatalf("AutoDisableUpstream = %v, %v; want a fresh transition", newly, err)
+	}
+	if s.UpstreamEnabled("u1") {
+		t.Fatal("auto-disabled upstream still reports enabled")
+	}
+
+	// A repeat observation is absorbed: the transition already happened.
+	newly, err = s.AutoDisableUpstream("u1", "upstream_auth_failure")
+	if err != nil || newly {
+		t.Fatalf("repeat AutoDisableUpstream = %v, %v; want absorbed", newly, err)
+	}
+
+	// Auto-disable only records its own channel; the model switch and
+	// the manual channel stay untouched.
+	if err := s.AutoEnableUpstream("u1"); err != nil {
+		t.Fatalf("AutoEnableUpstream: %v", err)
+	}
+	if !s.UpstreamEnabled("u1") {
+		t.Fatal("recovered upstream still reports disabled")
+	}
+}
+
+func TestAutoDisableUnknownUpstreamFailsClosed(t *testing.T) {
+	t.Parallel()
+	s := NewSwitch([]string{"m1"}, []string{"u1"})
+	if _, err := s.AutoDisableUpstream("typo", "upstream_auth_failure"); !errors.Is(err, ErrUnknownUpstream) {
+		t.Fatalf("err = %v, want ErrUnknownUpstream", err)
+	}
+	if err := s.AutoEnableUpstream("typo"); !errors.Is(err, ErrUnknownUpstream) {
+		t.Fatalf("err = %v, want ErrUnknownUpstream", err)
+	}
+}
+
+// TestManualDecisionSubsumesAuto: an operator disable must not be
+// downgraded to an auto disable, and an operator enable must lift a
+// recorded auto disable — human intent wins in both directions.
+func TestManualDecisionSubsumesAuto(t *testing.T) {
+	t.Parallel()
+	s := NewSwitch([]string{"m1"}, []string{"u1"})
+
+	if err := s.SetUpstream("u1", false); err != nil {
+		t.Fatalf("manual disable: %v", err)
+	}
+	newly, err := s.AutoDisableUpstream("u1", "upstream_quota_exhausted")
+	if err != nil || newly {
+		t.Fatalf("AutoDisableUpstream over manual = %v, %v; want absorbed", newly, err)
+	}
+
+	// Operator enable lifts everything.
+	if err := s.SetUpstream("u1", true); err != nil {
+		t.Fatalf("manual enable: %v", err)
+	}
+	if !s.UpstreamEnabled("u1") {
+		t.Fatal("operator-enabled upstream still disabled")
+	}
+	if ids := s.AutoDisabledIDs(); len(ids) != 0 {
+		t.Fatalf("AutoDisabledIDs = %v, want none after an operator enable", ids)
+	}
+
+	// And a manual disable clears a stale auto record, so a later
+	// re-enable restores service without a separate auto-enable.
+	if _, err := s.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
+		t.Fatalf("auto disable: %v", err)
+	}
+	if err := s.SetUpstream("u1", false); err != nil {
+		t.Fatalf("manual disable: %v", err)
+	}
+	if err := s.SetUpstream("u1", true); err != nil {
+		t.Fatalf("manual enable: %v", err)
+	}
+	if !s.UpstreamEnabled("u1") {
+		t.Fatal("upstream still disabled after the manual cycle lifted the auto record")
+	}
+}
+
+// TestAutoDisabledIDsSortedAndDisabled: the prober iterates the
+// auto-disabled set, so it must list exactly the ineligible upstreams
+// in a deterministic order.
+func TestAutoDisabledIDsSortedAndDisabled(t *testing.T) {
+	t.Parallel()
+	s := NewSwitch([]string{"m1"}, []string{"ub", "ua", "uc", "ud"})
+	if err := s.SetUpstream("ud", false); err != nil {
+		t.Fatalf("manual disable: %v", err)
+	}
+	for _, id := range []string{"ub", "ua", "uc"} {
+		if _, err := s.AutoDisableUpstream(id, "upstream_auth_failure"); err != nil {
+			t.Fatalf("auto disable %s: %v", id, err)
+		}
+	}
+	ids := s.AutoDisabledIDs()
+	if len(ids) != 3 || ids[0] != "ua" || ids[1] != "ub" || ids[2] != "uc" {
+		t.Fatalf("AutoDisabledIDs = %v, want the three auto-disabled, sorted", ids)
+	}
+}
+
+func TestSwitchViewCarriesAutoDisableReasons(t *testing.T) {
+	t.Parallel()
+	s := NewSwitch([]string{"m1"}, []string{"u1", "u2"})
+	if _, err := s.AutoDisableUpstream("u2", "upstream_quota_exhausted"); err != nil {
+		t.Fatalf("auto disable: %v", err)
+	}
+
+	view := s.View()
+	if !view.Upstreams["u1"] || view.Upstreams["u2"] {
+		t.Fatalf("upstreams view = %v, want u1 enabled and u2 out", view.Upstreams)
+	}
+	info, ok := view.Auto["u2"]
+	if !ok {
+		t.Fatalf("auto view = %v, want an entry for u2", view.Auto)
+	}
+	if info.Reason != "upstream_quota_exhausted" {
+		t.Fatalf("reason = %q, want upstream_quota_exhausted", info.Reason)
+	}
+	if info.Since.IsZero() {
+		t.Fatal("since is zero; the decision moment must be recorded")
+	}
+	if _, ok := view.Auto["u1"]; ok {
+		t.Fatal("healthy u1 must not appear in the auto view")
+	}
+}

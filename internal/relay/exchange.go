@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
@@ -186,6 +187,16 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response, body []byte) (circuit.Outcome, error) {
 	r.servedBy = cand.ID()
 	statusErr := retry.NewStatusError(resp.StatusCode)
+	// The upstream's own wait request rides the error for the attempt
+	// loop; the loop decides where it applies (same-upstream retries).
+	statusErr.RetryAfter = retry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	// A fatal condition is reported once per observation, whether or
+	// not the exchange counts as retryable: quota exhaustion arrives
+	// as a 429 and is retryable by the table, but it is still proof
+	// the upstream's budget is gone.
+	if reason := fatalUpstreamReason(resp.StatusCode, body); reason != "" && r.exec.fatalHook != nil {
+		r.exec.fatalHook(cand.ID(), reason)
+	}
 	if r.exec.classifier.Retryable(statusErr) {
 		r.lastFailed = snapshot(resp.StatusCode, resp.Header, body)
 		r.lastFailedErr = statusErr

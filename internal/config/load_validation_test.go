@@ -56,6 +56,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"bad circuit probe", envCircuitProbe, "soon", "parse", false},
 		{"zero circuit probe", envCircuitProbe, "0s", "must be positive", false},
 		{"unknown routing strategy", envRouting, "cheapest", "static", false},
+		{"bad probe interval", envProbeInterval, "soon", "parse", false},
+		{"negative probe interval", envProbeInterval, "-1s", "must not be negative", false},
+		{"bad probe timeout", envProbeTimeout, "quickly", "parse", false},
+		{"zero probe timeout while enabled", envProbeTimeout, "0s", "must be positive", false},
 		{"empty model alias half", envUpstreams, `[{"id":"u","base_url":"http://x","models":["=real"]}]`, "invalid model binding", true},
 		{"empty real alias half", envUpstreams, `[{"id":"u","base_url":"http://x","models":["client="]}]`, "invalid model binding", true},
 		{"wildcard alias", envUpstreams, `[{"id":"u","base_url":"http://x","models":["*=real"]}]`, "invalid model binding", true},
@@ -81,13 +85,14 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 }
 
 // TestLoadAcceptsZeroBudgetAndIntervals: zero is a valid "disabled"
-// value for the retry budget, stream timeout and reconcile interval —
-// only negatives are rejected.
+// value for the retry budget, stream timeout, reconcile interval and
+// the recovery probe — only negatives are rejected.
 func TestLoadAcceptsZeroBudgetAndIntervals(t *testing.T) {
 	cleanEnv(t)
 	t.Setenv(envRetryBudget, "0")
 	t.Setenv(envStreamTimeout, "0s")
 	t.Setenv(envReconcileInterval, "0s")
+	t.Setenv(envProbeInterval, "0s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -95,5 +100,8 @@ func TestLoadAcceptsZeroBudgetAndIntervals(t *testing.T) {
 	}
 	if cfg.Retry.BudgetMaxInFlight != 0 || cfg.Retry.StreamTimeout != 0 || cfg.ReconcileInterval != 0 {
 		t.Fatalf("zero values lost: %+v interval %s", cfg.Retry, cfg.ReconcileInterval)
+	}
+	if cfg.Probe.Interval != 0 {
+		t.Fatalf("probe interval = %s, want 0 (disabled)", cfg.Probe.Interval)
 	}
 }

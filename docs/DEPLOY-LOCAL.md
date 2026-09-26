@@ -61,8 +61,15 @@ pool — one request, two providers, each forwarding the model name its
 provider actually serves. Wildcard (`*`) bindings need no rewrite.
 
 Keys stay in your environment or secret store; nothing is written to
-disk or logs. Probe URLs are optional — without one the breaker relies
-on exchange outcomes alone.
+disk or logs. Probe URLs are optional — without one an upstream cannot
+be asked anything off the request path, so recovery relies on real
+traffic alone. With one configured (and `BREAKWATER_PROBE_INTERVAL`
+non-zero, the default), the recovery loop periodically probes
+auto-disabled and breaker-ejected upstreams and restores them on a
+healthy answer; point it at an authenticated endpoint if you want
+credential or quota failures to self-heal. A fatally broken upstream
+— rejected credentials or exhausted quota — also drops out of rotation
+on its own, with the reason visible in `GET /admin/routing`.
 
 ## 4. Point your agent applications at the gateway
 

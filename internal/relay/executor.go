@@ -51,6 +51,12 @@ type Executor struct {
 	// observer, when set, receives one outcome per upstream attempt for
 	// routing-layer performance tracking.
 	observer UpstreamObserver
+	// fatalHook, when set, receives one report per fatal upstream
+	// condition observed on a completed error exchange (dead
+	// credentials, exhausted quota). The assembly wires it to the
+	// routing switch's auto-disable. It fires from the attempt
+	// goroutine and must be safe for concurrent use.
+	fatalHook func(upstreamID, reason string)
 	// streamTimeout bounds a committed stream's whole body; zero means
 	// the client owns the stream's lifetime outright.
 	streamTimeout time.Duration
@@ -85,6 +91,13 @@ type UpstreamObserver interface {
 // WithUpstreamObserver installs the outcome observer; nil disables.
 func WithUpstreamObserver(o UpstreamObserver) Option {
 	return func(e *Executor) { e.observer = o }
+}
+
+// WithUpstreamFatalHook installs the fatal-condition hook; nil (the
+// default) disables it. The reason is a machine-readable cause, e.g.
+// upstream_auth_failure.
+func WithUpstreamFatalHook(fn func(upstreamID, reason string)) Option {
+	return func(e *Executor) { e.fatalHook = fn }
 }
 
 // WithStreamTimeout sets the ceiling of a committed stream's body: a
@@ -266,6 +279,13 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	}
 	if err == nil {
 		r.servedBy = cand.ID()
+		return nil
+	}
+	// A Retry-After hint is one upstream's own recovery schedule; it
+	// must not delay the failover to a different candidate. The hint
+	// travels only when the next attempt re-hits the same upstream.
+	if next := r.job.Candidates[min(attempt+1, len(r.job.Candidates))-1]; next.ID() != cand.ID() {
+		err = retry.StripRetryAfter(err)
 	}
 	return err
 }

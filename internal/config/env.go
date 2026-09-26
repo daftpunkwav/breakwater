@@ -39,6 +39,8 @@ const (
 	defaultCircuitProbe     = 5 * time.Second
 	defaultStreamTimeout    = 10 * time.Minute
 	defaultReconcileEvery   = time.Minute
+	defaultProbeInterval    = 30 * time.Second
+	defaultProbeTimeout     = 5 * time.Second
 )
 
 // Environment variable names.
@@ -73,6 +75,9 @@ const (
 	envAdminToken    = "BREAKWATER_ADMIN_TOKEN"
 	envRouting       = "BREAKWATER_ROUTING_STRATEGY"
 	envInsightsDSN   = "BREAKWATER_INSIGHTS_DSN"
+
+	envProbeInterval = "BREAKWATER_PROBE_INTERVAL"
+	envProbeTimeout  = "BREAKWATER_PROBE_TIMEOUT"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -117,6 +122,10 @@ func Load() (Config, error) {
 			FailThreshold: defaultCircuitThreshold,
 			Cooldown:      defaultCircuitCooldown,
 			ProbeTimeout:  defaultCircuitProbe,
+		},
+		Probe: Probe{
+			Interval: defaultProbeInterval,
+			Timeout:  defaultProbeTimeout,
 		},
 		Routing: Routing{
 			Strategy: envString(envRouting, "static"),
@@ -184,6 +193,12 @@ func Load() (Config, error) {
 	if cfg.Circuit.ProbeTimeout, err = envDuration(envCircuitProbe, cfg.Circuit.ProbeTimeout); err != nil {
 		return Config{}, err
 	}
+	if cfg.Probe.Interval, err = envDuration(envProbeInterval, cfg.Probe.Interval); err != nil {
+		return Config{}, err
+	}
+	if cfg.Probe.Timeout, err = envDuration(envProbeTimeout, cfg.Probe.Timeout); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.Server.ShutdownGrace <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envShutdownGrace)
@@ -220,6 +235,12 @@ func Load() (Config, error) {
 		if cfg.Circuit.ProbeTimeout <= 0 {
 			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitProbe)
 		}
+	}
+	if cfg.Probe.Interval < 0 {
+		return Config{}, fmt.Errorf("config: %s must not be negative", envProbeInterval)
+	}
+	if cfg.Probe.Interval > 0 && cfg.Probe.Timeout <= 0 {
+		return Config{}, fmt.Errorf("config: %s must be positive when %s is enabled", envProbeTimeout, envProbeInterval)
 	}
 	for i, u := range cfg.Upstreams {
 		if u.ID == "" || u.BaseURL == "" {
