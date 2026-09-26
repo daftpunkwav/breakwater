@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -131,13 +132,25 @@ func (s *PGStore) writeLoop() {
 	}
 }
 
+// copier is the subset of pgxpool the batch insert needs; the concrete
+// pool satisfies it, tests script it.
+type copier interface {
+	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
+}
+
 // copyBatch writes one batch; a failed batch is dropped and counted,
 // not retried — the assessment record is best-effort by contract and
 // the drop counter keeps the loss visible.
 func (s *PGStore) copyBatch(ctx context.Context, batch []Record) {
+	copyInto(ctx, s.pool, s, batch)
+}
+
+// copyInto is copyBatch's body over the copier port, so the
+// drop-on-failure contract is testable without a database.
+func copyInto(ctx context.Context, c copier, s *PGStore, batch []Record) {
 	insCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, err := s.pool.CopyFrom(
+	_, err := c.CopyFrom(
 		insCtx,
 		[]string{"request_log"},
 		[]string{"time", "tenant_id", "key_id", "request_id", "model", "upstream", "path", "status", "duration_ms", "tokens", "cache_hit", "streamed", "error_code"},

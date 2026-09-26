@@ -9,9 +9,12 @@ package insights
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // scriptedSink counts inserted records.
@@ -21,6 +24,34 @@ type scriptedSink struct {
 
 func (s *scriptedSink) insert(ctx context.Context, batch []Record) {
 	s.inserted.Add(int64(len(batch)))
+}
+
+// fakeCopier scripts CopyFrom outcomes.
+type fakeCopier struct {
+	rows int64
+	err  error
+}
+
+func (f *fakeCopier) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	return f.rows, f.err
+}
+
+// TestCopyIntoDropsOnFailure: a failed batch increments the drop
+// counter by the batch size and never retries.
+func TestCopyIntoDropsOnFailure(t *testing.T) {
+	t.Parallel()
+	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	batch := []Record{{Status: 200}, {Status: 502}}
+
+	copyInto(context.Background(), &fakeCopier{err: errors.New("copy failed")}, s, batch)
+	if got := s.Dropped(); got != 2 {
+		t.Fatalf("dropped = %d, want 2", got)
+	}
+
+	copyInto(context.Background(), &fakeCopier{rows: 2}, s, batch)
+	if got := s.Dropped(); got != 2 {
+		t.Fatalf("dropped = %d after a successful batch, want unchanged", got)
+	}
 }
 
 func TestRecordQueuesAndCountsDrops(t *testing.T) {

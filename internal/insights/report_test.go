@@ -216,3 +216,43 @@ func TestReportDimensionFolding(t *testing.T) {
 		t.Fatalf("placeholder = %q", rep.ByTenant[1].Name)
 	}
 }
+
+// countingQueryer fails the Nth query call, then succeeds; the report
+// runs one summary row-read, optionally one failure-mix query, one
+// timeline query and four dimension queries.
+type countingQueryer struct {
+	failAt  int
+	calls   int
+	wrapErr error
+}
+
+func (c *countingQueryer) QueryRow(context.Context, string, ...any) pgx.Row {
+	c.calls++
+	return &summaryRow{f: &fakeQueryer{row: scriptedSummaryRow{values: []any{
+		int64(10), int64(2), 50.0, 95.0, 99.0, int64(500), int64(3),
+	}}}}
+}
+
+func (c *countingQueryer) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	c.calls++
+	if c.calls == c.failAt {
+		return nil, c.wrapErr
+	}
+	return &fakeRows{tuples: [][]any{{time.Unix(0, 0).UTC(), int64(1), int64(0), 1.0, 2.0}}}, nil
+}
+
+// TestReportDimensionErrorPaths: each of the four dimension queries
+// failing fails the report with the cause.
+func TestReportDimensionErrorPaths(t *testing.T) {
+	t.Parallel()
+	// Call numbering with a failure mix: 1 summary row, 2 mix query,
+	// 3 timeline, 4..7 dimensions.
+	for _, failAt := range []int{3, 4, 5, 6, 7} {
+		q := &countingQueryer{failAt: failAt, wrapErr: errBoom}
+		if _, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC()); !errors.Is(err, errBoom) {
+			t.Fatalf("query #%d: err = %v, want the cause", failAt, err)
+		}
+	}
+}
+
+var errBoom = errors.New("boom")
