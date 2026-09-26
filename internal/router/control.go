@@ -16,7 +16,7 @@
  *
  * Disabled state lives in memory and resets on restart — the same
  * lifetime class as breaker state. Two disable channels are kept
- * apart, one-api style: a manual disable is an operator action that
+ * apart: a manual disable is an operator action that
  * only an operator lifts; an auto disable is a system reaction to a
  * fatal upstream condition that the recovery prober lifts when the
  * upstream answers a health probe again. An operator touching the

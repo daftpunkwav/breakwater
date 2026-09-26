@@ -276,8 +276,7 @@ libraries are rejected by lint rule.
 
 Evidence methodology and scenario sets live in `docs/`:
 `docs/BENCHMARK.md` (load test numbers), `docs/CHAOS-REPORT.md`
-(fault-injection timelines), `docs/DEPLOY-LOCAL.md` (wiring real
-providers and agent applications into a local gateway) and
-`docs/PEER-LEARNING.md` (the patterns adopted from peer open-source
-gateways, with sources). BENCHMARK and CHAOS-REPORT are filled from
-real runs of the `loadtest/` scenarios — see `loadtest/README.md`.
+(fault-injection timelines) and `docs/DEPLOY-LOCAL.md` (wiring real
+providers and agent applications into a local gateway). BENCHMARK and
+CHAOS-REPORT are filled from real runs of the `loadtest/` scenarios —
+see `loadtest/README.md`.
