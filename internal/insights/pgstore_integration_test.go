@@ -113,3 +113,47 @@ func TestPGInsightsIntegration(t *testing.T) {
 		}
 	}
 }
+
+// TestPGInsightsReportEmptyWindow: a window without rows reports an
+// empty summary, not a NULL percentile scan failure — the contract the
+// summary promises ("a window without requests reports 0").
+func TestPGInsightsReportEmptyWindow(t *testing.T) {
+	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	for _, file := range []string{"../../deploy/schema.sql"} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if _, err := conn.Exec(ctx, string(raw)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
+	}
+
+	store, err := NewPGStore(ctx, dsn)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer store.Close()
+
+	rep, err := store.Report(ctx, time.Now().Add(-time.Hour), time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("report on an empty window: %v", err)
+	}
+	if rep.Summary.Requests != 0 || rep.Summary.SuccessRate != 0 || rep.Summary.P99MS != 0 {
+		t.Fatalf("summary = %+v, want the zero report", rep.Summary)
+	}
+	if rep.Summary.FailureMix != nil {
+		t.Fatalf("failure mix = %+v, want none", rep.Summary.FailureMix)
+	}
+}

@@ -36,11 +36,15 @@ type PGStore struct {
 	// production shape (one method value, set at construction).
 	insert func(ctx context.Context, batch []Record)
 
-	mu     sync.Mutex
-	queue  []Record
-	drops  int64
-	wake   chan struct{}
-	done   chan struct{}
+	mu    sync.Mutex
+	queue []Record
+	drops int64
+	wake  chan struct{}
+	// stop ends the writer loop; it is the only channel Close closes,
+	// so Record's wake signal can never land on a closed channel.
+	stop chan struct{}
+	done chan struct{}
+	// closed flips before stop closes; every read happens under mu.
 	closed bool
 }
 
@@ -54,6 +58,7 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 	s := &PGStore{
 		pool: pool,
 		wake: make(chan struct{}, 1),
+		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
 	s.insert = s.copyBatch
@@ -98,37 +103,47 @@ func (s *PGStore) Close() {
 	}
 	s.closed = true
 	s.mu.Unlock()
-	close(s.wake)
+	close(s.stop)
 	<-s.done
+	// A record that raced the final flush lands in the queue after it
+	// drained: count it as the drop it is, never lose it silently.
+	s.mu.Lock()
+	s.drops += int64(len(s.queue))
+	s.queue = nil
+	s.mu.Unlock()
 	s.pool.Close()
 }
 
 // writeLoop batches records on an interval; the loop owns the queue
-// swap so inserts never contend with Record beyond the append. Every
-// read of the closed flag happens under the mutex — Close sets it and
-// then closes the wake channel, so the loop's channel receive is the
-// one synchronization point that matters.
+// swap so inserts never contend with Record beyond the append. The
+// closed flag flips before stop closes, and both reads happen under
+// the mutex: a record that survived the closed check is still appended
+// to a queue a later flush drains, and the wake signal it sends stays
+// legal — only the loop's stop channel ever closes.
 func (s *PGStore) writeLoop() {
 	defer close(s.done)
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
-	ctx := context.Background()
 	for {
 		select {
 		case <-s.wake:
 		case <-ticker.C:
-		}
-		s.mu.Lock()
-		closed := s.closed
-		batch := s.queue
-		s.queue = nil
-		s.mu.Unlock()
-		if len(batch) > 0 {
-			s.insert(ctx, batch)
-		}
-		if closed {
+		case <-s.stop:
+			s.flush()
 			return
 		}
+		s.flush()
+	}
+}
+
+// flush swaps the queue under the mutex and inserts the batch.
+func (s *PGStore) flush() {
+	s.mu.Lock()
+	batch := s.queue
+	s.queue = nil
+	s.mu.Unlock()
+	if len(batch) > 0 {
+		s.insert(context.Background(), batch)
 	}
 }
 

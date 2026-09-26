@@ -191,17 +191,25 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer))
 	}
 
+	adminOpts := []server.AdminOption{
+		server.WithRouting(routingSwitch),
+		server.WithIdentityStore(identityAdmin),
+	}
+	if recorder.store != nil {
+		// Install the reporter only with a live store: a nil *PGStore
+		// inside the Reporter interface is not a nil interface, and the
+		// endpoint's nil check would never fire.
+		adminOpts = append(adminOpts, server.WithInsights(recorder.store))
+	}
+
 	srv := server.New(server.Options{
 		Addr:          cfg.Server.Addr,
 		ShutdownGrace: cfg.Server.ShutdownGrace,
 		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
-		Admin: buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams),
-			server.WithRouting(routingSwitch),
-			server.WithIdentityStore(identityAdmin),
-			server.WithInsights(recorder.store)),
-		Readiness: mergeReadiness(gov.readiness, identityReady),
-		Version:   version,
+		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams), adminOpts...),
+		Readiness:     mergeReadiness(gov.readiness, identityReady),
+		Version:       version,
 	})
 
 	publishLogDrops(ctx, metrics, accessLog.logger, dropPublishInterval)

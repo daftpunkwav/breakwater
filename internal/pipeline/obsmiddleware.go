@@ -50,13 +50,16 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 				rejectCode = carrier.RejectCode
 			}
 			upstream := "-"
-			aborted, cacheHit := false, false
+			aborted, cacheHit, streamed := false, false, false
+			var tokens int64
 			errorCode := rejectCode
 			if carrier != nil {
 				cacheHit = carrier.CacheHit
 				if carrier.Relay != nil {
 					upstream = carrier.Relay.UpstreamID
 					aborted = carrier.Relay.Aborted
+					streamed = carrier.Relay.Streamed
+					tokens = carrier.Consumed
 					// A forward-stage failure refines the rejection code:
 					// upstream passthroughs classify by status, gateway
 					// envelopes and stream aborts by their code.
@@ -65,8 +68,15 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					}
 				}
 			}
+			status := tee.Status()
+			if status == 0 {
+				// No header ever reached the wire: the client walked away
+				// (or the handler died) before the response started. The
+				// aggregation counts it as a disconnect, never a failure.
+				status = obs.StatusClientClosedRequest
+			}
 
-			metrics.Request(tenant, model, upstream, tee.Status())
+			metrics.Request(tenant, model, upstream, status)
 			metrics.ObserveDuration(upstream, duration.Seconds())
 			if aborted {
 				metrics.StreamAborted(upstream)
@@ -82,9 +92,11 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					Upstream:  upstream,
 					Method:    r.Method,
 					Path:      r.URL.Path,
-					Status:    tee.Status(),
+					Status:    status,
 					Duration:  duration,
 					CacheHit:  cacheHit,
+					Tokens:    tokens,
+					Streamed:  streamed,
 					ErrorCode: errorCode,
 				})
 			}

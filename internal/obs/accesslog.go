@@ -39,12 +39,23 @@ type Entry struct {
 	// "exactly one upstream fetch per cold key" evidence (invariant I2)
 	// is audited from this field.
 	CacheHit bool
+	// Tokens is the settled token usage the request consumed; zero for
+	// rejections and failed forwards.
+	Tokens int64
+	// Streamed reports a streaming passthrough that started.
+	Streamed bool
 	// ErrorCode carries the failure classification of a rejected or
 	// failed request: the governance rejection code (invalid_api_key,
-	// rate_limited, quota_insufficient, concurrency_limit_exceeded, ...)
-	// or the relay's gateway/abort code. Empty on success.
+	// rate_limit_exceeded, insufficient_quota,
+	// concurrency_limit_exceeded, ...) or the relay's gateway/abort
+	// code. Empty on success.
 	ErrorCode string
 }
+
+// StatusClientClosedRequest marks a request that ended without an HTTP
+// response: the client disconnected (or the handler died) before a
+// status was written. The aggregation never counts it as a failure.
+const StatusClientClosedRequest = 499
 
 // Sink consumes access entries asynchronously.
 type Sink interface {

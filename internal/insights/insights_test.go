@@ -10,6 +10,7 @@ package insights
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,7 +109,7 @@ func TestRecordWakesWriterOnFull(t *testing.T) {
 // the (scripted) sink and the loop exits.
 func TestWriteLoopFlushesOnClose(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	sink := &scriptedSink{}
 	s.insert = sink.insert
 	go s.writeLoop()
@@ -116,10 +117,7 @@ func TestWriteLoopFlushesOnClose(t *testing.T) {
 	for i := 0; i < batchSize+5; i++ {
 		s.Record(Record{Status: 200})
 	}
-	s.mu.Lock()
-	s.closed = true
-	s.mu.Unlock()
-	close(s.wake)
+	close(s.stop)
 	<-s.done
 
 	if got := sink.inserted.Load(); got != int64(batchSize+5) {
@@ -131,15 +129,12 @@ func TestWriteLoopFlushesOnClose(t *testing.T) {
 // without Close.
 func TestWriteLoopFlushesOnInterval(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	sink := &scriptedSink{}
 	s.insert = sink.insert
 	go s.writeLoop()
 	defer func() {
-		s.mu.Lock()
-		s.closed = true
-		s.mu.Unlock()
-		close(s.wake)
+		close(s.stop)
 		<-s.done
 	}()
 
@@ -194,4 +189,31 @@ func TestNewPGStoreRejectsInvalidDSN(t *testing.T) {
 	if _, err := NewPGStore(context.Background(), "not a valid dsn"); err == nil {
 		t.Fatal("NewPGStore accepted an invalid dsn")
 	}
+}
+
+// TestRecordConcurrentWithClose: records racing the shutdown never send
+// on a closed channel and never land in a dead queue — the wake channel
+// is never closed, only the loop's stop channel is. The protocol is
+// Close's own minus the pool close (a bare store has none).
+func TestRecordConcurrentWithClose(t *testing.T) {
+	t.Parallel()
+	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	sink := &scriptedSink{}
+	s.insert = sink.insert
+	go s.writeLoop()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			s.Record(Record{Status: 200})
+		}
+	}()
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	close(s.stop)
+	<-s.done
+	wg.Wait()
 }

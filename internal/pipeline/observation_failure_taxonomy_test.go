@@ -7,7 +7,9 @@
 package pipeline
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
@@ -73,10 +75,54 @@ func TestObservationRefinesWithRelayErrorCode(t *testing.T) {
 	sink = &recordingSink{}
 	serveThroughObservation(t, metrics, sink, &Carrier{
 		Tenant:     auth.Tenant{ID: "t"},
-		RejectCode: "quota_insufficient",
+		RejectCode: "insufficient_quota",
 		Relay:      &relay.Result{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
 	}, http.StatusPaymentRequired)
-	if got := sink.snapshot()[0].ErrorCode; got != "quota_insufficient" {
-		t.Fatalf("code = %q, want the rejection's quota_insufficient", got)
+	if got := sink.snapshot()[0].ErrorCode; got != "insufficient_quota" {
+		t.Fatalf("code = %q, want the rejection's insufficient_quota", got)
+	}
+}
+
+// TestObservationMapsMissingStatusToDisconnect: a response that never
+// started (the client walked away before the first byte) is observed
+// as status 499 — the disconnect the aggregation never counts as a
+// failure — instead of the metric-invisible status 0.
+func TestObservationMapsMissingStatusToDisconnect(t *testing.T) {
+	t.Parallel()
+	metrics := obs.NewMetrics()
+	sink := &recordingSink{}
+
+	handler := ObservationStage(metrics, sink)(http.HandlerFunc(
+		func(_ http.ResponseWriter, _ *http.Request) {}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	handler.ServeHTTP(rec, req.WithContext(WithCarrier(context.Background(), &Carrier{Tenant: auth.Tenant{ID: "t"}})))
+
+	e := sink.snapshot()[0]
+	if e.Status != obs.StatusClientClosedRequest {
+		t.Fatalf("status = %d, want %d", e.Status, obs.StatusClientClosedRequest)
+	}
+}
+
+// TestObservationCarriesSettlementAndStream: the entry records the
+// settled token usage and whether a stream started — the dimensions
+// the request_log columns settle and stream.
+func TestObservationCarriesSettlementAndStream(t *testing.T) {
+	t.Parallel()
+	metrics := obs.NewMetrics()
+	sink := &recordingSink{}
+
+	serveThroughObservation(t, metrics, sink, &Carrier{
+		Tenant:   auth.Tenant{ID: "t"},
+		Consumed: 137,
+		Relay:    &relay.Result{UpstreamID: "u", Status: 200, Streamed: true},
+	}, http.StatusOK)
+
+	e := sink.snapshot()[0]
+	if e.Tokens != 137 {
+		t.Fatalf("tokens = %d, want 137", e.Tokens)
+	}
+	if !e.Streamed {
+		t.Fatal("streamed = false, want the relay's streaming report")
 	}
 }

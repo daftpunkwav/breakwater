@@ -94,8 +94,10 @@ func (s *insightsStore) close() {
 // that silently stops measuring.
 func newInsights(ctx context.Context, cfg config.Config, logger *slog.Logger) (*insightsStore, error) {
 	dsn := cfg.Obs.InsightsDSN
+	source := "BREAKWATER_INSIGHTS_DSN"
 	if dsn == "" {
 		dsn = cfg.Postgres.DSN
+		source = "BREAKWATER_POSTGRES_DSN"
 	}
 	if dsn == "" {
 		return &insightsStore{}, nil
@@ -104,7 +106,8 @@ func newInsights(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("insights record store enabled", "dsn", dsn)
+	// The DSN carries credentials: log the source, never the string.
+	logger.Info("insights record store enabled", "source", source)
 	return &insightsStore{store: store}, nil
 }
 
@@ -131,7 +134,9 @@ func (c combinedSink) Record(entry obs.Entry) {
 			Path:       entry.Path,
 			Status:     entry.Status,
 			DurationMS: entry.Duration.Milliseconds(),
+			Tokens:     entry.Tokens,
 			CacheHit:   entry.CacheHit,
+			Streamed:   entry.Streamed,
 			ErrorCode:  entry.ErrorCode,
 		})
 	}

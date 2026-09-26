@@ -60,9 +60,9 @@ func report(ctx context.Context, q queryer, from, to time.Time) (Report, error) 
 	err := q.QueryRow(ctx, `
 		SELECT count(*),
 		       count(*) FILTER (WHERE status < 200 OR (status > 299 AND status <> 499)),
-		       percentile_cont(0.5)  WITHIN GROUP (ORDER BY duration_ms),
-		       percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms),
-		       percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms),
+		       COALESCE(percentile_cont(0.5)  WITHIN GROUP (ORDER BY duration_ms), 0),
+		       COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), 0),
+		       COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms), 0),
 		       COALESCE(sum(tokens), 0),
 		       count(*) FILTER (WHERE cache_hit)
 		FROM request_log WHERE time >= $1 AND time < $2`, from, to).
