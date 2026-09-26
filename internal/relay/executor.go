@@ -283,9 +283,15 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	}
 	// A Retry-After hint is one upstream's own recovery schedule; it
 	// must not delay the failover to a different candidate. The hint
-	// travels only when the next attempt re-hits the same upstream.
-	if next := r.job.Candidates[min(attempt+1, len(r.job.Candidates))-1]; next.ID() != cand.ID() {
-		err = retry.StripRetryAfter(err)
+	// travels only when a further attempt will actually run and re-hit
+	// the same upstream: stripping on the final attempt would replace
+	// the error with a clone and break the identity match the
+	// last-failed passthrough in finish relies on. No retry can read
+	// the hint then, so leaving it is free.
+	if r.exec.policy.MaxAttempts > attempt {
+		if next := r.job.Candidates[min(attempt+1, len(r.job.Candidates))-1]; next.ID() != cand.ID() {
+			err = retry.StripRetryAfter(err)
+		}
 	}
 	return err
 }

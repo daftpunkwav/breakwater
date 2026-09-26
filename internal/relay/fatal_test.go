@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +156,36 @@ func TestExecutorHintStrippedOnFailover(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Fatalf("failover took %v; the failed candidate's 30s hint must not delay another upstream", elapsed)
+	}
+}
+
+// TestExecutorHintOnFinalAttemptKeepsPassthrough: with the attempt cap
+// spent the loop can never read a hint again, so the final error must
+// stay unstripped — stripping clones the StatusError, breaks the
+// last-failed identity match in finish, and would downgrade the
+// upstream's error passthrough to a generic 502.
+func TestExecutorHintOnFinalAttemptKeepsPassthrough(t *testing.T) {
+	t.Parallel()
+	impatient := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
+		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
+		resp.Header.Set("Retry-After", "30")
+		return resp, nil
+	}}
+	healthy := &stubUpstream{id: "fast", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
+		return jsonResponse(t, http.StatusOK, `{"ok":true}`), nil
+	}}
+	// One attempt against two candidates: the next candidate differs,
+	// but no retry follows to ever read the hint.
+	exec := New(retry.Policy{MaxAttempts: 1}, nil)
+	result := execute(t, exec, []upstream.Upstream{impatient, healthy}, false, `{}`)
+	if result.Status != http.StatusTooManyRequests {
+		t.Fatalf("status = %d body = %s, want the 429 passthrough", result.Status, result.Body)
+	}
+	if !strings.Contains(string(result.Body), "rate_limit_error") {
+		t.Fatalf("body = %s, want the upstream error body passed through", result.Body)
+	}
+	if result.ErrorCode != "" {
+		t.Fatalf("error code = %q, want empty for an upstream passthrough", result.ErrorCode)
 	}
 }
 
