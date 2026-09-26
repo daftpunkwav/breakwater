@@ -146,7 +146,15 @@ func TestPGInsightsReportEmptyWindow(t *testing.T) {
 	}
 	defer store.Close()
 
-	rep, err := store.Report(ctx, time.Now().Add(-time.Hour), time.Now().Add(-time.Minute))
+	// The window must hold nothing: earlier tests wrote rows into the
+	// shared database inside the same recent span, so clear the span
+	// before asserting the empty-window contract.
+	from := time.Now().Add(-time.Hour)
+	if _, err := conn.Exec(ctx, `DELETE FROM request_log WHERE time >= $1`, from); err != nil {
+		t.Fatalf("clear the window: %v", err)
+	}
+
+	rep, err := store.Report(ctx, from, time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("report on an empty window: %v", err)
 	}

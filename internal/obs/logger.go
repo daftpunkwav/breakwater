@@ -34,6 +34,10 @@ type Logger struct {
 	count   int
 	drops   atomic.Int64
 	written atomic.Int64
+	// draining reports whether the drain goroutine is mid-write; Flush
+	// waits for it to fall, not merely for the queue to empty — a
+	// failed write lands in drops after the queue already reads empty.
+	draining atomic.Bool
 
 	out    io.Writer
 	signal chan struct{}
@@ -92,8 +96,9 @@ func (l *Logger) Buffered() int {
 	return l.count
 }
 
-// Flush implements Sink: waits until the queue drains or ctx ends.
-// Shutdown path only.
+// Flush implements Sink: waits until every dequeued entry has finished
+// writing (or failing into the drop counter) or ctx ends. Shutdown
+// path only.
 func (l *Logger) Flush(ctx context.Context) error {
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
@@ -101,7 +106,7 @@ func (l *Logger) Flush(ctx context.Context) error {
 		l.mu.Lock()
 		pending := l.count
 		l.mu.Unlock()
-		if pending == 0 {
+		if pending == 0 && !l.draining.Load() {
 			return nil
 		}
 		select {
@@ -135,6 +140,8 @@ func (l *Logger) loop() {
 
 // drain writes every queued entry as one JSON line each.
 func (l *Logger) drain() {
+	l.draining.Store(true)
+	defer l.draining.Store(false)
 	for {
 		l.mu.Lock()
 		if l.count == 0 {
