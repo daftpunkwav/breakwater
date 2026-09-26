@@ -79,7 +79,8 @@ func recoverAutoDisabled(ctx context.Context, timeout time.Duration, passes int,
 			continue
 		}
 		if err := routingSwitch.AutoEnableUpstream(id); err != nil {
-			// Raced with an operator action; the switch's state wins.
+			// Unreachable today (the id came from the switch's own
+			// known set), but the port can reject: stay defensive.
 			continue
 		}
 		delete(counts, id)
