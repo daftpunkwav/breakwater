@@ -72,6 +72,7 @@ func TestPGInsightsIntegration(t *testing.T) {
 	store.mu.Unlock()
 	store.copyBatch(ctx, batch)
 	store.Close()
+	store.Close() // idempotent: a second close must not panic
 
 	rep, err := store.Report(ctx, now.Add(-time.Hour), now.Add(time.Hour))
 	if err != nil {

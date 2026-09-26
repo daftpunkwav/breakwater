@@ -186,3 +186,12 @@ func TestRecordSourceFeedsRowsInOrder(t *testing.T) {
 		t.Fatalf("err = %v", src.Err())
 	}
 }
+
+// TestNewPGStoreRejectsInvalidDSN: a broken DSN fails at construction,
+// not at the first record.
+func TestNewPGStoreRejectsInvalidDSN(t *testing.T) {
+	t.Parallel()
+	if _, err := NewPGStore(context.Background(), "not a valid dsn"); err == nil {
+		t.Fatal("NewPGStore accepted an invalid dsn")
+	}
+}
