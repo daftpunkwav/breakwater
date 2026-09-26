@@ -8,6 +8,7 @@ package router
 
 import (
 	"context"
+	"math/rand/v2"
 	"testing"
 	"time"
 )
@@ -101,6 +102,95 @@ func TestCandidatesLatencyWithoutTrackerDegradesToStatic(t *testing.T) {
 	}
 	if got := candidateIDs(candidates); got[0] != "u1" || got[1] != "u2" {
 		t.Fatalf("order = %v, want the configured order without a tracker", got)
+	}
+}
+
+// TestCandidatesLatencyJittersNearTies: candidates within the tie
+// buffer of the best score trade the leading slot per request; the
+// runner-up always follows.
+func TestCandidatesLatencyJittersNearTies(t *testing.T) {
+	t.Parallel()
+	tr := NewTracker()
+	tr.Record("a", 10*time.Millisecond, false)
+	tr.Record("b", 10*time.Millisecond, false)
+
+	build := func(seed uint64) *Priority {
+		rt, err := NewPriority([]Binding{
+			{Models: []string{"m1"}, Upstream: stubUp{id: "a"}},
+			{Models: []string{"m1"}, Upstream: stubUp{id: "b"}},
+		}, WithStrategy(StrategyLatency), WithTracker(tr),
+			WithRandomSource(rand.New(rand.NewPCG(seed, seed))))
+		if err != nil {
+			t.Fatalf("router: %v", err)
+		}
+		return rt
+	}
+
+	leaders := map[string]bool{}
+	for _, seed := range []uint64{1, 2, 3, 4, 5, 6, 7, 8} {
+		candidates, err := build(seed).Candidates(context.Background(), "m1")
+		if err != nil {
+			t.Fatalf("candidates: %v", err)
+		}
+		got := candidateIDs(candidates)
+		leader, follow := got[0], got[1]
+		leaders[leader] = true
+		if leader == follow {
+			t.Fatalf("order = %v, want both candidates once each", got)
+		}
+	}
+	if !leaders["a"] || !leaders["b"] {
+		t.Fatalf("leaders = %v, want both near-tied candidates to lead across seeds", leaders)
+	}
+}
+
+// TestCandidatesLatencyTieCutHonorsBuffer: a candidate beyond the
+// buffer of the best score never leads, whatever the source draws.
+func TestCandidatesLatencyTieCutHonorsBuffer(t *testing.T) {
+	t.Parallel()
+	tr := NewTracker()
+	tr.Record("fast", 10*time.Millisecond, false)
+	tr.Record("slow", 20*time.Millisecond, false)
+
+	rt, err := NewPriority([]Binding{
+		{Models: []string{"m1"}, Upstream: stubUp{id: "fast"}},
+		{Models: []string{"m1"}, Upstream: stubUp{id: "slow"}},
+	}, WithStrategy(StrategyLatency), WithTracker(tr),
+		WithRandomSource(rand.New(rand.NewPCG(1, 1))))
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		candidates, err := rt.Candidates(context.Background(), "m1")
+		if err != nil {
+			t.Fatalf("candidates: %v", err)
+		}
+		if got := candidateIDs(candidates); got[0] != "fast" {
+			t.Fatalf("order = %v; a candidate outside the tie buffer must never lead", got)
+		}
+	}
+}
+
+// TestTieCutIsPureMath: the buffer arithmetic — a zero best score ties
+// only the other zeros, everything within 10% of the best ties, the
+// first candidate beyond the buffer ends the cut.
+func TestTieCutIsPureMath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		scores []float64
+		want   int
+	}{
+		{"single", []float64{5}, 1},
+		{"zeros tie zeros", []float64{0, 0, 4}, 2},
+		{"within ten percent", []float64{10, 10.5, 12}, 2},
+		{"exactly at the limit", []float64{10, 11}, 2},
+		{"beyond the limit", []float64{10, 11.1}, 1},
+	}
+	for _, tc := range cases {
+		if got := tieCut(tc.scores); got != tc.want {
+			t.Errorf("%s: tieCut(%v) = %d, want %d", tc.name, tc.scores, got, tc.want)
+		}
 	}
 }
 

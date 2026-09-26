@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
@@ -27,6 +28,12 @@ import (
 
 // wildcardModel matches every requested model.
 const wildcardModel = "*"
+
+// latencyTieBuffer is the fraction of the best measured score within
+// which candidates count as tied for the first slot under the latency
+// strategy. Near-equals trade blows per request instead of pinning
+// one upstream with everything.
+const latencyTieBuffer = 0.10
 
 // ErrUnavailable reports that the model has bound upstreams but none
 // of them is currently eligible — every one is circuit-open or
@@ -49,6 +56,9 @@ type Priority struct {
 	control  *Switch
 	strategy Strategy
 	tracker  *Tracker
+	// rng, when set, drives the near-tie leader draw under the latency
+	// strategy; nil falls back to the global source. Injected for tests.
+	rng *rand.Rand
 }
 
 // PriorityOption customizes a Priority.
@@ -81,6 +91,12 @@ func WithStrategy(s Strategy) PriorityOption {
 // the static order.
 func WithTracker(t *Tracker) PriorityOption {
 	return func(p *Priority) { p.tracker = t }
+}
+
+// WithRandomSource installs the source for the near-tie leader draw;
+// nil (the default) uses the global source.
+func WithRandomSource(rng *rand.Rand) PriorityOption {
+	return func(p *Priority) { p.rng = rng }
 }
 
 // NewPriority builds a router from ordered model bindings. Bindings
@@ -148,20 +164,60 @@ func (p *Priority) Candidates(ctx context.Context, model string) ([]upstream.Ups
 		return nil, fmt.Errorf("router: no upstream serves model %q", model)
 	}
 	if p.strategy == StrategyLatency && p.tracker != nil {
-		// Snapshot the scores once per candidate: the sort then reads a
-		// plain slice instead of re-locking the tracker O(n log n)
-		// times. At routing-table candidate counts the mutex is not a
-		// bottleneck either way — Record fires once per upstream
-		// exchange, orders of magnitude less often than Candidates —
-		// so the snapshot is a fixed ordering (scores cannot shift
-		// mid-sort) rather than a contention fix.
-		scores := make([]float64, len(candidates))
+		// Snapshot the scores once per candidate and sort the pairs
+		// together: the tie cut below must read the same ordering the
+		// sort produced, and the fixed snapshot means scores cannot
+		// shift mid-sort.
+		scored := make([]scoredCandidate, len(candidates))
 		for i, c := range candidates {
-			scores[i] = p.tracker.Score(c.ID())
+			scored[i] = scoredCandidate{upstream: c, score: p.tracker.Score(c.ID())}
 		}
-		sort.SliceStable(candidates, func(i, j int) bool {
-			return scores[i] < scores[j]
+		sort.SliceStable(scored, func(i, j int) bool {
+			return scored[i].score < scored[j].score
 		})
+		scores := make([]float64, len(scored))
+		for i, s := range scored {
+			candidates[i], scores[i] = s.upstream, s.score
+		}
+		// Near-tie exploration: candidates within a buffer of the best
+		// score are tied for the lead; which of them goes first is
+		// drawn per request, so sustained traffic spreads across
+		// near-equals while distinctly slower ones keep the strict
+		// order behind them.
+		if cut := tieCut(scores); cut > 1 {
+			if j := p.pickTied(cut); j != 0 {
+				candidates[0], candidates[j] = candidates[j], candidates[0]
+			}
+		}
 	}
 	return candidates, nil
+}
+
+// scoredCandidate pairs a candidate with its snapshot score, keeping
+// the sort and the tie cut on one consistent ordering.
+type scoredCandidate struct {
+	upstream upstream.Upstream
+	score    float64
+}
+
+// tieCut reports how many of the ascending-scored candidates count as
+// tied for the best score: everything within latencyTieBuffer of it.
+// A zero best score — untried upstreams — ties exactly the other
+// untried ones; scores are never negative.
+func tieCut(sorted []float64) int {
+	limit := sorted[0] + sorted[0]*latencyTieBuffer
+	cut := 1
+	for cut < len(sorted) && sorted[cut] <= limit {
+		cut++
+	}
+	return cut
+}
+
+// pickTied draws one of the tied slots; the injected source keeps the
+// draw reproducible in tests, the global source costs nothing to run.
+func (p *Priority) pickTied(cut int) int {
+	if p.rng != nil {
+		return p.rng.IntN(cut)
+	}
+	return rand.IntN(cut)
 }
