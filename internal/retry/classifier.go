@@ -23,6 +23,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // StatusError marks one completed upstream exchange that ended in an
@@ -30,6 +33,11 @@ import (
 // builds the error; only the status survives for classification.
 type StatusError struct {
 	StatusCode int
+	// RetryAfter is the wait the upstream itself requested (its
+	// Retry-After header), already parsed and capped. The attempt loop
+	// prefers it over the computed backoff for the next attempt against
+	// the same upstream; zero means the upstream asked for nothing.
+	RetryAfter time.Duration
 }
 
 // NewStatusError wraps an upstream error status for classification.
@@ -42,15 +50,75 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("upstream exchange failed with status %d", e.StatusCode)
 }
 
+// StripRetryAfter returns err with any Retry-After hint removed. The
+// attempt loop strips the hint when the next attempt will target a
+// different upstream: the wait one upstream asked for says nothing
+// about another. Errors without a hint pass through unchanged.
+func StripRetryAfter(err error) error {
+	var status *StatusError
+	if errors.As(err, &status) && status.RetryAfter > 0 {
+		clone := *status
+		clone.RetryAfter = 0
+		return &clone
+	}
+	return err
+}
+
 // ErrCommitted marks a failure that happened after the first response
 // byte reached the client. The attempt loop returns it without
 // consulting the classifier (invariant I6): a retry would replay a
 // half-sent reply.
 var ErrCommitted = errors.New("retry: attempt already committed bytes to the client")
 
+// retryAfterCap bounds a parsed Retry-After hint. The upstream's word
+// is authoritative but not unlimited; the overall deadline remains the
+// hard bound regardless.
+const retryAfterCap = 60 * time.Second
+
+// ParseRetryAfter parses one Retry-After header value: an integer or
+// fractional second count, or an HTTP-date. Zero reports "no usable
+// hint" — absent, malformed, already elapsed, or capped values included.
+func ParseRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return cappedRetryAfter(time.Duration(secs) * time.Second)
+	}
+	if frac, err := strconv.ParseFloat(raw, 64); err == nil {
+		return cappedRetryAfter(time.Duration(frac * float64(time.Second)))
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		return cappedRetryAfter(t.Sub(now))
+	}
+	return 0
+}
+
+// cappedRetryAfter sanitizes one parsed wait: negative and zero waits
+// mean "no hint", everything above the cap collapses to the cap.
+func cappedRetryAfter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return min(d, retryAfterCap)
+}
+
 // DefaultClassifier is the standard retryability table described in the
 // file header.
 type DefaultClassifier struct{}
+
+// DelayHint reports the wait the upstream itself requested before the
+// next attempt, when the error carries a Retry-After hint. The attempt
+// loop prefers this over its computed backoff. Errors without a hint
+// yield zero and the loop falls back to its own schedule.
+func (DefaultClassifier) DelayHint(err error) time.Duration {
+	var status *StatusError
+	if errors.As(err, &status) {
+		return status.RetryAfter
+	}
+	return 0
+}
 
 // Retryable implements Classifier.
 func (DefaultClassifier) Retryable(err error) bool {

@@ -85,6 +85,16 @@ func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Clas
 		}
 
 		delay := backoffDelay(policy, attempt)
+		// A Retry-After hint from the upstream replaces the computed
+		// backoff: the upstream knows its own recovery schedule better
+		// than our jitter does. Only hint-carrying errors are affected.
+		if dh, ok := classifier.(interface {
+			DelayHint(error) time.Duration
+		}); ok {
+			if hint := dh.DelayHint(err); hint > 0 {
+				delay = hint
+			}
+		}
 		if onRetry != nil {
 			onRetry(attempt, err, delay)
 		}
