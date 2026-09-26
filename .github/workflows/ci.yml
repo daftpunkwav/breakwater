@@ -63,7 +63,10 @@ jobs:
           version: v2.13
 
       - name: Test
-        run: go test -race ./...
+        # The explicit timeout keeps a hung test from burning the job's
+        # 15-minute budget on go test's default 10m plus a second full
+        # attempt of the same wait.
+        run: go test -race -timeout 8m ./...
         env:
           BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
           BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable

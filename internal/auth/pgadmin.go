@@ -80,7 +80,21 @@ func (s *PG) Users(ctx context.Context) ([]UserView, error) {
 		return nil, fmt.Errorf("auth: list users: %w", err)
 	}
 	defer rows.Close()
+	return scanUsers(rows)
+}
 
+// rowsScanner is the subset of pgx.Rows the identity mappings need;
+// the concrete rows type satisfies it, tests script it.
+type rowsScanner interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+// scanUsers folds the user query rows into the management view,
+// parsing each row's overrides document (a corrupted one fails the
+// listing rather than skipping silently).
+func scanUsers(rows rowsScanner) ([]UserView, error) {
 	var out []UserView
 	for rows.Next() {
 		var v UserView
@@ -88,9 +102,11 @@ func (s *PG) Users(ctx context.Context) ([]UserView, error) {
 		if err := rows.Scan(&v.ID, &v.Name, &v.Role, &v.Tier, &raw, &v.CreatedAt); err != nil {
 			return nil, fmt.Errorf("auth: scan user: %w", err)
 		}
-		if v.Overrides, err = ParseOverride(raw); err != nil {
+		overrides, err := ParseOverride(raw)
+		if err != nil {
 			return nil, fmt.Errorf("auth: user %s overrides: %w", v.ID, err)
 		}
+		v.Overrides = overrides
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -186,7 +202,13 @@ func (s *PG) Keys(ctx context.Context, userID string) ([]KeyView, error) {
 		return nil, fmt.Errorf("auth: list keys: %w", err)
 	}
 	defer rows.Close()
+	return scanKeys(rows)
+}
 
+// scanKeys folds the key query rows into the management view with the
+// active flag decoded from the status column and the overrides
+// document parsed (a corrupted one fails the listing).
+func scanKeys(rows rowsScanner) ([]KeyView, error) {
 	var out []KeyView
 	for rows.Next() {
 		var v KeyView
@@ -196,9 +218,11 @@ func (s *PG) Keys(ctx context.Context, userID string) ([]KeyView, error) {
 			return nil, fmt.Errorf("auth: scan key: %w", err)
 		}
 		v.Active = status == "active"
-		if v.Overrides, err = ParseOverride(raw); err != nil {
+		overrides, err := ParseOverride(raw)
+		if err != nil {
 			return nil, fmt.Errorf("auth: key %s overrides: %w", v.ID, err)
 		}
+		v.Overrides = overrides
 		out = append(out, v)
 	}
 	return out, rows.Err()

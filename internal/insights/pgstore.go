@@ -111,7 +111,9 @@ func (s *PGStore) Close() {
 	s.drops += int64(len(s.queue))
 	s.queue = nil
 	s.mu.Unlock()
-	s.pool.Close()
+	if s.pool != nil {
+		s.pool.Close()
+	}
 }
 
 // writeLoop batches records on an interval; the loop owns the queue

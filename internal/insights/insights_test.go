@@ -217,3 +217,28 @@ func TestRecordConcurrentWithClose(t *testing.T) {
 	<-s.done
 	wg.Wait()
 }
+
+// TestCloseIsIdempotentAndCountsLateRecords: a second Close is a
+// no-op, and a record that races the final flush counts as a drop —
+// never lost in silence. Runs against a nil pool: the lifecycle
+// helpers must not need a database.
+func TestCloseIsIdempotentAndCountsLateRecords(t *testing.T) {
+	t.Parallel()
+	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	sink := &scriptedSink{}
+	s.insert = sink.insert
+	go s.writeLoop()
+
+	s.Record(Record{Status: 200})
+	s.Close()
+	s.Close() // idempotent
+
+	if got := sink.inserted.Load(); got != 1 {
+		t.Fatalf("inserted = %d, want the buffered record flushed once", got)
+	}
+	// After shutdown every further record is a counted drop.
+	s.Record(Record{Status: 200})
+	if got := s.Dropped(); got != 1 {
+		t.Fatalf("dropped = %d, want the post-close record counted", got)
+	}
+}

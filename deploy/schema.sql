@@ -76,13 +76,15 @@ CREATE INDEX IF NOT EXISTS idx_quota_snapshots_tenant ON quota_snapshots (tenant
 -- The monitoring and assessment record (PRD observability): one row
 -- per finished request, written asynchronously in batches. The
 -- failure taxonomy lives in error_code: the governance rejection code
--- (invalid_api_key, rate_limited, quota_insufficient,
--- concurrency_limit_exceeded, ...), the relay's gateway/abort code
--- (circuit_open, budget_exhausted, upstream_unreachable,
--- upstream_timeout, ...), or empty for upstream error passthroughs
--- whose status code classifies them (coarse upstream_4xx /
--- upstream_5xx buckets in the report queries). Client disconnects are
--- status 499 and never count as failures.
+-- (missing_api_key, invalid_api_key, identity_unavailable,
+-- model_not_allowed, concurrency_limit_exceeded, rate_limit_exceeded,
+-- insufficient_quota, governance_unavailable, ...), the relay's
+-- gateway/abort code (no_upstream, circuit_open, budget_exhausted,
+-- upstream_unreachable, upstream_timeout, upstream_reset, ...) or
+-- empty for upstream error passthroughs whose status code classifies
+-- them (coarse upstream_4xx / upstream_5xx buckets in the report
+-- queries). Client disconnects are status 499 and never count as
+-- failures.
 CREATE TABLE IF NOT EXISTS request_log (
     id          BIGSERIAL PRIMARY KEY,
     time        TIMESTAMPTZ NOT NULL,

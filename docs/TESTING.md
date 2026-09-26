@@ -31,13 +31,18 @@ matrix lives in the spec review notes and is kept in sync by review.
 
 ## Coverage
 
-The bar is ≥95% statement coverage per package; the tree sits at or
-above it everywhere. The residual uncovered lines are defensive guards
-and `main()` process boundaries, which are covered indirectly through
-subprocess tests. The identity store's SQL paths (internal/auth) are
-covered by the DSN-gated integration tests, so measuring them requires
-the integration environment — locally they skip and the package reads
-lower; CI's coverage gate runs with both databases provisioned. Verify
-with:
+The bar is ≥95% statement coverage per package. Local measurement
+splits into two classes:
+
+- Packages whose tests are self-contained sit at 95–100% locally.
+- The PostgreSQL-backed stores (identity, insights) keep a share of
+  their SQL paths behind the DSN-gated integration tests; locally
+  they read 85–90%, with every live-database branch covered when CI's
+  coverage gate runs with both databases provisioned. The residual
+  uncovered lines are defensive guards (`crypto/rand` failure
+  branches, pool teardown) that cannot be triggered on a real host
+  and are disclosed rather than faked.
+
+Verify with:
 
     go test -cover ./...
