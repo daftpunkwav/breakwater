@@ -71,7 +71,11 @@ type Tenant struct {
 	ID   string
 	Name string
 	Role Role
-	Tier Tier
+	// KeyID identifies the API key the request resolved through, for
+	// per-key usage attribution; the static identity mode leaves it
+	// empty (its keys have no database identity).
+	KeyID string
+	Tier  Tier
 }
 
 // wildcardModel matches every model in an AllowedModels list.

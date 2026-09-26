@@ -53,7 +53,7 @@ func (s *PG) Close() {
 // snapshot the governance layers enforce.
 func (s *PG) Resolve(ctx context.Context, apiKey string) (Tenant, error) {
 	rows := s.pool.QueryRow(ctx, `
-		SELECT t.id, t.name, t.role,
+		SELECT t.id, t.name, t.role, k.id,
 		       tr.id, tr.rpm, tr.tpm,
 		       tr.per_request_max_tokens, tr.monthly_quota, tr.allowed_models,
 		       t.overrides, k.overrides
@@ -81,8 +81,9 @@ func resolveTenantRow(row rowScanner) (Tenant, error) {
 	var tenant Tenant
 	var tier Tier
 	var role Role
+	var keyID string
 	var userRaw, keyRaw []byte
-	err := row.Scan(&tenant.ID, &tenant.Name, &role, &tier.ID, &tier.RPM, &tier.TPM,
+	err := row.Scan(&tenant.ID, &tenant.Name, &role, &keyID, &tier.ID, &tier.RPM, &tier.TPM,
 		&tier.MaxTokens, &tier.MonthlyQuota, &tier.AllowedModels, &userRaw, &keyRaw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -91,6 +92,7 @@ func resolveTenantRow(row rowScanner) (Tenant, error) {
 		return Tenant{}, fmt.Errorf("auth: resolve key: %w", err)
 	}
 	tenant.Role = role
+	tenant.KeyID = keyID
 	userOverride, err := ParseOverride(userRaw)
 	if err != nil {
 		return Tenant{}, fmt.Errorf("auth: tenant %s overrides: %w", tenant.ID, err)

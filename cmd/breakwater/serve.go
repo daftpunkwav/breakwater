@@ -71,6 +71,15 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	}
 	defer accessLog.close()
 
+	// The monitoring and assessment store: one row per finished
+	// request, batched into PostgreSQL; disabled without a DSN.
+	recorder, err := newInsights(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer recorder.close()
+	sink := combinedSink{file: accessLog.sink, insights: recorder.store}
+
 	// Governance backends: Redis when configured, in-memory otherwise
 	// (development and evidence runs). Memory mode keeps the exact same
 	// pipeline semantics with process-local state.
@@ -95,7 +104,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// The governance stage template, shared by every client format; the
 	// format stage in front pins which wire parses and renders.
 	governance := []pipeline.Middleware{
-		pipeline.ObservationStage(metrics, accessLog.sink),
+		pipeline.ObservationStage(metrics, sink),
 	}
 	if authStore != nil {
 		// One gate for the process lifetime: its slot map IS the
@@ -189,7 +198,8 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		Metrics:       metricsHandler(metrics),
 		Admin: buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams),
 			server.WithRouting(routingSwitch),
-			server.WithIdentityStore(identityAdmin)),
+			server.WithIdentityStore(identityAdmin),
+			server.WithInsights(recorder.store)),
 		Readiness: mergeReadiness(gov.readiness, identityReady),
 		Version:   version,
 	})

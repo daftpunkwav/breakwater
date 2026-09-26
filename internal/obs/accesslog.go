@@ -20,8 +20,11 @@ import (
 // Entry is one access record for a finished request. Fields are append
 // only across releases; consumers must tolerate additions.
 type Entry struct {
-	Time      time.Time
-	TenantID  string
+	Time     time.Time
+	TenantID string
+	// KeyID is the API key identity the request resolved through
+	// (PostgreSQL deployments); the static identity mode leaves it empty.
+	KeyID     string
 	RequestID string
 	// Model and Upstream carry the dimensions the evidence documents are
 	// derived from: per-model traffic, per-upstream errors, cache
@@ -36,6 +39,11 @@ type Entry struct {
 	// "exactly one upstream fetch per cold key" evidence (invariant I2)
 	// is audited from this field.
 	CacheHit bool
+	// ErrorCode carries the failure classification of a rejected or
+	// failed request: the governance rejection code (invalid_api_key,
+	// rate_limited, quota_insufficient, concurrency_limit_exceeded, ...)
+	// or the relay's gateway/abort code. Empty on success.
+	ErrorCode string
 }
 
 // Sink consumes access entries asynchronously.

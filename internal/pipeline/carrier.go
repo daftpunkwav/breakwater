@@ -60,6 +60,12 @@ type Carrier struct {
 	// CacheHit reports a response served from the cache (a hit replay
 	// or a shared singleflight fetch), for observation and refund.
 	CacheHit bool
+	// RejectCode records the governance rejection code (auth_invalid,
+	// model_forbidden, concurrency_limit_exceeded, rate_limited,
+	// quota_exhausted) of the stage that refused the request, for the
+	// failure taxonomy. Empty unless the request was rejected before
+	// the forward stage.
+	RejectCode string
 	// Relay captures the forward stage's outcome for the stages after
 	// it (settlement details, observation dimensions).
 	Relay *relay.Result

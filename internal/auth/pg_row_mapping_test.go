@@ -78,7 +78,7 @@ func (r *fakeRow) Scan(dest ...any) error {
 // tier template and both override layers (user-level then key-level,
 // as JSON documents).
 var fullRowValues = []any{
-	"tenant-1", "Acme", "user",
+	"tenant-1", "Acme", "user", "key-9",
 	"tier-pro", int64(600), int64(90_000),
 	int64(4096), int64(50_000_000),
 	[]string{"m1", "m2"},
@@ -102,6 +102,9 @@ func TestResolveTenantRowMapsFullRow(t *testing.T) {
 	}
 	if tenant.Role != RoleUser {
 		t.Fatalf("role = %q, want user", tenant.Role)
+	}
+	if tenant.KeyID != "key-9" {
+		t.Fatalf("key id = %q, want key-9", tenant.KeyID)
 	}
 	tier := tenant.Tier
 	if tier.ID != "tier-pro" || tier.MaxTokens != 4096 {
@@ -136,7 +139,7 @@ func TestResolveTenantRowMappings(t *testing.T) {
 		{"unknown key", &fakeRow{err: pgx.ErrNoRows}, ErrUnauthorized, ""},
 		{"scan failure wraps the cause", &fakeRow{err: scanErr}, scanErr, "resolve key"},
 		{"target mismatch wraps the scan error", &fakeRow{values: []any{"t", "n", "user", "tier", "not-an-int"}}, nil, "fakeRow"},
-		{"broken user override fails the resolution", &fakeRow{values: append(append([]any{}, fullRowValues[:9]...), []byte("{broken"), []byte(nil))}, nil, "overrides"},
+		{"broken user override fails the resolution", &fakeRow{values: append(append([]any{}, fullRowValues[:10]...), []byte("{broken"), []byte(nil))}, nil, "overrides"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

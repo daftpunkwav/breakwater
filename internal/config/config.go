@@ -131,6 +131,11 @@ type Obs struct {
 	// AccessLogPath is the JSONL file the access log writes to; empty
 	// disables the file sink (metrics stay active).
 	AccessLogPath string
+	// InsightsDSN is the PostgreSQL database the monitoring and
+	// assessment records persist to; empty disables the record store
+	// (the access log and metrics stay active). Defaults to the main
+	// identity DSN when that is configured.
+	InsightsDSN string
 }
 
 // Security holds the management-surface credentials.

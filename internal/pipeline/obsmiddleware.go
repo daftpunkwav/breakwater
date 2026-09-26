@@ -41,19 +41,28 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 			duration := time.Since(start)
 			carrier := CarrierFrom(r.Context())
 
-			tenant, model, requestID := "", "", ""
+			tenant, model, requestID, keyID, rejectCode := "", "", "", "", ""
 			if carrier != nil {
 				tenant = carrier.Tenant.ID
+				keyID = carrier.Tenant.KeyID
 				model = carrier.Chat.Model
 				requestID = carrier.RequestID
+				rejectCode = carrier.RejectCode
 			}
 			upstream := "-"
 			aborted, cacheHit := false, false
+			errorCode := rejectCode
 			if carrier != nil {
 				cacheHit = carrier.CacheHit
 				if carrier.Relay != nil {
 					upstream = carrier.Relay.UpstreamID
 					aborted = carrier.Relay.Aborted
+					// A forward-stage failure refines the rejection code:
+					// upstream passthroughs classify by status, gateway
+					// envelopes and stream aborts by their code.
+					if errorCode == "" && (carrier.Relay.Status < 200 || carrier.Relay.Status > 299) {
+						errorCode = carrier.Relay.ErrorCode
+					}
 				}
 			}
 
@@ -67,6 +76,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 				sink.Record(obs.Entry{
 					Time:      start,
 					TenantID:  tenant,
+					KeyID:     keyID,
 					RequestID: requestID,
 					Model:     model,
 					Upstream:  upstream,
@@ -75,6 +85,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					Status:    tee.Status(),
 					Duration:  duration,
 					CacheHit:  cacheHit,
+					ErrorCode: errorCode,
 				})
 			}
 		})

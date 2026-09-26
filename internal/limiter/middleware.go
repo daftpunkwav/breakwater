@@ -49,6 +49,7 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 			decision, err := l.Allow(r.Context(), carrier.Tenant.ID, limits, tokens)
 			if err != nil {
 				// Fail-closed: governance unavailable means reject (PRD Q4).
+				carrier.RejectCode = "governance_unavailable"
 				wire.RenderError(w, http.StatusServiceUnavailable, "governance_unavailable",
 					"rate limiter unavailable")
 				return
@@ -60,6 +61,7 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 					seconds = 1
 				}
 				w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+				carrier.RejectCode = string(protocol.CodeRateLimited)
 				wire.RenderError(w, http.StatusTooManyRequests, string(protocol.CodeRateLimited),
 					"tenant rate limit exceeded")
 				return

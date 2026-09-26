@@ -22,6 +22,7 @@ import (
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
+	"github.com/daftpunkwav/breakwater/internal/insights"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/server"
 )
@@ -70,6 +71,79 @@ func newAccessLog(cfg config.Config, logger *slog.Logger) (*accessLog, error) {
 	l := obs.NewLogger(file, cfg.Obs.AccessLogQueueSize)
 	logger.Info("access log enabled", "path", cfg.Obs.AccessLogPath, "queue", cfg.Obs.AccessLogQueueSize)
 	return &accessLog{sink: l, logger: l, file: file}, nil
+}
+
+// insightsStore bundles the assessment record store with its
+// lifecycle. A nil store means the deployment runs without persisted
+// monitoring records.
+type insightsStore struct {
+	store *insights.PGStore
+	once  sync.Once
+}
+
+func (s *insightsStore) close() {
+	if s == nil || s.store == nil {
+		return
+	}
+	s.once.Do(s.store.Close)
+}
+
+// newInsights opens the assessment record store when a DSN resolves
+// (an explicit BREAKWATER_INSIGHTS_DSN or, by default, the identity
+// database's DSN). A failed connection is an error, not a gateway
+// that silently stops measuring.
+func newInsights(ctx context.Context, cfg config.Config, logger *slog.Logger) (*insightsStore, error) {
+	dsn := cfg.Obs.InsightsDSN
+	if dsn == "" {
+		dsn = cfg.Postgres.DSN
+	}
+	if dsn == "" {
+		return &insightsStore{}, nil
+	}
+	store, err := insights.NewPGStore(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("insights record store enabled", "dsn", dsn)
+	return &insightsStore{store: store}, nil
+}
+
+// combinedSink fans one access entry out to the file log and the
+// assessment store; each consumer is optional. The observation stage
+// stays single-sink; the split of concerns lives here, at assembly.
+type combinedSink struct {
+	file     obs.Sink
+	insights *insights.PGStore
+}
+
+func (c combinedSink) Record(entry obs.Entry) {
+	if c.file != nil {
+		c.file.Record(entry)
+	}
+	if c.insights != nil {
+		c.insights.Record(insights.Record{
+			Time:       entry.Time,
+			TenantID:   entry.TenantID,
+			KeyID:      entry.KeyID,
+			RequestID:  entry.RequestID,
+			Model:      entry.Model,
+			Upstream:   entry.Upstream,
+			Path:       entry.Path,
+			Status:     entry.Status,
+			DurationMS: entry.Duration.Milliseconds(),
+			CacheHit:   entry.CacheHit,
+			ErrorCode:  entry.ErrorCode,
+		})
+	}
+}
+
+// Flush drains the file log; the insights store has no shutdown-time
+// flush beyond Close.
+func (c combinedSink) Flush(ctx context.Context) error {
+	if c.file == nil {
+		return nil
+	}
+	return c.file.Flush(ctx)
 }
 
 // buildAdmin binds the admin endpoints to the live backends; options

@@ -166,6 +166,9 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	if lease.ceilingFired.Load() {
 		code = protocol.CodeUpstreamTimeout
 	}
+	// The failure taxonomy reads the same code the client saw in the
+	// stream's error frame.
+	r.gatewayCode = string(code)
 	message := "upstream stream failed mid-flight: " + pumpErr.Error()
 	if transcoder != nil {
 		_ = transcoder.Abort(r.job.Out, code, message)

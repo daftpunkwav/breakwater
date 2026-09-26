@@ -160,6 +160,12 @@ type Result struct {
 	// ClientGone reports that the client disconnected before the
 	// response completed.
 	ClientGone bool
+	// ErrorCode is the gateway-originated failure code when the gateway
+	// itself rendered the error: no_upstream, circuit_open,
+	// budget_exhausted, upstream_unreachable, or the in-stream abort
+	// code of a broken stream. Upstream error passthroughs leave it
+	// empty — their status code is the failure classification.
+	ErrorCode string
 }
 
 // exchangeSnapshot captures one completed upstream error exchange for
@@ -192,6 +198,10 @@ type run struct {
 	lastFailedErr *retry.StatusError
 	terminal      *exchangeSnapshot
 	streamBytes   int64
+	// gatewayCode records the gateway-originated failure code of the
+	// branch that will render the final error; a mid-stream abort
+	// records its in-stream code instead.
+	gatewayCode string
 }
 
 // Execute runs the job. Exactly one HTTP response is written to
@@ -205,7 +215,7 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 		}
 		wire.RenderError(job.Out, http.StatusBadGateway, "no_upstream",
 			"no upstream candidate available for model "+job.Model)
-		return Result{Status: http.StatusBadGateway}
+		return Result{Status: http.StatusBadGateway, ErrorCode: "no_upstream"}
 	}
 
 	wire := job.Wire
@@ -291,6 +301,7 @@ func (r *run) finish(err error) Result {
 			Usage: r.usage, UsageKnown: r.usageKnown,
 			Streamed: true, StreamBytes: r.streamBytes,
 			Aborted: true, ClientGone: r.clientGone(),
+			ErrorCode: r.gatewayCode,
 		}
 
 	case r.clientGone():
@@ -307,13 +318,15 @@ func (r *run) finish(err error) Result {
 	case errors.Is(err, errCircuitOpen):
 		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "circuit_open",
 			"all upstream candidates are unavailable")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
+		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
+			ErrorCode: "circuit_open"}
 
 	case errors.Is(err, retry.ErrBudgetExhausted):
 		r.exec.metrics.RetryBudgetExhausted()
 		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
 			"retry budget exhausted before an upstream answered")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
+		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
+			ErrorCode: "budget_exhausted"}
 
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
 		r.wire.RenderUpstreamError(job.Out, r.lastFailed.status, r.lastFailed.header, r.lastFailed.body)
@@ -323,7 +336,8 @@ func (r *run) finish(err error) Result {
 	default:
 		r.wire.RenderError(job.Out, http.StatusBadGateway, "upstream_unreachable",
 			"upstream did not answer: "+err.Error())
-		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
+		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
+			ErrorCode: "upstream_unreachable"}
 	}
 }
 

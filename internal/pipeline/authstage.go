@@ -62,8 +62,17 @@ const bearerPrefix = "Bearer "
 func AuthStage(store auth.Store) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			carrier := CarrierFrom(r.Context())
+			// Stamp the failure taxonomy on every rejection; the carrier
+			// exists from the chain's first stage on, rejections included.
+			reject := func(code string) {
+				if carrier != nil {
+					carrier.RejectCode = code
+				}
+			}
 			key, ok := apiKeyOf(r)
 			if !ok {
+				reject("missing_api_key")
 				renderFor(r, w, http.StatusUnauthorized, "missing_api_key",
 					"expected an Authorization: Bearer <key> or x-api-key header")
 				return
@@ -72,16 +81,17 @@ func AuthStage(store auth.Store) Middleware {
 			tenant, err := store.Resolve(r.Context(), key)
 			switch {
 			case errors.Is(err, auth.ErrUnauthorized):
+				reject("invalid_api_key")
 				renderFor(r, w, http.StatusUnauthorized, "invalid_api_key",
 					"unknown or revoked api key")
 				return
 			case err != nil:
+				reject("identity_unavailable")
 				renderFor(r, w, http.StatusServiceUnavailable, "identity_unavailable",
 					"identity store unavailable")
 				return
 			}
 
-			carrier := CarrierFrom(r.Context())
 			if carrier == nil {
 				protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
 					"no request carrier assembled")

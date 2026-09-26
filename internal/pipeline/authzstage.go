@@ -48,6 +48,7 @@ func AuthorizeModel(w http.ResponseWriter, r *http.Request, carrier *Carrier) bo
 		return false
 	}
 	if carrier.Tenant.ID != "" && !carrier.Tenant.Tier.AllowsModel(carrier.Chat.Model) {
+		carrier.RejectCode = string(protocol.CodeModelNotAllowed)
 		wire.RenderError(w, http.StatusForbidden, string(protocol.CodeModelNotAllowed),
 			"the tenant tier does not allow model "+carrier.Chat.Model)
 		return false

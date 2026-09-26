@@ -72,6 +72,7 @@ const (
 	envAccessLogPath = "BREAKWATER_ACCESS_LOG_PATH"
 	envAdminToken    = "BREAKWATER_ADMIN_TOKEN"
 	envRouting       = "BREAKWATER_ROUTING_STRATEGY"
+	envInsightsDSN   = "BREAKWATER_INSIGHTS_DSN"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -91,6 +92,7 @@ func Load() (Config, error) {
 		Obs: Obs{
 			AccessLogQueueSize: defaultAccessLogQueue,
 			AccessLogPath:      strings.TrimSpace(os.Getenv(envAccessLogPath)),
+			InsightsDSN:        strings.TrimSpace(os.Getenv(envInsightsDSN)),
 		},
 		Security: Security{
 			AdminToken: strings.TrimSpace(os.Getenv(envAdminToken)),

@@ -26,15 +26,19 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/circuit"
+	"github.com/daftpunkwav/breakwater/internal/insights"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/daftpunkwav/breakwater/internal/router"
@@ -64,6 +68,12 @@ type BreakerView struct {
 	State    circuit.State `json:"state"`
 }
 
+// Reporter is the assessment port the insights endpoint needs: one
+// stability report for a window. *insights.PGStore implements it.
+type Reporter interface {
+	Report(ctx context.Context, from, to time.Time) (insights.Report, error)
+}
+
 // Admin serves the management endpoints.
 type Admin struct {
 	token    string
@@ -72,6 +82,7 @@ type Admin struct {
 	breakers BreakerStates
 	routing  *router.Switch
 	identity auth.AdminStore
+	insights Reporter
 }
 
 // AdminOption customizes an Admin.
@@ -88,6 +99,12 @@ func WithRouting(s *router.Switch) AdminOption {
 // static identity mode has no administration surface.
 func WithIdentityStore(s auth.AdminStore) AdminOption {
 	return func(a *Admin) { a.identity = s }
+}
+
+// WithInsights installs the monitoring store backing the assessment
+// endpoint; nil (the default) omits it.
+func WithInsights(s Reporter) AdminOption {
+	return func(a *Admin) { a.insights = s }
 }
 
 // NewAdmin builds the admin handler. A nil lookup or writer omits the
@@ -112,6 +129,8 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.guarded(w, r, http.MethodGet, a.serveBreakers)
 	case r.URL.Path == "/admin/routing":
 		a.guarded(w, r, http.MethodGet, a.serveRouting)
+	case r.URL.Path == "/admin/insights":
+		a.guarded(w, r, http.MethodGet, a.serveInsights)
 	case r.URL.Path == "/admin/users" || strings.HasPrefix(r.URL.Path, "/admin/users/") ||
 		strings.HasPrefix(r.URL.Path, "/admin/keys/"):
 		a.serveIdentity(w, r)
@@ -237,6 +256,34 @@ func (a *Admin) serveBreakers(w http.ResponseWriter, r *http.Request) {
 		states = []BreakerView{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"breakers": states})
+}
+
+// serveInsights handles GET /admin/insights?hours=N: the stability
+// report for the trailing window (default 24, capped at 30 days).
+func (a *Admin) serveInsights(w http.ResponseWriter, r *http.Request) {
+	if a.insights == nil {
+		http.NotFound(w, r)
+		return
+	}
+	hours := int64(24)
+	if raw := r.URL.Query().Get("hours"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 1 || parsed > 24*30 {
+			protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+				"hours must be an integer between 1 and 720")
+			return
+		}
+		hours = parsed
+	}
+	to := time.Now().UTC()
+	from := to.Add(-time.Duration(hours) * time.Hour)
+	report, err := a.insights.Report(r.Context(), from, to)
+	if err != nil {
+		protocol.WriteError(w, http.StatusServiceUnavailable, "insights_unavailable",
+			"monitoring store unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
 }
 
 // serveRouting handles GET /admin/routing: every known model and

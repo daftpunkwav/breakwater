@@ -52,12 +52,14 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 			lease, err := ledger.Reserve(r.Context(), carrier.Tenant.ID, amount)
 			switch {
 			case errors.Is(err, ErrInsufficientBalance):
+				carrier.RejectCode = string(protocol.CodeInsufficientQuota)
 				wire.RenderError(w, http.StatusPaymentRequired, string(protocol.CodeInsufficientQuota),
 					"the tenant balance cannot cover the estimated request")
 				return
 			case err != nil:
 				// Fail-closed: a gateway that cannot meter must not give
 				// away upstream traffic.
+				carrier.RejectCode = "governance_unavailable"
 				wire.RenderError(w, http.StatusServiceUnavailable, "governance_unavailable",
 					"quota ledger unavailable")
 				return

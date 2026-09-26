@@ -19,6 +19,7 @@ tests, metrics and fault-injection experiments.
 | `internal/relay`      | Response-side execution engine: attempts, failover, SSE passthrough, honest stream termination |
 | `internal/pipeline`   | Middleware chain, per-request carrier, model authorization, observation stage |
 | `internal/httpserver` | Shared HTTP lifecycle and the response tee                |
+| `internal/insights`   | Monitoring record store: batched async writes, stability aggregation (success rate, failure mix, percentiles, timelines) |
 | `internal/protocol`   | Wire contracts: the canonical chat form, the translator wires (openai-chat passthrough, openai-responses and anthropic-messages transcoding), SSE codecs |
 | `internal/auth`       | Identity: users, roles, layered key limits (static/PostgreSQL stores, process-local LRU) |
 | `internal/limiter`    | RPM/TPM token buckets (in-memory + Redis Lua), per-tenant concurrency gate, 429 stages |
@@ -139,6 +140,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing (PRD Q6); needs Redis + PostgreSQL; `0` disables |
+| `BREAKWATER_INSIGHTS_DSN`             | _(main DSN)_   | PostgreSQL the monitoring records persist to; defaults to `BREAKWATER_POSTGRES_DSN`; unset without any DSN |
 
 ## Operations surface
 
@@ -150,6 +152,7 @@ All configuration is environment-based; core knobs:
 - `GET /admin/tenants/{id}/quota` — current balance
 - `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
+- `GET /admin/insights?hours=N` — the stability report for the trailing window (default 24): success rate, failure mix by cause, latency percentiles, a 5-minute timeline and per-tenant/key/model/upstream breakdowns. Requires the monitoring store (any PostgreSQL DSN).
 - `GET /admin/routing` — every known model and upstream with its current eligibility
 - `PUT /admin/models/{id}` — enable or disable a model (`{"enabled": false}`); disabled models refuse requests with `403 model_disabled`
 - `PUT /admin/upstreams/{id}` — enable or disable an upstream; disabled upstreams drop out of every candidate list. Switches are in-memory and reset on restart.
