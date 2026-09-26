@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -83,10 +84,25 @@ func ParseRetryAfter(raw string, now time.Time) time.Duration {
 	if raw == "" {
 		return 0
 	}
+	// The magnitude check happens in the numeric domain: building the
+	// Duration first would overflow for absurd counts and land on an
+	// arbitrary sign instead of the cap.
 	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if secs > int64(retryAfterCap/time.Second) {
+			return retryAfterCap
+		}
 		return cappedRetryAfter(time.Duration(secs) * time.Second)
 	}
 	if frac, err := strconv.ParseFloat(raw, 64); err == nil {
+		// ParseFloat also accepts NaN and infinities. A NaN carries no
+		// usable wait and folds to "no hint"; any finite value past the
+		// cap collapses to the cap in the numeric domain.
+		if math.IsNaN(frac) {
+			return 0
+		}
+		if frac > float64(retryAfterCap/time.Second) {
+			return retryAfterCap
+		}
 		return cappedRetryAfter(time.Duration(frac * float64(time.Second)))
 	}
 	if t, err := http.ParseTime(raw); err == nil {

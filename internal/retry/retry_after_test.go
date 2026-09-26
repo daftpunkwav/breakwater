@@ -32,6 +32,10 @@ func TestParseRetryAfter(t *testing.T) {
 		{"future date", now.Add(time.Minute).UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"), time.Minute},
 		{"padded", " 2 ", 2 * time.Second},
 		{"capped", "3600", retryAfterCap},
+		{"huge seconds overflow int64 math", "9223372036854775807", retryAfterCap},
+		{"huge fractional overflow float math", "99999999999999999999", retryAfterCap},
+		{"nan means no hint", "NaN", 0},
+		{"infinity folds to the cap", "Inf", retryAfterCap},
 	}
 	for _, tc := range cases {
 		if got := ParseRetryAfter(tc.raw, now); got != tc.want {
