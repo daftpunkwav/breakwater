@@ -36,6 +36,10 @@ type Options struct {
 	// Readiness reports whether business traffic may be served; nil
 	// always reports ready.
 	Readiness func() error
+	// Models are the client-facing model names exposed at GET
+	// /v1/models in the OpenAI list form; an empty list omits the
+	// discovery endpoint.
+	Models []string
 	// Version is the build identifier exposed at GET /version (set via
 	// ldflags at build time); empty reports "dev".
 	Version string
@@ -56,7 +60,7 @@ func New(opts Options) *Server {
 func (s *Server) Run(ctx context.Context) error {
 	return httpserver.Run(ctx, httpserver.Options{
 		Addr:          s.opts.Addr,
-		Handler:       newRootHandler(s.opts.Inference, s.opts.Metrics, s.opts.Admin, s.opts.Version, s.opts.Readiness),
+		Handler:       newRootHandler(s.opts.Inference, s.opts.Metrics, s.opts.Admin, s.opts.Version, s.opts.Readiness, s.opts.Models),
 		ShutdownGrace: s.opts.ShutdownGrace,
 	})
 }

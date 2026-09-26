@@ -18,8 +18,9 @@ import (
 // Inference maps each client format to its chain-wrapped handler; a
 // missing format leaves that route unregistered. Readiness gates on
 // the injected probe; nil always reports ready. Metrics and Admin
-// expose their endpoints when non-nil.
-func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin http.Handler, version string, readiness func() error) http.Handler {
+// expose their endpoints when non-nil. The model discovery route is
+// registered only for a non-empty model list.
+func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin http.Handler, version string, readiness func() error, models []string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleLiveness)
 	mux.HandleFunc("GET /version", makeVersion(version))
@@ -33,6 +34,9 @@ func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin h
 		// pattern would bounce PUT at the mux with a 405 the top-up
 		// endpoint could never see.
 		mux.Handle("/admin/", admin)
+	}
+	if len(models) > 0 {
+		mux.Handle("GET /v1/models", makeModelsHandler(models))
 	}
 	for format, handler := range inference {
 		mux.Handle(routeOfFormat(format), handler)
