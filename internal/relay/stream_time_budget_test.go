@@ -119,8 +119,11 @@ func TestStreamTTFTExpiryDuringForwardRetries(t *testing.T) {
 	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
 		calls++
 		if calls == 1 {
-			// Outlives the TTFT budget; the timer fires mid-call.
-			time.Sleep(80 * time.Millisecond)
+			// Outlives the TTFT budget by a wide margin: the timer must
+			// win the race even on a heavily loaded machine, where
+			// goroutine scheduling can delay the AfterFunc by tens of
+			// milliseconds.
+			time.Sleep(250 * time.Millisecond)
 		}
 		return &upstream.Response{
 			StatusCode: http.StatusOK,
