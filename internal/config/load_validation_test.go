@@ -60,6 +60,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"negative probe interval", envProbeInterval, "-1s", "must not be negative", false},
 		{"bad probe timeout", envProbeTimeout, "quickly", "parse", false},
 		{"zero probe timeout while enabled", envProbeTimeout, "0s", "must be positive", false},
+		{"bad probe threshold", envProbePasses, "lots", "parse", false},
+		{"zero probe threshold while enabled", envProbePasses, "0", "must be positive", false},
 		{"empty model alias half", envUpstreams, `[{"id":"u","base_url":"http://x","models":["=real"]}]`, "invalid model binding", true},
 		{"empty real alias half", envUpstreams, `[{"id":"u","base_url":"http://x","models":["client="]}]`, "invalid model binding", true},
 		{"wildcard alias", envUpstreams, `[{"id":"u","base_url":"http://x","models":["*=real"]}]`, "invalid model binding", true},

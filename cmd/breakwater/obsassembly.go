@@ -25,6 +25,7 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/insights"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/server"
+	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
 // shutdownLogGrace bounds the drain window beyond the server grace.
@@ -153,8 +154,11 @@ func (c combinedSink) Flush(ctx context.Context) error {
 
 // buildAdmin binds the admin endpoints to the live backends; options
 // forward to server.NewAdmin (the routing switches, the identity
-// administration store).
-func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, upstreamIDs []string, opts ...server.AdminOption) http.Handler {
+// administration store). The breaker-reset and on-demand probe
+// actions are bound here too: reset consults the configured upstream
+// set, the probe consults the probe-capable subset and counts on the
+// same metric the recovery loop records.
+func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, metrics *obs.Metrics, upstreamIDs []string, adapters, probes map[string]upstream.Upstream, opts ...server.AdminOption) http.Handler {
 	balances := func(r *http.Request, tenantID string) (int64, error) {
 		return gov.ledger.Balance(r.Context(), tenantID)
 	}
@@ -171,6 +175,28 @@ func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, ups
 		}
 		return views
 	}
+	reset := func(r *http.Request, id string) error {
+		if _, ok := adapters[id]; !ok {
+			return server.ErrUnknownUpstream
+		}
+		breaker.Reset(r.Context(), id)
+		return nil
+	}
+	probe := func(r *http.Request, id string) error {
+		target, ok := probes[id]
+		if !ok {
+			if _, known := adapters[id]; known {
+				return server.ErrProbeUnconfigured
+			}
+			return server.ErrUnknownUpstream
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), cfg.Probe.Timeout)
+		defer cancel()
+		err := target.Probe(ctx)
+		metrics.UpstreamProbe(id, err == nil)
+		return err
+	}
+	opts = append(opts, server.WithBreakerReset(reset), server.WithUpstreamProbe(probe))
 	return server.NewAdmin(cfg.Security.AdminToken, balances, setBalance, states, opts...)
 }
 

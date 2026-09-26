@@ -31,31 +31,36 @@ import (
 // interval (or no probe-capable upstreams) leaves the gateway with
 // passive recovery only. Probe targets are the upstreams whose
 // configuration declares a probe_url — an upstream without one cannot
-// be asked anything off the request path.
-func startRecovery(ctx context.Context, interval, timeout time.Duration, breaker circuit.Breaker, routingSwitch *router.Switch, probes map[string]upstream.Upstream, metrics *obs.Metrics, logger *slog.Logger) {
+// be asked anything off the request path. Restoring an auto-disabled
+// upstream takes `passes` consecutive healthy probes; a single failing
+// probe resets the count, so a flapping upstream cannot cycle back in.
+func startRecovery(ctx context.Context, interval, timeout time.Duration, passes int, breaker circuit.Breaker, routingSwitch *router.Switch, probes map[string]upstream.Upstream, metrics *obs.Metrics, logger *slog.Logger) {
 	if interval <= 0 || len(probes) == 0 {
 		return
 	}
-	logger.Info("active recovery probing enabled", "interval", interval, "upstreams", len(probes))
+	logger.Info("active recovery probing enabled",
+		"interval", interval, "upstreams", len(probes), "restore_passes", passes)
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		counts := make(map[string]int)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				recoverAutoDisabled(ctx, timeout, routingSwitch, probes, metrics, logger)
+				recoverAutoDisabled(ctx, timeout, passes, routingSwitch, probes, counts, metrics, logger)
 				reviveEjected(ctx, timeout, breaker, probes, metrics)
 			}
 		}
 	}()
 }
 
-// recoverAutoDisabled probes every auto-disabled upstream; a healthy
-// answer lifts the auto disable. A manual operator disable stays
-// untouched — recovery only ever lifts the system's own decision.
-func recoverAutoDisabled(ctx context.Context, timeout time.Duration, routingSwitch *router.Switch, probes map[string]upstream.Upstream, metrics *obs.Metrics, logger *slog.Logger) {
+// recoverAutoDisabled probes every auto-disabled upstream; `passes`
+// consecutive healthy answers lift the auto disable, one failing
+// answer resets the count. A manual operator disable stays untouched —
+// recovery only ever lifts the system's own decision.
+func recoverAutoDisabled(ctx context.Context, timeout time.Duration, passes int, routingSwitch *router.Switch, probes map[string]upstream.Upstream, counts map[string]int, metrics *obs.Metrics, logger *slog.Logger) {
 	for _, id := range routingSwitch.AutoDisabledIDs() {
 		target, ok := probes[id]
 		if !ok {
@@ -66,12 +71,18 @@ func recoverAutoDisabled(ctx context.Context, timeout time.Duration, routingSwit
 		cancel()
 		metrics.UpstreamProbe(id, err == nil)
 		if err != nil {
+			counts[id] = 0
+			continue
+		}
+		counts[id]++
+		if counts[id] < passes {
 			continue
 		}
 		if err := routingSwitch.AutoEnableUpstream(id); err != nil {
 			// Raced with an operator action; the switch's state wins.
 			continue
 		}
+		delete(counts, id)
 		logger.Info("upstream recovered, auto disable lifted", "upstream", id)
 	}
 }

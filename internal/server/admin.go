@@ -62,6 +62,21 @@ type BalanceWriter func(r *http.Request, tenantID string, balance int64) error
 // upstream.
 type BreakerStates func(r *http.Request) []BreakerView
 
+// ErrUnknownUpstream reports a breaker-reset or probe call naming an
+// upstream the gateway does not configure.
+var ErrUnknownUpstream = errors.New("admin: unknown upstream")
+
+// ErrProbeUnconfigured reports a probe call for an upstream that
+// declares no probe_url: there is nothing to ask off the request path.
+var ErrProbeUnconfigured = errors.New("admin: upstream declares no probe url")
+
+// BreakerReset forces one upstream's breaker back to closed (an
+// operator fix followed by "let it through now").
+type BreakerReset func(r *http.Request, upstreamID string) error
+
+// UpstreamProbe runs one on-demand health probe against an upstream.
+type UpstreamProbe func(r *http.Request, upstreamID string) error
+
 // BreakerView is one breaker's wire form.
 type BreakerView struct {
 	Upstream string        `json:"upstream"`
@@ -76,13 +91,15 @@ type Reporter interface {
 
 // Admin serves the management endpoints.
 type Admin struct {
-	token    string
-	balances BalanceLookup
-	setter   BalanceWriter
-	breakers BreakerStates
-	routing  *router.Switch
-	identity auth.AdminStore
-	insights Reporter
+	token         string
+	balances      BalanceLookup
+	setter        BalanceWriter
+	breakers      BreakerStates
+	breakerReset  BreakerReset
+	upstreamProbe UpstreamProbe
+	routing       *router.Switch
+	identity      auth.AdminStore
+	insights      Reporter
 }
 
 // AdminOption customizes an Admin.
@@ -92,6 +109,18 @@ type AdminOption func(*Admin)
 // omits the routing endpoints.
 func WithRouting(s *router.Switch) AdminOption {
 	return func(a *Admin) { a.routing = s }
+}
+
+// WithBreakerReset installs the breaker-reset action; nil (the default)
+// omits the reset endpoint.
+func WithBreakerReset(fn BreakerReset) AdminOption {
+	return func(a *Admin) { a.breakerReset = fn }
+}
+
+// WithUpstreamProbe installs the on-demand probe action; nil (the
+// default) omits the probe endpoint.
+func WithUpstreamProbe(fn UpstreamProbe) AdminOption {
+	return func(a *Admin) { a.upstreamProbe = fn }
 }
 
 // WithIdentityStore installs the identity administration port; nil
@@ -127,6 +156,10 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/admin/breakers":
 		a.guarded(w, r, http.MethodGet, a.serveBreakers)
+	case strings.HasPrefix(r.URL.Path, "/admin/breakers/") && strings.HasSuffix(r.URL.Path, "/reset"):
+		a.guarded(w, r, http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
+			a.serveBreakerReset(w, r, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/breakers/"), "/reset"))
+		})
 	case r.URL.Path == "/admin/routing":
 		a.guarded(w, r, http.MethodGet, a.serveRouting)
 	case r.URL.Path == "/admin/insights":
@@ -134,6 +167,10 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/admin/users" || strings.HasPrefix(r.URL.Path, "/admin/users/") ||
 		strings.HasPrefix(r.URL.Path, "/admin/keys/"):
 		a.serveIdentity(w, r)
+	case strings.HasPrefix(r.URL.Path, "/admin/upstreams/") && strings.HasSuffix(r.URL.Path, "/probe"):
+		a.guarded(w, r, http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
+			a.serveUpstreamProbe(w, r, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/upstreams/"), "/probe"))
+		})
 	case strings.HasPrefix(r.URL.Path, "/admin/models/"):
 		a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
 			a.serveModelSwitch(w, r, strings.TrimPrefix(r.URL.Path, "/admin/models/"))
@@ -256,6 +293,44 @@ func (a *Admin) serveBreakers(w http.ResponseWriter, r *http.Request) {
 		states = []BreakerView{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"breakers": states})
+}
+
+// serveBreakerReset handles POST /admin/breakers/{id}/reset: the
+// operator's "I fixed the upstream, let it through now". The
+// machine's own cooldown-and-probe path stays the automatic route.
+func (a *Admin) serveBreakerReset(w http.ResponseWriter, r *http.Request, id string) {
+	if a.breakerReset == nil || id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch err := a.breakerReset(r, id); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "state": string(circuit.StateClosed)})
+	case errors.Is(err, ErrUnknownUpstream):
+		protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
+	default:
+		protocol.WriteError(w, http.StatusInternalServerError, "breaker_reset_failed", err.Error())
+	}
+}
+
+// serveUpstreamProbe handles POST /admin/upstreams/{id}/probe: one
+// health exchange on demand, so an operator can check recovery without
+// waiting for the recovery loop's next tick.
+func (a *Admin) serveUpstreamProbe(w http.ResponseWriter, r *http.Request, id string) {
+	if a.upstreamProbe == nil || id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch err := a.upstreamProbe(r, id); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "ok": true})
+	case errors.Is(err, ErrUnknownUpstream):
+		protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
+	case errors.Is(err, ErrProbeUnconfigured):
+		protocol.WriteError(w, http.StatusConflict, "probe_unconfigured", err.Error())
+	default:
+		protocol.WriteError(w, http.StatusBadGateway, "probe_failed", err.Error())
+	}
 }
 
 // serveInsights handles GET /admin/insights?hours=N: the stability

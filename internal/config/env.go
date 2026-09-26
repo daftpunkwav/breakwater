@@ -41,6 +41,7 @@ const (
 	defaultReconcileEvery   = time.Minute
 	defaultProbeInterval    = 30 * time.Second
 	defaultProbeTimeout     = 5 * time.Second
+	defaultProbeThreshold   = 2
 )
 
 // Environment variable names.
@@ -78,6 +79,7 @@ const (
 
 	envProbeInterval = "BREAKWATER_PROBE_INTERVAL"
 	envProbeTimeout  = "BREAKWATER_PROBE_TIMEOUT"
+	envProbePasses   = "BREAKWATER_PROBE_THRESHOLD"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -124,8 +126,9 @@ func Load() (Config, error) {
 			ProbeTimeout:  defaultCircuitProbe,
 		},
 		Probe: Probe{
-			Interval: defaultProbeInterval,
-			Timeout:  defaultProbeTimeout,
+			Interval:  defaultProbeInterval,
+			Timeout:   defaultProbeTimeout,
+			Threshold: defaultProbeThreshold,
 		},
 		Routing: Routing{
 			Strategy: envString(envRouting, "static"),
@@ -199,6 +202,9 @@ func Load() (Config, error) {
 	if cfg.Probe.Timeout, err = envDuration(envProbeTimeout, cfg.Probe.Timeout); err != nil {
 		return Config{}, err
 	}
+	if cfg.Probe.Threshold, err = envInt(envProbePasses, cfg.Probe.Threshold); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.Server.ShutdownGrace <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive", envShutdownGrace)
@@ -241,6 +247,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Probe.Interval > 0 && cfg.Probe.Timeout <= 0 {
 		return Config{}, fmt.Errorf("config: %s must be positive when %s is enabled", envProbeTimeout, envProbeInterval)
+	}
+	if cfg.Probe.Interval > 0 && cfg.Probe.Threshold < 1 {
+		return Config{}, fmt.Errorf("config: %s must be positive when %s is enabled", envProbePasses, envProbeInterval)
 	}
 	for i, u := range cfg.Upstreams {
 		if u.ID == "" || u.BaseURL == "" {

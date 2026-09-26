@@ -183,6 +183,19 @@ func (b *Registry) StateOf(_ context.Context, upstreamID string) State {
 	return s.name
 }
 
+// Reset implements Breaker: an operator forcing the breaker closed.
+// The failure count and any outstanding probe are cleared; a granted
+// permission still outstanding reports into the now-closed machine,
+// where its outcome is absorbed by the ordinary closed-state rules.
+func (b *Registry) Reset(_ context.Context, upstreamID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.stateOf(upstreamID)
+	s.failures = 0
+	s.probe = nil
+	b.transition(s, StateClosed)
+}
+
 // stateOf returns the per-upstream state, creating it in closed.
 func (b *Registry) stateOf(upstreamID string) *state {
 	s, ok := b.byUpstream[upstreamID]

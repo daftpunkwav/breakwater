@@ -27,6 +27,8 @@ func (denyBreaker) Allow(context.Context, string) (circuit.Permission, bool) { r
 
 func (denyBreaker) StateOf(context.Context, string) circuit.State { return circuit.StateOpen }
 
+func (denyBreaker) Reset(context.Context, string) {}
+
 // closedBreaker grants everything and absorbs reports, exercising the
 // grant branch of the attempt's breaker accounting.
 type closedBreaker struct{}
@@ -36,6 +38,8 @@ func (closedBreaker) Allow(context.Context, string) (circuit.Permission, bool) {
 }
 
 func (closedBreaker) StateOf(context.Context, string) circuit.State { return circuit.StateClosed }
+
+func (closedBreaker) Reset(context.Context, string) {}
 
 type nopPermission struct{}
 

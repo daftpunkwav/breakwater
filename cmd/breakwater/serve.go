@@ -203,12 +203,27 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		adminOpts = append(adminOpts, server.WithInsights(recorder.store))
 	}
 
+	// Upstream adapters by id, and the probe-capable subset: the admin
+	// reset/probe endpoints and the recovery loop all key off these.
+	adapters := make(map[string]upstream.Upstream, len(bindings))
+	for _, b := range bindings {
+		adapters[b.Upstream.ID()] = b.Upstream
+	}
+	probes := make(map[string]upstream.Upstream, len(adapters))
+	for _, c := range cfg.Upstreams {
+		if c.ProbeURL != "" {
+			if u, ok := adapters[c.ID]; ok {
+				probes[c.ID] = u
+			}
+		}
+	}
+
 	srv := server.New(server.Options{
 		Addr:          cfg.Server.Addr,
 		ShutdownGrace: cfg.Server.ShutdownGrace,
 		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
-		Admin:         buildAdmin(cfg, gov, breaker, upstreamIDs(cfg.Upstreams), adminOpts...),
+		Admin:         buildAdmin(cfg, gov, breaker, metrics, upstreamIDs(cfg.Upstreams), adapters, probes, adminOpts...),
 		Readiness:     mergeReadiness(gov.readiness, identityReady),
 		Models:        knownModels(cfg.Upstreams),
 		Version:       version,
@@ -218,16 +233,8 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// Active recovery probing: upstreams taken out of rotation (auto
 	// disabled, breaker ejected) are asked periodically whether they
 	// are back; only those with a configured probe_url can be asked.
-	probes := make(map[string]upstream.Upstream, len(cfg.Upstreams))
-	for _, b := range bindings {
-		probes[b.Upstream.ID()] = b.Upstream
-	}
-	for _, c := range cfg.Upstreams {
-		if c.ProbeURL == "" {
-			delete(probes, c.ID)
-		}
-	}
-	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, breaker, routingSwitch, probes, metrics, logger)
+	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, cfg.Probe.Threshold,
+		breaker, routingSwitch, probes, metrics, logger)
 
 	logger.Info("gateway starting",
 		"version", version,

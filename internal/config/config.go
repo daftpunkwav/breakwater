@@ -46,6 +46,10 @@ type Probe struct {
 	Interval time.Duration
 	// Timeout bounds one probe exchange.
 	Timeout time.Duration
+	// Threshold is how many consecutive healthy probes restore an
+	// auto-disabled upstream; one failure resets the count. Values
+	// above one keep a flapping upstream from cycling back in.
+	Threshold int
 }
 
 // Routing configures how the router orders eligible candidates.

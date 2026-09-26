@@ -132,7 +132,7 @@ All configuration is environment-based; core knobs:
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
 | `BREAKWATER_ADDR`                     | `:8080`        | Listen address                                             |
 | `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `models`; list order = failover priority; `"client=real"` entries alias model names) |
-| `BREAKWATER_ROUTING_STRATEGY`         | `static`       | Candidate order: `static` (configured order) or `latency` (measured exchange latency first, configured order as tie-break; untried upstreams are explored first) |
+| `BREAKWATER_ROUTING_STRATEGY`         | `static`       | Candidate order: `static` (configured order) or `latency` (measured exchange latency first; near-tied candidates trade the lead per request, configured order breaks remaining ties; untried upstreams are explored first) |
 | `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants` with `role` and user-level `overrides`); arms the governance pipeline |
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
@@ -141,7 +141,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | Ceiling of a committed stream's body (after the headers); `0` lets the client own the stream's lifetime |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | Exact-match response cache      |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
-| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` | `30s` / `5s` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic) |
+| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing (PRD Q6); needs Redis + PostgreSQL; `0` disables |
@@ -157,6 +157,8 @@ All configuration is environment-based; core knobs:
 - `GET /admin/tenants/{id}/quota` — current balance
 - `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
+- `POST /admin/breakers/{id}/reset` — force an open breaker closed
+- `POST /admin/upstreams/{id}/probe` — one health probe on demand
 - `GET /admin/insights?hours=N` — the stability report for the trailing window (default 24): success rate, failure mix by cause, latency percentiles, a 5-minute timeline and per-tenant/key/model/upstream breakdowns. Requires the monitoring store (any PostgreSQL DSN).
 - `GET /admin/routing` — every known model and upstream with its current eligibility, plus the auto-disabled upstreams with the reason and moment of each decision
 - `PUT /admin/models/{id}` — enable or disable a model (`{"enabled": false}`); disabled models refuse requests with `403 model_disabled`
@@ -178,11 +180,19 @@ its own:
   never waits for the failed one's hint.
 - The recovery loop (if `BREAKWATER_PROBE_INTERVAL` is non-zero and
   the upstream declares a `probe_url`) periodically probes
-  auto-disabled and breaker-ejected upstreams; a healthy answer
-  restores them. Only the system's own disables are lifted this way —
-  an operator disable survives until an operator lifts it. Point
-  `probe_url` at an authenticated endpoint if you want credential and
-  quota failures to self-heal.
+  auto-disabled and breaker-ejected upstreams; restoring an
+  auto-disabled upstream takes `BREAKWATER_PROBE_THRESHOLD`
+  consecutive healthy probes (one failure resets the count), so a
+  flapping upstream cannot cycle back in. Only the system's own
+  disables are lifted this way — an operator disable survives until an
+  operator lifts it. Point `probe_url` at an authenticated endpoint if
+  you want credential and quota failures to self-heal.
+- Two operator handles complete the loop: `POST
+  /admin/breakers/{id}/reset` forces an open breaker closed ("I fixed
+  the upstream, let it through now"), and `POST
+  /admin/upstreams/{id}/probe` runs one health exchange on demand
+  (200 healthy, 409 when the upstream declares no `probe_url`, 502
+  when the probe fails).
 
 ### Identity administration (PostgreSQL deployments)
 

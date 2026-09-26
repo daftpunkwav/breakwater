@@ -71,4 +71,9 @@ type Breaker interface {
 	Allow(ctx context.Context, upstreamID string) (Permission, bool)
 	// StateOf exposes the current state for metrics and the admin API.
 	StateOf(ctx context.Context, upstreamID string) State
+	// Reset forces the breaker back to closed, clearing the failure
+	// count and any outstanding probe. It is an operator action for
+	// "I fixed the upstream, let it through now" — the machine's own
+	// cooldown and probe path remain the automatic route back.
+	Reset(ctx context.Context, upstreamID string)
 }

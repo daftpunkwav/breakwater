@@ -29,6 +29,8 @@ func (g *gateBreaker) Allow(context.Context, string) (Permission, bool) {
 
 func (g *gateBreaker) StateOf(context.Context, string) State { return StateClosed }
 
+func (g *gateBreaker) Reset(context.Context, string) {}
+
 type gatePermission struct {
 	g *gateBreaker
 }

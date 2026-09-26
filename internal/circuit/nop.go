@@ -24,6 +24,9 @@ func (NopBreaker) Allow(context.Context, string) (Permission, bool) {
 // StateOf implements Breaker: the nop never opens.
 func (NopBreaker) StateOf(context.Context, string) State { return StateClosed }
 
+// Reset implements Breaker: nothing to reset.
+func (NopBreaker) Reset(context.Context, string) {}
+
 // nopPermission absorbs outcome reports.
 type nopPermission struct{}
 
