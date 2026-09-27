@@ -36,6 +36,7 @@ func recordEverything(m *Metrics) {
 	m.UpstreamProbe("u1", true)
 	m.UpstreamProbe("u2", false)
 	m.UpstreamAutoDisabled("u2", "upstream_auth_failure")
+	m.ObserveTTFT("u1", 0.35)
 	m.SetLogsDropped(4)
 }
 
@@ -67,6 +68,8 @@ func TestMetricsRecordersEmitSamples(t *testing.T) {
 		`breakwater_upstream_probe_total{upstream="u1",result="ok"} 1`,
 		`breakwater_upstream_probe_total{upstream="u2",result="fail"} 1`,
 		`breakwater_upstream_auto_disabled_total{upstream="u2",reason="upstream_auth_failure"} 1`,
+		`breakwater_upstream_ttft_seconds_bucket{upstream="u1",le="0.5"} 1`,
+		`breakwater_upstream_ttft_seconds_count{upstream="u1"} 1`,
 		"breakwater_logs_dropped_total 4",
 	} {
 		if !strings.Contains(text, want) {

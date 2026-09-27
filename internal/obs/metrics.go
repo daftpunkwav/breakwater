@@ -157,6 +157,8 @@ func NewMetrics() *Metrics {
 		[]string{"upstream", "result"}, nil)
 	reg("breakwater_upstream_auto_disabled_total", "Upstreams taken out of rotation by a fatal upstream condition.", "counter",
 		[]string{"upstream", "reason"}, nil)
+	reg("breakwater_upstream_ttft_seconds", "Time to first byte of streaming replies, per upstream.", "histogram",
+		[]string{"upstream"}, defaultBuckets)
 
 	reg("breakwater_logs_dropped_total", "Access log entries dropped for capacity.", "counter", nil, nil)
 	// Pre-create the label-less child so the drop counter is exposed —
@@ -359,6 +361,23 @@ func (m *Metrics) UpstreamAutoDisabled(upstream, reason string) {
 		return
 	}
 	m.inc("breakwater_upstream_auto_disabled_total", 1, upstream, reason)
+}
+
+// ObserveTTFT records the time to first byte of one streaming reply.
+// Buffered replies are covered by the end-to-end duration histogram.
+func (m *Metrics) ObserveTTFT(upstream string, seconds float64) {
+	if m == nil {
+		return
+	}
+	f := m.families["breakwater_upstream_ttft_seconds"]
+	c := f.childOf(upstream)
+	addFloat(&c.value, seconds)
+	c.count.Add(1)
+	for i, bound := range f.buckets {
+		if seconds <= bound {
+			c.buckets[i].Add(1)
+		}
+	}
 }
 
 // SetLogsDropped publishes the access log drop counter; Render sources

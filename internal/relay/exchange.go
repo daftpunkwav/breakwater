@@ -86,6 +86,10 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 		lease.end()
 		return circuit.OutcomeServerFault, r.ttftTimeoutError()
 	}
+	// First byte of a streamed reply: publish the TTFT the way the
+	// observation surface expects it (buffered replies stay on the
+	// end-to-end duration histogram).
+	r.exec.metrics.ObserveTTFT(cand.ID(), time.Since(r.startedAt).Seconds())
 	return r.exchangeStream(cand, resp, lease, model)
 }
 

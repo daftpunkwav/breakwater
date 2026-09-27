@@ -235,6 +235,9 @@ type run struct {
 	fi         int
 	attempted  map[string]bool
 	lastCand   upstream.Upstream
+	// startedAt is the current attempt's first instant; the streaming
+	// path reads it for the time-to-first-byte observation.
+	startedAt time.Time
 }
 
 // Execute runs the job. Exactly one HTTP response is written to
@@ -289,6 +292,7 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	}
 
 	started := time.Now()
+	r.startedAt = started
 	outcome, err := r.exchange(attemptCtx, cand, model)
 	if r.exec.observer != nil {
 		// A client walking away cancels the exchange; that is nobody's

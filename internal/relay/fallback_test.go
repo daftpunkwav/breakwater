@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
@@ -229,6 +230,35 @@ func TestFallbackDoesNotWaitForHint(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Fatalf("failover took %v; the failed candidate's 30s hint must not delay another model", elapsed)
+	}
+}
+
+// TestStreamPublishesTTFT: a committed stream records its
+// time-to-first-byte on the per-upstream histogram, observable in the
+// exposition alongside the attempt's other metrics.
+func TestStreamPublishesTTFT(t *testing.T) {
+	t.Parallel()
+	primary := &scriptedUpstream{id: "u1", status: http.StatusOK}
+	primary.streamOverride = strings.NewReader("data: {\"id\":\"c1\"}\n\ndata: [DONE]\n\n")
+	metrics := obs.NewMetrics()
+	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithMetrics(metrics))
+
+	result := executeJob(t, exec, Job{
+		Model:      "m1",
+		Stream:     true,
+		Body:       []byte(`{}`),
+		Candidates: []upstream.Upstream{primary},
+	})
+
+	if result.Status != http.StatusOK || result.Aborted {
+		t.Fatalf("status = %d aborted = %v, want a clean stream", result.Status, result.Aborted)
+	}
+	var out strings.Builder
+	if err := metrics.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(out.String(), `breakwater_upstream_ttft_seconds_count{upstream="u1"} 1`) {
+		t.Fatalf("exposition missing the ttft sample:\n%s", out.String())
 	}
 }
 
