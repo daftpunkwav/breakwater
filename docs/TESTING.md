@@ -26,8 +26,11 @@ no separate test tree, no parallel hierarchy to drift.
 
 ## Invariant map
 
-Every system invariant (TECH-SPEC §4) has at least one named test; the
-matrix lives in the spec review notes and is kept in sync by review.
+Every system invariant is numbered `I1`–`I10` in the code comments of
+the package that owns it, and each number names at least one test —
+grep `invariant I` for the map of mechanisms to their guards. The
+numbering lives with the code so it cannot drift into a separate
+document.
 
 ## Coverage
 

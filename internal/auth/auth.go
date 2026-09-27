@@ -54,9 +54,11 @@ type Tier struct {
 	Concurrency int64
 }
 
-// Role distinguishes what an identity may do on the management surface.
-// gateway role governs administration, not inference: both roles call
-// models under the same governance.
+// Role labels an identity's intended privilege. It is recorded,
+// validated and reported back through the admin API, but no code path
+// reads it for authorization: the management surface is guarded by the
+// shared admin bearer token, and inference is governed identically for
+// both roles. Treat it as an annotation, not an enforcement boundary.
 type Role string
 
 const (
