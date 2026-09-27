@@ -7,8 +7,9 @@
  *   a fixed order
  * - Nothing else: stage behavior lives in the owning modules
  *
- * Two chains exist in the gateway; only the request side is composed
- * here:
+ * One chain is composed per client format. The diagram below reads the
+ * request side outward-in and the response side inward-out, since a
+ * stage that reserves before next() settles after it returns:
  *
  *	request side:  carrier -> request id -> format -> observation
  *	               -> auth -> model authorization -> concurrency

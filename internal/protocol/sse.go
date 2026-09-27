@@ -1,15 +1,16 @@
 /**
  * @file sse
  * @description SSE wire codec for the gateway's streaming contract: the
- * in-stream error event and the [DONE] terminator (frozen public
- * protocol, locked by contract tests).
+ * in-stream error event and the [DONE] terminator. The byte layout is
+ * pinned exactly by the contract tests in sse_test.go, because SDKs
+ * parse it.
  *
  * Responsibilities:
  * - Encode SSE events with the exact byte layout clients rely on
  * - Terminate aborted streams honestly: exactly one error event followed
  *   by the [DONE] sentinel; chunks already sent are never replayed
- * - Nothing else: chunk payload types (OpenAI schema) land in this
- *   package with the forwarding implementation; response headers and
+ * - Nothing else: the chunk payload types of the OpenAI schema are
+ *   handled here, alongside the forwarding implementation; response headers and
  *   flushing are the handler's business
  *
  * The error code set is closed. Adding a code is a protocol change and
@@ -26,7 +27,7 @@ import (
 // ErrorType is the fixed type marker of in-stream gateway errors.
 const ErrorType = "gateway_error"
 
-// Code enumerates the in-stream error codes of the frozen contract.
+// Code enumerates the in-stream error codes the gateway emits.
 type Code string
 
 const (
@@ -48,7 +49,8 @@ type StreamError struct {
 	Error StreamErrorBody `json:"error"`
 }
 
-// StreamErrorBody is the error payload: message, fixed type, frozen code.
+// StreamErrorBody is the error payload: message, fixed type, and the
+// code from the Code enum.
 type StreamErrorBody struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
@@ -76,8 +78,8 @@ func WriteEvent(w io.Writer, event string, payload any) error {
 	return writeEventData(w, event, payload)
 }
 
-// WriteAbort terminates a stream after a mid-flight failure per the
-// frozen contract: exactly one error event followed by the [DONE]
+// WriteAbort terminates a stream after a mid-flight failure:
+// exactly one error event followed by the [DONE]
 // sentinel, so SDKs walk their standard completion path instead of
 // hanging on a half-open stream.
 func WriteAbort(w io.Writer, code Code, message string) error {

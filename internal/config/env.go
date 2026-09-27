@@ -19,7 +19,8 @@ import (
 )
 
 // Defaults keep the gateway runnable with zero configuration. They are
-// provisional tuning values and may change during implementation.
+// the tuned baseline an operator overrides through the BREAKWATER_*
+// variables read below.
 const (
 	defaultAddr          = ":8080"
 	defaultShutdownGrace = 15 * time.Second
@@ -45,7 +46,6 @@ const (
 	defaultProbeThreshold   = 2
 )
 
-// Environment variable names.
 const (
 	envAddr           = "BREAKWATER_ADDR"
 	envShutdownGrace  = "BREAKWATER_SHUTDOWN_GRACE"
@@ -53,6 +53,13 @@ const (
 	envPostgresDSN    = "BREAKWATER_POSTGRES_DSN"
 	envAccessLogQueue = "BREAKWATER_ACCESS_LOG_QUEUE_SIZE"
 	envUpstreams      = "BREAKWATER_UPSTREAMS"
+
+	// EnvRedisNamespace is exported because the composition root points
+	// operators at it by name when the namespace is missing: the message
+	// must not carry a second, drifting spelling of the variable.
+	EnvRedisNamespace = "BREAKWATER_REDIS_NAMESPACE"
+
+	envQuotaLeaseTTL = "BREAKWATER_QUOTA_LEASE_TTL"
 
 	envRetryMaxAttempts    = "BREAKWATER_RETRY_MAX_ATTEMPTS"
 	envRetryAttemptTimeout = "BREAKWATER_RETRY_ATTEMPT_TIMEOUT"
@@ -94,7 +101,8 @@ func Load() (Config, error) {
 			ShutdownGrace: defaultShutdownGrace,
 		},
 		Redis: Redis{
-			Addr: envString(envRedisAddr, defaultRedisAddr),
+			Addr:      envString(envRedisAddr, defaultRedisAddr),
+			Namespace: strings.TrimSpace(os.Getenv(EnvRedisNamespace)),
 		},
 		Postgres: Postgres{
 			DSN: strings.TrimSpace(os.Getenv(envPostgresDSN)),
@@ -184,6 +192,20 @@ func Load() (Config, error) {
 	}
 	if cfg.ReconcileInterval < 0 {
 		return Config{}, fmt.Errorf("config: %s must not be negative", envReconcileInterval)
+	}
+	if cfg.Quota.LeaseTTL, err = envDuration(envQuotaLeaseTTL, cfg.Quota.LeaseTTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.Quota.LeaseTTL < 0 {
+		return Config{}, fmt.Errorf("config: %s must not be negative", envQuotaLeaseTTL)
+	}
+	// A lease may only be reclaimed once the request holding it can no
+	// longer spend tokens. That is only decidable here, where both the
+	// request budget and the reclaim horizon are known: a horizon below
+	// the budget silently refunds a request that really consumed tokens.
+	if budget, bounded := cfg.requestBudget(); bounded && cfg.Quota.LeaseTTL > 0 && cfg.Quota.LeaseTTL <= budget {
+		return Config{}, fmt.Errorf("config: %s=%s must exceed the longest request the gateway will run (%s = %s + %s)",
+			envQuotaLeaseTTL, cfg.Quota.LeaseTTL, budget, envRetryOverall, envStreamTimeout)
 	}
 	if cfg.Cache.Enabled, err = envBool(envCacheEnabled, cfg.Cache.Enabled); err != nil {
 		return Config{}, err

@@ -41,5 +41,5 @@ func run(ctx context.Context, logger *slog.Logger, version string) error {
 	if err != nil {
 		return err
 	}
-	return serve(ctx, cfg, logger, version)
+	return serve(ctx, cfg, logger, version, nil)
 }

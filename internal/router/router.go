@@ -9,7 +9,7 @@
  *   port
  *
  * Candidates are returned in priority order with breaker-open entries
- * excluded (invariant I4). Failover is modeled upstream of this module
+ * excluded. Failover is modeled upstream of this module
  * as a retry attempt against the next candidate. Candidates are
  * upstream instances, not bare IDs: the router owns resolution so
  * callers never need a separate id-to-upstream registry.

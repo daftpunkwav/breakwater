@@ -11,6 +11,7 @@ package server
 import (
 	"net/http"
 
+	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
@@ -20,6 +21,14 @@ import (
 // the injected probe; nil always reports ready. Metrics and Admin
 // expose their endpoints when non-nil. The model discovery route is
 // registered only for a non-empty model list.
+//
+// The whole mux is wrapped in the recovery stage so the routes outside
+// the inference chains — the admin surface, the probes, the metrics
+// exposition — also return a rendered 500 rather than a connection
+// killed by net/http's per-connection recover. Those routes carry no
+// observation stage, so nothing is counted for them either way. The
+// inference routes keep their own inner copy, which sits inside the
+// observation stage: there a panic is counted as a 500 gateway fault.
 func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin http.Handler, version string, readiness func() error, models []string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleLiveness)
@@ -41,5 +50,5 @@ func newRootHandler(inference map[protocol.Format]http.Handler, metrics, admin h
 	for format, handler := range inference {
 		mux.Handle(routeOfFormat(format), handler)
 	}
-	return mux
+	return pipeline.RecoveryStage()(mux)
 }

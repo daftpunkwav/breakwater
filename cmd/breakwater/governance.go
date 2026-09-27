@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -54,7 +55,7 @@ type balanceSeeder interface {
 // a dead backend is a deployment failure, not a degraded start.
 func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) {
 	if cfg.Redis.Addr == "" {
-		mem := quota.NewMemory()
+		mem := quota.NewMemory().WithLeaseTTL(cfg.LeaseTTL())
 		return &governance{
 			mode:        "memory",
 			limiter:     limiter.NewMemory(),
@@ -73,10 +74,10 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 		return nil, err
 	}
 
-	redisLedger := quota.NewRedis(rdb)
+	redisLedger := quota.NewRedis(rdb, redisNamespace(cfg), cfg.LeaseTTL())
 	return &governance{
 		mode:           "redis",
-		limiter:        limiter.NewRedis(rdb),
+		limiter:        limiter.NewRedis(rdb, redisNamespace(cfg)),
 		ledger:         redisLedger,
 		sweepTarget:    redisLedger,
 		snapshotSource: redisLedger,
@@ -88,6 +89,14 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 		},
 		close: func() { _ = rdb.Close() },
 	}, nil
+}
+
+// redisNamespace is the deployment name this gateway's hot state lives
+// under. Balances, rate limit buckets and lease records all sit inside
+// it, so an empty namespace is only safe when this gateway owns its
+// Redis instance outright.
+func redisNamespace(cfg config.Config) string {
+	return strings.TrimSpace(cfg.Redis.Namespace)
 }
 
 // newAuthStore resolves the identity source. A nil store means no
@@ -137,9 +146,14 @@ func seedBalances(ctx context.Context, identity *auth.Static, ledger quota.Ledge
 	}
 	for _, tenantID := range identity.Tenants() {
 		tenant, ok := identity.TenantByID(tenantID)
-		if !ok || tenant.Tier.MonthlyQuota <= 0 {
+		if !ok {
 			continue
 		}
+		// A tier may legitimately budget nothing. Provisioning a zero
+		// balance is what keeps that a spending decision (402, the
+		// budget is gone) rather than a provisioning fault (503, the
+		// tenant has no ledger) — the two are different problems and
+		// the operator needs to be told which one they have.
 		created, err := seeder.EnsureBalance(ctx, tenantID, tenant.Tier.MonthlyQuota)
 		if err != nil {
 			logger.Warn("seed tenant balance", "tenant", tenantID, "error", err)

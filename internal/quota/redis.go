@@ -40,8 +40,15 @@ var settleScriptSrc string
 //go:embed release.lua
 var releaseScriptSrc string
 
-// keyPrefix namespaces every quota key.
-const keyPrefix = "bw:quota:"
+// neverProvisioned is the balance value reserve.lua returns for a
+// tenant with no ledger entry, distinct from any real balance.
+const neverProvisioned = -1
+
+// defaultKeyPrefix namespaces every quota key when the deployment has
+// no namespace of its own. Safe only when this gateway owns its Redis
+// instance: balances and lease records are money and must not be shared
+// with another environment by accident.
+const defaultKeyPrefix = "bw:quota:"
 
 // Redis is the Redis-backed Ledger. It is safe for concurrent use.
 type Redis struct {
@@ -49,16 +56,35 @@ type Redis struct {
 	reserveScript *redis.Script
 	settleScript  *redis.Script
 	releaseScript *redis.Script
+	keyPrefix     string
+	leaseTTL      time.Duration
 }
 
-// NewRedis builds the ledger over a ready client.
-func NewRedis(client *redis.Client) *Redis {
+// NewRedis builds the ledger over a ready client. namespace scopes this
+// deployment's keys inside a shared Redis instance; empty means this
+// gateway owns the instance outright. leaseTTL is how long a RESERVED
+// lease may live before the sweeper reclaims it; it must outlast the
+// longest request the gateway will run, or a live request's reservation
+// is refunded while it is still spending tokens.
+func NewRedis(client *redis.Client, namespace string, leaseTTL time.Duration) *Redis {
 	return &Redis{
 		rdb:           client,
 		reserveScript: redis.NewScript(reserveScriptSrc),
 		settleScript:  redis.NewScript(settleScriptSrc),
 		releaseScript: redis.NewScript(releaseScriptSrc),
+		keyPrefix:     namespacedKeyPrefix(namespace),
+		leaseTTL:      leaseTTL,
 	}
+}
+
+// namespacedKeyPrefix places a deployment namespace in front of the
+// package's own key base, so two environments sharing one Redis instance
+// never read each other's balances.
+func namespacedKeyPrefix(namespace string) string {
+	if namespace == "" {
+		return defaultKeyPrefix
+	}
+	return namespace + ":" + defaultKeyPrefix
 }
 
 // Ping reports backend health for readiness probes.
@@ -66,33 +92,33 @@ func (r *Redis) Ping(ctx context.Context) error {
 	return r.rdb.Ping(ctx).Err()
 }
 
-func balanceKey(tenantID string) string { return keyPrefix + "bal:" + tenantID }
-func leaseKey(leaseID string) string    { return keyPrefix + "lease:" + leaseID }
+func (r *Redis) balanceKey(tenantID string) string { return r.keyPrefix + "bal:" + tenantID }
+func (r *Redis) leaseKey(leaseID string) string    { return r.keyPrefix + "lease:" + leaseID }
 
 // consumedKey holds the lifetime actual-usage total (observation input;
 // not part of the reconcile identity), refundedKey the lifetime refunds
 // and debitedKey the lifetime reservation debits — the last two pair
 // with every balance movement and drive the reconcile identity.
-func consumedKey(tenantID string) string { return keyPrefix + "consumed:" + tenantID }
-func refundedKey(tenantID string) string { return keyPrefix + "refunded:" + tenantID }
-func debitedKey(tenantID string) string  { return keyPrefix + "debited:" + tenantID }
+func (r *Redis) consumedKey(tenantID string) string { return r.keyPrefix + "consumed:" + tenantID }
+func (r *Redis) refundedKey(tenantID string) string { return r.keyPrefix + "refunded:" + tenantID }
+func (r *Redis) debitedKey(tenantID string) string  { return r.keyPrefix + "debited:" + tenantID }
 
 // epochKey counts balance corrections (admin SetBalance): the
 // reconciler skips the interval across an epoch bump, since a manual
 // balance change is not consumable drift.
-func epochKey(tenantID string) string { return keyPrefix + "epoch:" + tenantID }
+func (r *Redis) epochKey(tenantID string) string { return r.keyPrefix + "epoch:" + tenantID }
 
 // sweepKey is the process-shared zset of live leases scored by their
 // expiry instant in milliseconds.
-func sweepKey() string { return keyPrefix + "sweep" }
+func (r *Redis) sweepKey() string { return r.keyPrefix + "sweep" }
 
 // SetBalance implements Ledger. It also bumps the reconcile epoch so
 // the reconciler skips the interval across a manual correction — a
 // top-up is not consumable drift.
 func (r *Redis) SetBalance(ctx context.Context, tenantID string, balance int64) error {
 	pipe := r.rdb.TxPipeline()
-	pipe.Set(ctx, balanceKey(tenantID), balance, 0)
-	pipe.Incr(ctx, epochKey(tenantID))
+	pipe.Set(ctx, r.balanceKey(tenantID), balance, 0)
+	pipe.Incr(ctx, r.epochKey(tenantID))
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -101,7 +127,7 @@ func (r *Redis) SetBalance(ctx context.Context, tenantID string, balance int64) 
 // so restarts never silently reset accounting; it reports whether it
 // created the balance.
 func (r *Redis) EnsureBalance(ctx context.Context, tenantID string, initial int64) (bool, error) {
-	created, err := r.rdb.SetNX(ctx, balanceKey(tenantID), initial, 0).Result()
+	created, err := r.rdb.SetNX(ctx, r.balanceKey(tenantID), initial, 0).Result()
 	if err != nil {
 		return false, fmt.Errorf("quota: ensure balance: %w", err)
 	}
@@ -119,14 +145,21 @@ func (r *Redis) Reserve(ctx context.Context, tenantID string, amount int64) (Lea
 		CreatedAt: now,
 	}
 	res, err := r.reserveScript.Run(ctx, r.rdb,
-		[]string{balanceKey(tenantID), leaseKey(lease.ID), sweepKey(), debitedKey(tenantID)},
-		now.UnixMilli(), amount, defaultLeaseTTL.Milliseconds(), lease.ID, tenantID,
+		[]string{r.balanceKey(tenantID), r.leaseKey(lease.ID), r.sweepKey(), r.debitedKey(tenantID)},
+		now.UnixMilli(), amount, r.leaseTTL.Milliseconds(), lease.ID, tenantID,
 	).Slice()
 	if err != nil {
 		return Lease{}, fmt.Errorf("quota: reserve script: %w", err)
 	}
 	ok, _ := res[0].(int64)
 	if ok != 1 {
+		// The script separates "never provisioned" (a -1 balance) from
+		// "balance too low" (the balance itself). Reporting the second as
+		// the first would tell a client it is out of money when the real
+		// fault is a missing provisioning record.
+		if bal, _ := res[1].(int64); bal == neverProvisioned {
+			return Lease{}, ErrUnknownTenant
+		}
 		return Lease{}, ErrInsufficientBalance
 	}
 	return lease, nil
@@ -136,7 +169,7 @@ func (r *Redis) Reserve(ctx context.Context, tenantID string, amount int64) (Lea
 // record first: settlement runs after the response, so the extra
 // round-trip stays off the hot path.
 func (r *Redis) Settle(ctx context.Context, leaseID string, usedTokens int64) error {
-	tenant, err := r.rdb.HGet(ctx, leaseKey(leaseID), "tenant").Result()
+	tenant, err := r.rdb.HGet(ctx, r.leaseKey(leaseID), "tenant").Result()
 	if errors.Is(err, redis.Nil) {
 		// Unknown lease: settling it would be a no-op in the script too.
 		return nil
@@ -148,7 +181,7 @@ func (r *Redis) Settle(ctx context.Context, leaseID string, usedTokens int64) er
 		return fmt.Errorf("quota: settle lease lookup: %w", err)
 	}
 	res, err := r.settleScript.Run(ctx, r.rdb,
-		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey(), consumedKey(tenant), refundedKey(tenant)},
+		[]string{r.balanceKey(tenant), r.leaseKey(leaseID), r.sweepKey(), r.consumedKey(tenant), r.refundedKey(tenant)},
 		usedTokens, leaseID, leaseAuditTTL.Milliseconds(),
 	).Slice()
 	if err != nil {
@@ -181,12 +214,12 @@ func (r *Redis) Cancel(ctx context.Context, leaseID string) error {
 // release script; moved reports whether this call performed the
 // transition (false for unknown or already-terminal leases).
 func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState) (bool, error) {
-	tenant, err := r.rdb.HGet(ctx, leaseKey(leaseID), "tenant").Result()
+	tenant, err := r.rdb.HGet(ctx, r.leaseKey(leaseID), "tenant").Result()
 	if errors.Is(err, redis.Nil) {
 		// The record is gone: terminal past its audit window, or never
 		// provisioned. Drop the stale sweep entry so the zset cannot
 		// accumulate ghosts the sweeper would fetch forever.
-		if err := r.rdb.ZRem(ctx, sweepKey(), leaseID).Err(); err != nil {
+		if err := r.rdb.ZRem(ctx, r.sweepKey(), leaseID).Err(); err != nil {
 			return false, fmt.Errorf("quota: sweep entry cleanup: %w", err)
 		}
 		return false, nil
@@ -195,7 +228,7 @@ func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState)
 		return false, fmt.Errorf("quota: lease lookup: %w", err)
 	}
 	res, err := r.releaseScript.Run(ctx, r.rdb,
-		[]string{balanceKey(tenant), leaseKey(leaseID), sweepKey(), refundedKey(tenant)},
+		[]string{r.balanceKey(tenant), r.leaseKey(leaseID), r.sweepKey(), r.refundedKey(tenant)},
 		leaseID, string(state), leaseAuditTTL.Milliseconds(),
 	).Int64()
 	if err != nil {
@@ -206,7 +239,7 @@ func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState)
 
 // Balance implements Ledger.
 func (r *Redis) Balance(ctx context.Context, tenantID string) (int64, error) {
-	bal, err := r.rdb.Get(ctx, balanceKey(tenantID)).Int64()
+	bal, err := r.rdb.Get(ctx, r.balanceKey(tenantID)).Int64()
 	if errors.Is(err, redis.Nil) {
 		// Unprovisioned tenants are reported, not read as zero: the
 		// admin API must tell "no ledger" apart from "drained".
@@ -224,11 +257,11 @@ func (r *Redis) Balance(ctx context.Context, tenantID string) (int64, error) {
 // provisioned).
 func (r *Redis) TenantSnapshot(ctx context.Context, tenantID string, takenAt time.Time) (*Snapshot, error) {
 	pipe := r.rdb.Pipeline()
-	balCmd := pipe.Get(ctx, balanceKey(tenantID))
-	consumedCmd := pipe.Get(ctx, consumedKey(tenantID))
-	refundedCmd := pipe.Get(ctx, refundedKey(tenantID))
-	debitedCmd := pipe.Get(ctx, debitedKey(tenantID))
-	epochCmd := pipe.Get(ctx, epochKey(tenantID))
+	balCmd := pipe.Get(ctx, r.balanceKey(tenantID))
+	consumedCmd := pipe.Get(ctx, r.consumedKey(tenantID))
+	refundedCmd := pipe.Get(ctx, r.refundedKey(tenantID))
+	debitedCmd := pipe.Get(ctx, r.debitedKey(tenantID))
+	epochCmd := pipe.Get(ctx, r.epochKey(tenantID))
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		return nil, fmt.Errorf("quota: snapshot read: %w", err)
 	}
@@ -264,21 +297,27 @@ func counterValue(cmd *redis.StringCmd) int64 {
 	return v
 }
 
-// defaultLeaseTTL bounds how long a RESERVED lease may live before the
-// sweeper reclaims it. Long streams must settle within it.
+// defaultLeaseTTL is the fallback reclaim horizon for a ledger built
+// without an explicit one. It only holds when the request budget stays
+// well inside it; the assembly computes the real value from the
+// configured request timeouts, because a horizon shorter than the
+// longest possible request refunds a request that really spent tokens.
 const defaultLeaseTTL = 10 * time.Minute
 
 // leaseAuditTTL bounds how long a terminal lease record is retained for
-// audit before it expires; without it the hash set would grow without
-// bound. A RESERVED lease never carries this TTL — its refund depends
-// on the record surviving until the sweeper sees it.
+// audit. The two backends enforce the same window by different means:
+// here the record carries this as a key TTL, set only on the terminal
+// transitions, so a RESERVED lease is never cut short before the
+// sweeper reaches it. The in-memory ledger has no per-record expiry and
+// drops terminal records by this same age during its sweep instead, so
+// its bound holds only while the sweeper runs.
 const leaseAuditTTL = time.Hour
 
 // SweepOnce reclaims expired RESERVED leases through the release
 // script, which moves each one to EXPIRED and refunds its amount
 // exactly once. It returns how many leases were reclaimed.
 func (r *Redis) SweepOnce(ctx context.Context, now time.Time, limit int) (int, error) {
-	ids, err := r.rdb.ZRangeByScore(ctx, sweepKey(), &redis.ZRangeBy{
+	ids, err := r.rdb.ZRangeByScore(ctx, r.sweepKey(), &redis.ZRangeBy{
 		Min:   "-inf",
 		Max:   fmt.Sprintf("%d", now.UnixMilli()),
 		Count: int64(limit),

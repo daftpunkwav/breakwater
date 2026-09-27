@@ -7,7 +7,7 @@
  * - Assemble observation, governance backends, the identity store, the
  *   pipeline stages, the router, the relay engine and the HTTP surface
  * - Own the run lifecycle: signal handling, background workers and
- *   shutdown ordering (access log drains before exit, invariant I8)
+ *   shutdown ordering (the access log drains before exit)
  * - Return errors instead of exiting, so the whole path is testable
  *
  * This is the composition heart of the binary: every wire-up decision
@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,7 +45,7 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
-// Identity cache TTLs: the documented revocation latency.
+// Identity cache TTLs: how long a revocation or limit change takes to reach live traffic, positive resolutions, and the system-of-record backfill behind them.
 const (
 	authPosTTL = 60 * time.Second
 	authNegTTL = 5 * time.Second
@@ -63,7 +64,12 @@ var formats = []protocol.Format{
 
 // serve assembles the gateway from cfg and serves it until ctx or a
 // process signal ends the run.
-func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version string) error {
+// serve assembles and runs the gateway. listener is served when
+// non-nil instead of binding cfg.Server.Addr: a caller that already
+// holds a bound listener passes it, which removes the reserve-release-
+// rebind race it would otherwise face when it needs the address up front.
+// Production leaves it nil.
+func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version string, listener net.Listener) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -132,12 +138,13 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 				cache.NewFlight(),
 				cfg.Cache.TTL,
 				metrics,
+				cfg.RequestCeiling(),
 			))
 		}
 		if gov.sweepTarget != nil {
 			quota.StartSweeper(ctx, gov.sweepTarget, sweepInterval, expiredHook(metrics))
 		}
-		// Quota reconciliation (PRD Q6) needs all three: the Redis hot
+		// Quota reconciliation needs all three: the Redis hot
 		// ledger to read, PostgreSQL to persist snapshots into, and the
 		// interval armed. The tenant list comes from the system of
 		// record — the static set is configuration (no DSN, no snapshot
@@ -259,6 +266,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	srv := server.New(server.Options{
 		Addr:          cfg.Server.Addr,
 		ShutdownGrace: cfg.Server.ShutdownGrace,
+		Listener:      listener,
 		Inference:     inference,
 		Metrics:       metricsHandler(metrics),
 		Admin:         buildAdmin(cfg, gov, breaker, metrics, upstreamIDs(cfg.Upstreams), adapters, probes, adminOpts...),
@@ -279,7 +287,17 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		"addr", cfg.Server.Addr,
 		"upstreams", len(cfg.Upstreams),
 		"governance", gov.mode,
-		"admin_auth", adminAuthState(cfg.Security.AdminToken))
+		"admin_auth", adminAuthState(cfg.Security.AdminToken),
+		"lease_ttl", cfg.LeaseTTL())
+	if cfg.Redis.Addr != "" && redisNamespace(cfg) == "" {
+		// Sharing one Redis instance between deployments without a
+		// namespace means sharing tenant balances: one environment
+		// spends the other's money, and its sweeper refunds leases the
+		// other is still serving. Nothing else can detect that at
+		// startup, so say it where an operator will actually see it.
+		logger.Warn("redis keys are not namespaced: this gateway must be the only deployment on " +
+			cfg.Redis.Addr + ", or set " + config.EnvRedisNamespace)
+	}
 	if err := srv.Run(ctx); err != nil {
 		if errors.Is(err, httpserver.ErrDrainTimeout) {
 			// A shutdown past its grace window with requests still in
@@ -294,7 +312,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		}
 		// The deferred close would still run on the happy path, but a
 		// serve error must flush the observation queue before the caller
-		// turns the error into an exit code (invariant I8).
+		// turns the error into an exit code.
 		accessLog.close()
 		return err
 	}
@@ -313,7 +331,7 @@ func adminAuthState(token string) string {
 	return "bearer token"
 }
 
-// startReconciler wires the quota reconciliation protocol (PRD Q6):
+// startReconciler wires the quota reconciliation protocol:
 // the Redis hot ledger is snapshotted into PostgreSQL on an interval
 // and consecutive snapshots must satisfy the balance identity.
 func startReconciler(ctx context.Context, cfg config.Config, source quota.SnapshotSource, tenants []string, metrics *obs.Metrics, logger *slog.Logger) error {
@@ -409,9 +427,11 @@ func metricsHandler(m *obs.Metrics) http.Handler {
 // publishLogDrops keeps both sink drop counters in sync with their
 // owners' internal counts: the access log's capacity drops and the
 // insights store's dropped records. A silently missing insight record
-// must be as visible as a silently missing log line.
+// must be as visible as a silently missing log line. Either sink may be
+// absent — the access log is off unless a path is configured — so each
+// is published on its own terms and neither gates the other.
 func publishLogDrops(ctx context.Context, m *obs.Metrics, l *obs.Logger, s *insights.PGStore, every time.Duration) {
-	if l == nil || every <= 0 {
+	if l == nil && s == nil || every <= 0 {
 		return
 	}
 	go func() {
@@ -422,7 +442,9 @@ func publishLogDrops(ctx context.Context, m *obs.Metrics, l *obs.Logger, s *insi
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				m.SetLogsDropped(l.Dropped())
+				if l != nil {
+					m.SetLogsDropped(l.Dropped())
+				}
 				if s != nil {
 					m.SetInsightsDropped(s.Dropped())
 				}

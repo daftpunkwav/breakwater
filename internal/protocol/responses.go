@@ -112,8 +112,8 @@ func ingestResponses(body []byte) (IngestResult, error) {
 		chat.Messages = append([]ChatMessage{{Role: "system", Content: req.Instructions}}, chat.Messages...)
 	}
 
-	// Translated streams depend on the final usage chunk for settlement
-	// (PRD Q2): providers only send it when the canonical request asks
+	// Translated streams depend on the final usage chunk for settlement:
+	// providers only send it when the canonical request asks
 	// for it. The client-facing Responses stream never carries this
 	// option — it is gateway-internal plumbing.
 	if chat.Stream {
@@ -280,7 +280,7 @@ func (s *responsesStream) Finish(w ioWriter, usage Usage, usageKnown bool) error
 }
 
 // Abort implements StreamTranscoder: response.failed carries the
-// frozen in-stream code, then the stream ends.
+// in-stream error code, then the stream ends.
 func (s *responsesStream) Abort(w ioWriter, code Code, message string) error {
 	return WriteEvent(w, "response.failed", map[string]any{
 		"response": map[string]any{

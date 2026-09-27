@@ -7,7 +7,7 @@
  * - Read the request body once (into the carrier) and derive the token
  *   estimate both reservations are based on
  * - Reserve before next(); reject over-limit requests with 429 and a
- *   Retry-After, never touching an upstream (invariant I1)
+ *   Retry-After, never touching an upstream
  * - Correct the reservation after next() against the tokens actually
  *   consumed — refund only, never surcharge
  * - Enforce the degradation policy: a limiter backend error is
@@ -48,7 +48,7 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 
 			decision, err := l.Allow(r.Context(), carrier.Tenant.ID, limits, tokens)
 			if err != nil {
-				// Fail-closed: governance unavailable means reject (PRD Q4).
+				// Fail-closed: governance unavailable means reject.
 				carrier.RejectCode = "governance_unavailable"
 				wire.RenderError(w, http.StatusServiceUnavailable, "governance_unavailable",
 					"rate limiter unavailable")

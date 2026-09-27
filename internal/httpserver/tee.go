@@ -30,6 +30,9 @@ type TeeResponseWriter struct {
 	flusher http.Flusher
 	// captureLimit bounds retained body bytes; 0 selects counting mode.
 	captureLimit int
+	// detached marks a tee whose downstream write failures must not
+	// abort the handler chain (see NewDetachedBufferingTee).
+	detached bool
 
 	status      int
 	wroteHeader bool
@@ -37,6 +40,25 @@ type TeeResponseWriter struct {
 	truncated   bool
 	bytes       int64
 	flushed     bool
+}
+
+// NewDetachedBufferingTee builds a tee for work whose result is shared
+// with other requests. It forwards to w and retains the body, but a
+// failed write no longer aborts the handler chain: a client that
+// disappeared mid-flight is nobody's business but its own, and letting
+// its write error propagate would fail every request waiting on the same
+// shared fetch. Pair it with a context detached from that client's
+// cancellation.
+func NewDetachedBufferingTee(w http.ResponseWriter, captureLimit int) *TeeResponseWriter {
+	return &TeeResponseWriter{w: w, captureLimit: captureLimit, flusher: flusherOf(w), detached: true}
+}
+
+// flusherOf is the flusher lookup newTee shares.
+func flusherOf(w http.ResponseWriter) http.Flusher {
+	if f, ok := w.(http.Flusher); ok {
+		return f
+	}
+	return nil
 }
 
 // NewBufferingTee builds a tee that retains the body up to captureLimit
@@ -56,10 +78,7 @@ func NewCountingTee(w http.ResponseWriter) *TeeResponseWriter {
 }
 
 func newTee(w http.ResponseWriter, captureLimit int) *TeeResponseWriter {
-	t := &TeeResponseWriter{w: w, captureLimit: captureLimit}
-	if f, ok := w.(http.Flusher); ok {
-		t.flusher = f
-	}
+	t := &TeeResponseWriter{w: w, captureLimit: captureLimit, flusher: flusherOf(w)}
 	return t
 }
 
@@ -84,6 +103,12 @@ func (t *TeeResponseWriter) Write(p []byte) (int, error) {
 	}
 	n, err := t.w.Write(p)
 	t.bytes += int64(n)
+	if t.detached && err != nil {
+		// The client this tee happens to point at is gone. The capture
+		// still completes, so the shared work this tee backs survives
+		// and the requests waiting on it are served.
+		err = nil
+	}
 	if t.captureLimit > 0 {
 		if room := t.captureLimit - t.body.Len(); room > 0 {
 			kept := min(room, len(p))

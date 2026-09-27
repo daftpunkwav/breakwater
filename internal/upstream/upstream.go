@@ -10,9 +10,9 @@
  *   buffered) and usage extraction stay with the caller (the relay)
  *
  * Adding a provider means adding an implementation of this port; the
- * governance layers must not change (frozen architectural decision).
+ * governance layers above must not change.
  *
- * Result convention (frozen):
+ * Result convention:
  * - Forward reports every completed HTTP exchange — including 4xx and
  *   5xx responses — as a non-nil Response. A non-nil error means the
  *   exchange did not complete (connection failure, timeout, context

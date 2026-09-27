@@ -7,12 +7,12 @@
  * - Assemble the gateway's root handler (see routes.go)
  * - Nothing else: the listen/serve/drain lifecycle lives in
  *   internal/httpserver so every binary shares one shutdown ordering
- *   (invariant I8)
  */
 package server
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"time"
 
@@ -43,6 +43,11 @@ type Options struct {
 	// Version is the build identifier exposed at GET /version (set via
 	// ldflags at build time); empty reports "dev".
 	Version string
+	// Listener, when set, is served instead of binding Addr. A caller
+	// that already holds a bound listener passes it here rather than
+	// reserving an address and rebinding it, which races with every
+	// other process picking the same free port.
+	Listener net.Listener
 }
 
 // Server runs the gateway HTTP endpoint.
@@ -62,5 +67,6 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:          s.opts.Addr,
 		Handler:       newRootHandler(s.opts.Inference, s.opts.Metrics, s.opts.Admin, s.opts.Version, s.opts.Readiness, s.opts.Models),
 		ShutdownGrace: s.opts.ShutdownGrace,
+		Listener:      s.opts.Listener,
 	})
 }

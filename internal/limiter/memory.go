@@ -4,8 +4,11 @@
  * buckets kept in memory.
  *
  * Responsibilities:
- * - The reference implementation of the limiter semantics: identical
- *   behavior to the Redis backend, no serialization, no clock skew
+ * - The reference implementation of the limiter semantics: the same
+ *   decisions the Redis backend reaches, with no serialization and no
+ *   dependency on a shared clock. Stored state is not identical — a
+ *   zero-capacity dimension still allocates a bucket here, while the
+ *   Redis script skips writing one at all
  * - Serve tests and the in-memory degradation posture
  *
  * Buckets start full: the first request of a quiet tenant meets an

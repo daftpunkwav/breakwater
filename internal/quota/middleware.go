@@ -56,6 +56,15 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 				wire.RenderError(w, http.StatusPaymentRequired, string(protocol.CodeInsufficientQuota),
 					"the tenant balance cannot cover the estimated request")
 				return
+			case errors.Is(err, ErrUnknownTenant):
+				// No ledger record for this tenant: a provisioning gap,
+				// not a spending decision and not a backend outage.
+				// Saying "insufficient quota" would bill the client's
+				// retry logic for a fault it cannot fix.
+				carrier.RejectCode = "quota_not_provisioned"
+				wire.RenderError(w, http.StatusServiceUnavailable, "quota_not_provisioned",
+					"this tenant has no quota ledger entry")
+				return
 			case err != nil:
 				// Fail-closed: a gateway that cannot meter must not give
 				// away upstream traffic.
@@ -71,8 +80,8 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 			// deeper in the chain (the recovery stage contains the panic,
 			// this defer keeps the lease from leaking to the sweeper,
 			// which would refund a request that consumed tokens).
-			// Settlement deliberately detaches from request cancellation
-			// (invariant I10): a client gone mid-flight still settles by
+			// Settlement deliberately detaches from request cancellation:
+			// a client gone mid-flight still settles by
 			// the tokens it consumed. The upstream request itself was
 			// cancelled through the request context; only the ledger
 			// write outlives it. Anything that still fails falls to the

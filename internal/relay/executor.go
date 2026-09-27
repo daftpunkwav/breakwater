@@ -12,7 +12,7 @@
  * - Nothing else: candidate ordering belongs to the router, transport
  *   to the adapters, wire formats to the protocol package
  *
- * Response-side shape (pipeline doc): retry, circuit breaking and
+ * Response-side shape: retry, circuit breaking and
  * failover live INSIDE the forward stage; the stages after it (settle,
  * cache write, observation) run once per client request, not per
  * attempt — which is why Execute returns a Result carrying the served
@@ -107,9 +107,9 @@ func WithStreamTimeout(d time.Duration) Option {
 	return func(e *Executor) { e.streamTimeout = d }
 }
 
-// New builds an Executor. A nil budget means retries are unbounded by
-// the global cap (per-request MaxAttempts still applies); production
-// assembly always passes one.
+// New builds an Executor. A nil budget disables the global in-flight
+// retry cap; the per-request MaxAttempts still applies. Pass a budget
+// to bound retry amplification across the process.
 func New(policy retry.Policy, budget *retry.Budget, opts ...Option) *Executor {
 	e := &Executor{
 		policy:     policy,

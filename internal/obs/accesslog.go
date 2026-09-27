@@ -2,11 +2,11 @@
  * @file accesslog
  * @description Access log contracts: the entry schema and the sink port.
  *
- * Contract points (invariant I7):
+ * Contract points:
  * - Record never blocks the request path; capacity pressure ends in
  *   explicit drops that are counted, never in backpressure on handlers
- * - Flush exists for graceful shutdown only (invariant I8: the queue is
- *   drained before exit); it is never called on the request path
+ * - Flush exists for graceful shutdown only: the queue is drained
+ *   before exit, and it is never called on the request path
  *
  * Implementations must be safe for concurrent use.
  */
@@ -26,7 +26,7 @@ type Entry struct {
 	// (PostgreSQL deployments); the static identity mode leaves it empty.
 	KeyID     string
 	RequestID string
-	// Model and Upstream carry the dimensions the evidence documents are
+	// Model and Upstream carry the dimensions the stability report reads
 	// derived from: per-model traffic, per-upstream errors, cache
 	// economics.
 	Model    string
@@ -36,7 +36,7 @@ type Entry struct {
 	Status   int
 	Duration time.Duration
 	// CacheHit reports whether the response came from the cache; the
-	// "exactly one upstream fetch per cold key" evidence (invariant I2)
+	// "exactly one upstream fetch per cold key" evidence
 	// is audited from this field.
 	CacheHit bool
 	// Tokens is the settled token usage the request consumed; zero for

@@ -5,10 +5,10 @@
  *
  * Responsibilities:
  * - Guarantee that a cold key's concurrent non-streaming requests
- *   produce exactly one upstream fetch (invariant I2)
+ *   produce exactly one upstream fetch
  * - Bound every waiter by its own request context: waiters never
  *   inherit the holder's remaining deadline, and a waiter whose client
- *   leaves stops waiting (net/http memo §9 note)
+ *   leaves stops waiting
  * - Share the holder's result — including its errors — with the
  *   waiters; retrying is the retry layer's business, never implicit
  * - Nothing else: eligibility and storage live with their owners

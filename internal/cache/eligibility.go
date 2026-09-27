@@ -7,7 +7,7 @@
  * - Decide whether a request's semantics survive caching
  * - Nothing else: hashing and storage live with their owners
  *
- * Only deterministic combinations are eligible (PRD Q3): any sampling
+ * Only deterministic combinations are eligible: any sampling
  * parameter that would let the provider answer differently per call
  * bypasses the cache. Absent parameters keep the OpenAI defaults,
  * which are NOT deterministic (temperature defaults to 1) — so a

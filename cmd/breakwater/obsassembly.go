@@ -5,7 +5,7 @@
  *
  * Responsibilities:
  * - Open the access log file when configured and wrap it in the
- *   bounded async logger; drain it before process exit (invariant I8)
+ *   bounded async logger; drain it before process exit
  * - Bind the admin endpoints to the live ledger and breaker registry
  * - Nothing else: the log schema and the admin surface live in their
  *   packages; this file only connects them to concrete resources

@@ -4,14 +4,17 @@
  * rest of the chain.
  *
  * Responsibilities:
- * - Serve deterministic, cache-eligible requests from the store; a hit
- *   is zero-cost for the tenant (the whole reservation refunds)
+ * - Serve deterministic, cache-eligible requests from the store. A
+ *   hit sets carrier.Consumed to 0, which is what makes the
+ *   surrounding stages refund in full: the limiter returns the whole
+ *   reservation and the quota stage cancels the lease instead of
+ *   settling it. This stage performs no refund of its own.
  * - Deduplicate concurrent cold non-streaming fetches through the
- *   singleflight: exactly one upstream fetch per key (invariant I2);
+ *   singleflight: exactly one upstream fetch per key;
  *   waiters replay the holder's result, errors included, with no
  *   implicit retry
- * - Streaming requests never share a flight (frozen decision, spec
- *   §6.3): they fetch individually and try to write the cache after
+ * - Streaming requests never share a flight: they fetch individually
+ *   and try to write the cache after
  *   completion, last write wins
  * - Nothing else: eligibility rules and key derivation live beside
  *   this file; storage sits behind the Cache port; the completions
@@ -47,8 +50,12 @@ const (
 )
 
 // Middleware returns the cache stage over a store, a flight group and
-// the base TTL applied by the store (with its jitter).
-func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Metrics) pipeline.Middleware {
+// the base TTL applied by the store (with its jitter). fetchBudget
+// bounds the shared fetch, which is not owned by the request that
+// happens to start it: it must outlive that client's cancellation, so
+// it needs a limit of its own. It should be the longest one request may
+// run, since no request can legitimately consume upstream beyond that.
+func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Metrics, fetchBudget time.Duration) pipeline.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			carrier, ok := pipeline.RequireCarrier(w, r)
@@ -58,9 +65,10 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 			if !pipeline.EnsureBody(w, r, carrier) {
 				return
 			}
-			// Frozen scope: only canonical-wire requests are cached. A
-			// translated format would need its response re-rendered on
-			// replay; until that lands, translated requests bypass.
+			// Scope: only canonical-wire requests are cached. A
+			// translated format would need its stored response
+			// re-rendered into the client's shape on replay, which
+			// this stage does not do; translated requests bypass.
 			if carrier.Format != protocol.FormatOpenAIChat || !Eligible(carrier.Chat) {
 				next.ServeHTTP(w, r)
 				return
@@ -78,7 +86,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 			metrics.CacheMiss()
 
 			if carrier.Chat.Stream {
-				// Frozen boundary: streams fetch individually; the flight
+				// Scope: streams fetch individually; the flight
 				// group is reserved for non-streaming requests.
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r)
@@ -89,9 +97,21 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				return
 			}
 
-			tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
-			entry, fetchErr, owner := flight.Do(r.Context(), key, func(ctx context.Context) (Entry, error) {
-				next.ServeHTTP(tee, r.WithContext(ctx))
+			// The shared fetch is not owned by the request that happened
+			// to start it. Its context is detached from that client's
+			// cancellation and its tee tolerates that client's writes
+			// failing, so a starter that walks away mid-flight neither
+			// cancels the upstream call nor fails every request waiting
+			// on the same key. Detaching also drops the deadline the
+			// request carried, so the budget is re-imposed here: an
+			// unbounded fetch would leave the key unable to start a new
+			// flight until the process restarts.
+			fetchCtx, cancelFetch := context.WithTimeout(context.WithoutCancel(r.Context()), fetchBudget)
+			defer cancelFetch()
+
+			fetch := httpserver.NewDetachedBufferingTee(w, maxCacheableBytes)
+			entry, fetchErr, owner := flight.Do(fetchCtx, key, func(ctx context.Context) (Entry, error) {
+				next.ServeHTTP(fetch, r.WithContext(context.WithoutCancel(ctx)))
 				metrics.CacheFetch(upstreamOf(carrier))
 				// A fetch whose handler produced no HTTP response at all
 				// (its own client walked away before the first byte) has
@@ -99,55 +119,49 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				// make waiters replay a header-less entry. A capture cut
 				// off at the byte cap is equally unshareable: waiters
 				// would replay a truncated body as a complete reply.
-				if status := tee.Status(); status < 100 || status > 599 {
+				if status := fetch.Status(); status < 100 || status > 599 {
 					return Entry{}, fmt.Errorf("cache: shared fetch produced no response")
 				}
-				if tee.Truncated() {
+				if fetch.Truncated() {
 					return Entry{}, fmt.Errorf("cache: shared fetch exceeded the shareable size")
 				}
-				return capture(tee), nil
+				return capture(fetch), nil
 			})
 			if fetchErr != nil {
-				// The owner's response, when the fetch produced one, is
-				// already on the wire through the tee — only a
-				// response-less fetch still owes its client an envelope.
-				if owner {
-					if tee.Status() < 100 && r.Context().Err() == nil {
-						protocol.WireFor(carrier.Format).RenderError(w, http.StatusBadGateway,
-							"upstream_unreachable", "the shared fetch for this request failed")
-					}
-					return
-				}
-				// A waiter whose own context ended has a client gone: the
-				// response would be noise. Any other waiter deserves a
-				// real envelope instead of the collapsed shared fetch.
-				if r.Context().Err() == nil {
+				// A starter whose tee already put a response on the wire
+				// owes its client nothing more — appending an envelope
+				// there would corrupt the reply it is reading. A
+				// response-less fetch, and every waiter, still owes one.
+				if (!owner || fetch.Status() < 100) && r.Context().Err() == nil {
 					protocol.WireFor(carrier.Format).RenderError(w, http.StatusBadGateway,
 						"upstream_unreachable", "the shared fetch for this request failed")
 				}
 				return
 			}
-			if owner {
-				// The owner's response was already written through the
-				// tee, and the completions handler already accounted its
-				// consumption. Only storage remains: a full entry for the
-				// base TTL, an upstream failure or empty success for a
-				// short negative one.
-				switch {
-				case storeWorthyFromEntry(entry):
-					_ = store.Set(r.Context(), key, entry, ttl)
-				case negativelyCacheable(entry, carrier):
-					_ = store.Set(r.Context(), key, entry, ttl/10)
-				}
+			if !owner {
+				// Waiter: the shared fetch's result is replayed verbatim;
+				// it caused no upstream fetch of its own, so its
+				// reservation refunds in full.
+				metrics.CacheShared()
+				replay(w, entry)
+				carrier.CacheHit = true
+				carrier.Consumed = 0
+				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: observedUpstreamSharedFetch}
 				return
 			}
-			// Waiter: the shared fetch's result is replayed verbatim;
-			// it caused no upstream fetch of its own.
-			metrics.CacheShared()
-			replay(w, entry)
-			carrier.CacheHit = true
-			carrier.Consumed = 0
-			carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: observedUpstreamSharedFetch}
+			// Starter: the response already went to its own connection
+			// through the tee, and the chain already accounted its real
+			// consumption. Only storage remains: a full entry for the
+			// base TTL, an upstream failure or empty success for a short
+			// negative one. The write uses the fetch's context, not the
+			// starter's: a starter that left mid-flight must not cost the
+			// waiters — or every later request — the warmed entry.
+			switch {
+			case storeWorthyFromEntry(entry):
+				_ = store.Set(fetchCtx, key, entry, ttl)
+			case negativelyCacheable(entry, carrier):
+				_ = store.Set(fetchCtx, key, entry, ttl/10)
+			}
 		})
 	}
 }
@@ -197,7 +211,7 @@ func relayAborted(carrier *pipeline.Carrier) bool {
 }
 
 // negativelyCacheable reports whether a failed exchange is a fact about
-// the request worth remembering briefly (spec §6.3 negative caching):
+// the request worth remembering briefly:
 // an error the upstream itself produced, or an empty success. Gateway
 // envelopes (circuit open, budget exhausted, unreachable) are transient
 // gateway states, never facts, and never qualify.

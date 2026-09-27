@@ -4,8 +4,8 @@
  * Prometheus text-exposition registry.
  *
  * Responsibilities:
- * - Define every metric family the evidence documents are built from
- *   (spec §12) with typed, explicit recorder methods
+ * - Define every metric family the Prometheus exposition publishes,
+ *   each with typed, explicit recorder methods
  * - Render the Prometheus text format 0.0.4 at scrape time
  * - Nothing else: no aggregation server-side (quantiles are computed
  *   by the scraper from histogram buckets), no push gateways
@@ -17,7 +17,9 @@
  * no request IDs, no paths. The model label comes from client input
  * (it is the requested model name, known before routing), so it is not
  * intrinsically bounded; the per-family child cap below bounds what a
- * hostile or buggy client can grow, dropping series past the cap.
+ * hostile or buggy client can grow, collapsing every label set past the
+ * cap into one reserved leaf rather than dropping it, so the counter
+ * keeps moving and the collapse is visible in the exposition.
  */
 package obs
 
@@ -76,29 +78,59 @@ type family struct {
 // maxChildren caps the label-set leaves of one family. The configured
 // label vocabulary keeps every legitimate deployment far below it; the
 // cap only bounds what a hostile or buggy client (an unbounded model
-// name) can grow. Past the cap new label sets are dropped — the
-// registry degrades to under-counting instead of growing without
-// bound.
+// name) can grow. Past the cap new label sets collapse into one
+// reserved leaf instead of being dropped, so the exposition keeps
+// showing that the traffic happened and says which labels it lost —
+// where a counter that silently stops moving for the life of the
+// process would be the worse failure. Counters and histograms in the
+// overflow leaf are still correct in aggregate; a gauge collapsed this
+// way reports the last writer, not a total.
 const maxChildren = 4096
 
-// childOf returns the leaf for a label value tuple, or nil past the
-// family's child cap (the call is then a no-op for the caller).
+// labelCapOverflow is the placeholder value every label takes in the
+// reserved overflow leaf.
+const labelCapOverflow = "*"
+
+// overflowKey is the reserved map key of that leaf. It cannot collide
+// with a real label tuple, which joins its values with "\x00".
+const overflowKey = "\x00overflow"
+
+// overflowValues is the placeholder tuple for a family with n labels.
+func overflowValues(n int) []string {
+	return make([]string, n)
+}
+
+// childOf returns the leaf for a label value tuple. It never returns
+// nil: past the family's cap every further tuple shares the reserved
+// overflow leaf, so the family keeps accumulating and the loss of
+// per-label detail is bounded, visible and recoverable (a restart
+// clears it) instead of silently permanent.
 func (f *family) childOf(values ...string) *child {
 	key := strings.Join(values, "\x00")
 	f.mu.RLock()
 	c, ok := f.children[key]
-	n := len(f.children)
 	f.mu.RUnlock()
 	if ok {
 		return c
-	}
-	if n >= maxChildren {
-		return nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if existing, ok := f.children[key]; ok {
 		return existing
+	}
+	if len(f.children) >= maxChildren {
+		ov, ok := f.children[overflowKey]
+		if !ok {
+			ov = &child{values: overflowValues(len(f.labels))}
+			for i := range ov.values {
+				ov.values[i] = labelCapOverflow
+			}
+			if f.typ == "histogram" {
+				ov.buckets = make([]atomic.Uint64, len(f.buckets))
+			}
+			f.children[overflowKey] = ov
+		}
+		return ov
 	}
 	leaf := &child{values: values}
 	if f.typ == "histogram" {
@@ -189,9 +221,6 @@ func NewMetrics() *Metrics {
 
 func (m *Metrics) inc(name string, amount float64, values ...string) {
 	c := m.families[name].childOf(values...)
-	if c == nil {
-		return
-	}
 	addFloat(&c.value, amount)
 	c.count.Add(1)
 }
@@ -211,9 +240,6 @@ func (m *Metrics) ObserveDuration(upstream string, seconds float64) {
 	}
 	f := m.families["breakwater_request_duration_seconds"]
 	c := f.childOf(upstream)
-	if c == nil {
-		return
-	}
 	addFloat(&c.value, seconds)
 	c.count.Add(1)
 	for i, bound := range f.buckets {
@@ -332,9 +358,7 @@ func (m *Metrics) CircuitState(upstream string, stateValue float64) {
 	if m == nil {
 		return
 	}
-	if c := m.families["breakwater_circuit_state"].childOf(upstream); c != nil {
-		c.value.Store(math.Float64bits(stateValue))
-	}
+	m.families["breakwater_circuit_state"].childOf(upstream).value.Store(math.Float64bits(stateValue))
 }
 
 // RetryScheduled records a retry attempt beyond the first.
@@ -398,9 +422,6 @@ func (m *Metrics) ObserveTTFT(upstream string, seconds float64) {
 	}
 	f := m.families["breakwater_upstream_ttft_seconds"]
 	c := f.childOf(upstream)
-	if c == nil {
-		return
-	}
 	addFloat(&c.value, seconds)
 	c.count.Add(1)
 	for i, bound := range f.buckets {

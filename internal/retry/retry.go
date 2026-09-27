@@ -10,9 +10,9 @@
  *   implementation details supplied to the loop
  *
  * Contract points:
- * - I5: a request never exceeds its attempt cap, and retries never
+ * - A request never exceeds its attempt cap, and retries never
  *   exceed the global in-flight budget (retry storm containment)
- * - I6: the attempt loop — not the classifier — owns the first-byte
+ * - The attempt loop — not the classifier — owns the first-byte
  *   boundary. After the first response byte has reached the client the
  *   loop must not consult the classifier at all; such failures
  *   terminate via the SSE error event contract. Emitting that event
@@ -44,8 +44,8 @@ type Policy struct {
 // connection failures, 429 and 5xx exchanges and timeouts are; client
 // errors (4xx) are not.
 //
-// The classifier sees errors only. Positional gating (invariant I6:
-// nothing is retryable after the first response byte) is enforced by the
+// The classifier sees errors only. Positional gating (nothing is
+// retryable after the first response byte) is enforced by the
 // attempt loop before the classifier is ever consulted.
 type Classifier interface {
 	Retryable(err error) bool
@@ -53,7 +53,7 @@ type Classifier interface {
 
 // Budget is the process-wide in-flight retry budget shared by all
 // requests; it bounds how much of total traffic is retry amplification
-// (retry storm containment, I5). It is a concrete type on purpose: a
+// (retry storm containment). It is a concrete type on purpose: a
 // single in-process counter with no foreseeable alternative backend,
 // unlike the breaker whose backend stays replaceable.
 type Budget struct {

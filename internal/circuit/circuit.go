@@ -8,15 +8,19 @@
  * - Nothing else: thresholds, cooldowns and probe scheduling belong to
  *   the implementation
  *
- * Contract points (invariant I4):
+ * Contract points:
  * - closed -> open on sustained failures; open fails fast without
  *   touching the upstream
  * - half-open admits exactly one outstanding probe; concurrent arrivals
  *   are denied instead of queueing
  * - a granted call reports its outcome exactly once through the returned
- *   permission; implementations must reclaim abandoned permissions (lost
- *   to panic, cancellation or probe timeout) so the half-open slot
- *   cannot leak — the guarantee is structural, not caller discipline
+ *   permission; a probe whose holder never reports (panicked, cancelled
+ *   or hung) leaves the slot occupied until the next Allow, StateOf or
+ *   Report observes the expired probe deadline and reclaims it as a
+ *   server fault. Recovery is deadline-based, so a probe still running
+ *   past the probe timeout is indistinguishable from an abandoned one,
+ *   and a caller that never reports costs the slot its timeout — not
+ *   any special handling of its own.
  * - state is process-local; the port stays replaceable so a shared
  *   backend can be introduced without touching callers
  *

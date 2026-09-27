@@ -21,9 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -67,7 +65,7 @@ func StripRetryAfter(err error) error {
 
 // ErrCommitted marks a failure that happened after the first response
 // byte reached the client. The attempt loop returns it without
-// consulting the classifier (invariant I6): a retry would replay a
+// consulting the classifier: a retry would replay a
 // half-sent reply.
 var ErrCommitted = errors.New("retry: attempt already committed bytes to the client")
 
@@ -153,17 +151,13 @@ func (DefaultClassifier) Retryable(err error) bool {
 	if errors.As(err, &status) {
 		return status.StatusCode == http.StatusTooManyRequests || status.StatusCode >= 500
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		if urlErr.Timeout() {
-			return true
-		}
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return netErr.Timeout()
-	}
-	// Remaining transport failures (connection refused, reset, broken
-	// pipe) are transient by nature.
+	// Everything left is a transport-level failure. net/http wraps all
+	// of them in *url.Error, so a refused connection, a reset and a
+	// broken pipe land here rather than in a timeout-specific branch.
+	// For the attempt loop they are as transient as a timeout: the
+	// fault belongs to one candidate, and the next candidate may well
+	// be a different host that answers. Treating them as terminal would
+	// turn a single dead upstream into a failed request instead of a
+	// failover.
 	return true
 }

@@ -4,11 +4,11 @@
  * JSON lines by one background goroutine.
  *
  * Responsibilities:
- * - Accept entries without ever blocking the request path (invariant
- *   I7): capacity pressure drops the oldest entries and counts them —
+ * - Accept entries without ever blocking the request path: capacity
+ *   pressure drops the oldest entries and counts them —
  *   the drop counter rising is normal, dropping silently is not
  * - Persist entries as JSON lines to the configured sink
- * - Flush on shutdown only (invariant I8): the queue is drained before
+ * - Flush on shutdown only: the queue is drained before
  *   the process exits, bounded by the caller's deadline
  * - Nothing else: no formatting policy beyond JSON, no destinations
  *

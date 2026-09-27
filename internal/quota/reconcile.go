@@ -1,6 +1,6 @@
 /**
  * @file reconcile
- * @description The quota reconciliation protocol (PRD Q6): the Redis
+ * @description The quota reconciliation protocol: the Redis
  * hot ledger is snapshotted on a fixed interval and every pair of
  * consecutive snapshots must satisfy the balance identity.
  *
@@ -140,7 +140,7 @@ func balanceDrop(prev, snap *Snapshot) int64 { return prev.Balance - snap.Balanc
 
 // StartReconciler runs the reconcile loop until ctx is cancelled. Every
 // drift fires onDrift and is logged loudly: a non-zero drift means the
-// ledger identity (invariant I3) broke in production.
+// ledger identity broke in production.
 func StartReconciler(ctx context.Context, reconciler *Reconciler, every time.Duration, onDrift func(drift TenantDrift)) {
 	go func() {
 		ticker := time.NewTicker(every)

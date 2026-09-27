@@ -7,9 +7,9 @@
  * - Run attempts under the three caps: MaxAttempts in count,
  *   AttemptTimeout per attempt, OverallDeadline for all together
  * - Gate every retry beyond the first attempt on the process-wide
- *   in-flight budget (retry storm containment, invariant I5)
+ *   in-flight budget (retry storm containment)
  * - Own the first-byte boundary: failures marked committed are returned
- *   untouched, the classifier is never consulted (invariant I6)
+ *   untouched, the classifier is never consulted
  * - Nothing else: error classification and outcome accounting belong to
  *   the classifier and the callers
  */
@@ -44,8 +44,9 @@ type OnRetry func(attempt int, err error, delay time.Duration)
 // cap, the raw failure when it is terminal or committed.
 //
 // A nil Policy member means "no cap": MaxAttempts below 1 is clamped to
-// 1, zero timeouts and deadlines are absent, zero backoff shapes fall
-// back to no delay.
+// 1, and zero timeouts and deadlines are absent. Backoff shapes the
+// ceiling rather than disabling it — only a zero BackoffMax makes the
+// delay zero.
 func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Classifier, onRetry OnRetry, fn AttemptFunc) error {
 	if classifier == nil {
 		classifier = DefaultClassifier{}
@@ -76,15 +77,19 @@ func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Clas
 		if err == nil {
 			return nil
 		}
-		// I6: bytes already reached the client — the loop's authority
+		// Bytes already reached the client — the loop's authority
 		// ends here, no classification, no further attempt.
 		if errors.Is(err, ErrCommitted) {
 			return err
 		}
 		// The overall context is done: the caller or the deadline ended
-		// this request; the error belongs to the context, not the last
-		// attempt.
+		// this request. The attempt that was in flight is still the
+		// reason it failed, so it stays in the chain: callers that
+		// render the last upstream error match on it by identity.
 		if overallErr := overall.Err(); overallErr != nil {
+			if lastErr != nil {
+				return fmt.Errorf("%w: %w", overallErr, lastErr)
+			}
 			return overallErr
 		}
 		if attempt >= maxAttempts(policy) || !classifier.Retryable(err) {
@@ -106,6 +111,14 @@ func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Clas
 			onRetry(attempt, err, delay)
 		}
 		if err := sleep(overall, delay); err != nil {
+			// The deadline ended the backoff sleep. The attempt that
+			// asked for the wait is still the reason this request
+			// failed, so keep it in the chain: callers that match on
+			// the last upstream error (the relay's passthrough
+			// renderer) must still recognise it.
+			if lastErr != nil {
+				return fmt.Errorf("%w: %w", overall.Err(), lastErr)
+			}
 			return overall.Err()
 		}
 	}
@@ -144,8 +157,10 @@ func backoffDelay(policy Policy, attempt int) time.Duration {
 
 // backoffCeiling is the exponential cap for the retry that follows
 // attempt n: the first retry waits at most BackoffInitial, every later
-// retry doubles the cap, never past BackoffMax. A zero BackoffInitial
-// leaves the cap at BackoffMax; an overflowed doubling falls back to it.
+// retry doubles the cap. A zero BackoffInitial leaves the cap at
+// BackoffMax. The doubling shift is clamped to 16 bits so it cannot
+// overflow, and a zero BackoffMax means "uncapped" rather than "no
+// delay", so the doubling runs unbounded in that case.
 func backoffCeiling(policy Policy, attempt int) int64 {
 	shift := attempt - 1
 	if shift < 0 {

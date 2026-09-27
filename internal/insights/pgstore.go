@@ -6,9 +6,11 @@
  * Responsibilities:
  * - Persist records in multi-row batches on a background goroutine
  * - Answer the aggregation queries behind GET /admin/insights
- * - Nothing else: the writer never blocks the request path — a full
- *   buffer drops the record and counts the drop, exactly the access
- *   log's contract (invariant I7)
+ * - Nothing else: the writer never blocks the request path. A full
+ *   buffer drops the incoming record and counts the drop, keeping the
+ *   same bounded-and-counted contract as the access log — but with the
+ *   opposite eviction policy, since the access log drops its oldest
+ *   entry and this drops the newest
  */
 package insights
 
@@ -67,7 +69,7 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 }
 
 // Record accepts one finished request without blocking; capacity
-// pressure drops the record and counts the drop (invariant I7).
+// pressure drops the record and counts the drop.
 func (s *PGStore) Record(r Record) {
 	s.mu.Lock()
 	if s.closed || len(s.queue) >= batchSize*8 {

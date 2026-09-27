@@ -7,14 +7,15 @@
  * - Record traffic: in-flight gauge, duration histogram, request
  *   counters by outcome
  * - Emit the async access log entry, including the cache and stream
- *   dimensions the evidence documents audit
+ *   dimensions the stability report reads
  * - Nothing else: stage-level counters (rate limited, cache fetch,
  *   retries) are recorded by their owning stages; this stage never
  *   makes governance decisions
  *
- * Stage order: carrier -> observation -> auth -> ... -> completions.
- * Rejected requests are observed too — this is the outermost
- * business-visible view of the gateway.
+ * Stage order: carrier -> request id -> format -> observation -> auth ->
+ * ... -> completions. Rejected requests are observed too: this is the
+ * first stage that sees the outcome of a business request, so no
+ * governance rejection escapes it.
  */
 package pipeline
 
@@ -62,20 +63,23 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					tokens = carrier.Consumed
 					// A forward-stage failure refines the rejection code:
 					// upstream passthroughs classify by status, gateway
-					// envelopes and stream aborts by their code.
-					if errorCode == "" && (carrier.Relay.Status < 200 || carrier.Relay.Status > 299) {
+					// envelopes and stream aborts by their code. An
+					// aborted stream already committed a 200, so the
+					// abort flag is what carries its failure code.
+					if errorCode == "" && (carrier.Relay.Status < 200 || carrier.Relay.Status > 299 || carrier.Relay.Aborted) {
 						errorCode = carrier.Relay.ErrorCode
 					}
 				}
 			}
 			status := tee.Status()
 			if status == 0 {
-				// No header ever reached the wire and the client is gone.
-				// Handler panics never land here — the recovery stage
-				// renders them as counted 500s — so a 499 is a client
-				// that truly walked away before the response started.
-				// The aggregation counts it as a disconnect, never a
-				// failure.
+				// No header ever reached the wire. On the inference chains the
+				// recovery stage sits inside this one, so a handler panic is
+				// rendered as a counted 500 and never lands here. The admin,
+				// probe and metrics routes have no observation stage at all,
+				// so this branch is only ever a client that walked away.
+				// Either way the aggregation counts it as a disconnect,
+				// never a failure.
 				status = obs.StatusClientClosedRequest
 			}
 

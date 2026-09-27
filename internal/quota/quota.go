@@ -11,13 +11,14 @@
  * - Atomic reservation scripts, the sweeper and the reconciliation
  *   protocol belong to the implementation
  *
- * Invariants carried by this contract:
- * - I3: no over-draft from concurrency; initial balance = current balance
- *   + debits - refunds must always reconcile to zero error
- * - I9: every reservation has a lease record; reservations outside the
- *   settled set are reclaimed by the sweeper
- *
- * A balance query member joins when the minimal admin API lands.
+ * Balance rules every implementation must hold:
+ * - No over-draft from concurrency: the balance may only fall by
+ *   reservation debits minus refunds, which is the identity the
+ *   reconciler diffs consecutive snapshots against
+ * - Every reservation has a lease record. A RESERVED lease that is
+ *   never settled is reclaimed and fully refunded by the sweeper once it
+ *   passes the reclaim horizon; a terminal record is kept for the audit
+ *   window and then purged
  */
 package quota
 
@@ -57,9 +58,10 @@ type Lease struct {
 // balance cannot cover the requested amount. Callers map it to HTTP 402.
 var ErrInsufficientBalance = errors.New("quota: insufficient balance")
 
-// ErrUnknownTenant reports a balance query for a tenant that has no
-// ledger entry. Callers distinguish it from backend failures: the admin
-// API maps it to 404, while any other Balance error is a 503.
+// ErrUnknownTenant reports a tenant that has no ledger entry — a query
+// for it, or a reservation against it. Callers distinguish it from
+// backend failures: the admin API maps it to 404, the request path
+// refuses the request as unprovisioned, and any other error is a 503.
 var ErrUnknownTenant = errors.New("quota: tenant has no balance ledger")
 
 // Ledger is the quota account port. Implementations must be safe for

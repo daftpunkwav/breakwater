@@ -19,6 +19,7 @@ type Config struct {
 	Redis     Redis
 	Postgres  Postgres
 	Obs       Obs
+	Quota     Quota
 	Upstreams []Upstream
 	Retry     Retry
 	// Identity is the raw JSON identity set (tiers, tenants, keys) for
@@ -34,7 +35,7 @@ type Config struct {
 	// token estimate; requests above the limit skip that model's
 	// candidates. Zero entries are rejected at load.
 	ContextLimits map[string]int64
-	// ReconcileInterval paces the quota ledger reconciliation (PRD Q6);
+	// ReconcileInterval paces the quota ledger reconciliation;
 	// zero disables the protocol.
 	ReconcileInterval time.Duration
 	Cache             Cache
@@ -132,7 +133,7 @@ type Server struct {
 	// Addr is the listen address of the gateway.
 	Addr string
 	// ShutdownGrace bounds how long in-flight requests may finish after a
-	// shutdown signal (invariant I8).
+	// shutdown signal.
 	ShutdownGrace time.Duration
 }
 
@@ -141,6 +142,78 @@ type Server struct {
 // process-local and does not use Redis.
 type Redis struct {
 	Addr string
+	// Namespace prefixes every limiter and quota key. Two deployments
+	// sharing one Redis instance would otherwise share tenant balances
+	// and rate limit buckets: one environment would spend and refund the
+	// other's money. Empty means the bare "bw:" prefix, which is correct
+	// only when this gateway owns its Redis instance.
+	Namespace string
+}
+
+// Quota holds lease ledger sizing.
+type Quota struct {
+	// LeaseTTL is how long a RESERVED lease may live before the sweeper
+	// reclaims and fully refunds it. Zero derives the value from the
+	// request budget, which is the only safe default: a horizon shorter
+	// than the longest request the gateway will run refunds a request
+	// that really spent tokens, and the spend never reappears anywhere.
+	// The derivation covers the unbounded case too (see
+	// unboundedRequestLeaseTTL), so this only needs a value when the
+	// operator wants a different horizon.
+	LeaseTTL time.Duration
+}
+
+// leaseTTLHeadroom is the slack added to the request budget when the
+// reclaim horizon is derived. The sweeper runs on an interval, so a
+// lease that became reclaimable at exactly the budget would be swept
+// while its request is still settling.
+const leaseTTLHeadroom = time.Minute
+
+// unboundedRequestLeaseTTL bounds a request that declares no upper
+// limit of its own, and bounds the reclaim horizon derived from it. No
+// horizon derived from the request budget can cover such a request, and
+// a horizon shorter than the request silently refunds the tokens it
+// really spent. The trade is deliberately asymmetric: a generous bound
+// delays recovery of a crashed process's reservations, while a short one
+// gives away real spend with nothing left to notice it.
+const unboundedRequestLeaseTTL = 24 * time.Hour
+
+// requestBudget is the longest one client request can hold a
+// reservation: the attempt phase, plus a committed stream's body, which
+// the overall deadline deliberately stops governing. ok is false when
+// either bound is absent (0), in which case no horizon can be derived.
+func (c Config) requestBudget() (time.Duration, bool) {
+	if c.Retry.OverallDeadline <= 0 || c.Retry.StreamTimeout <= 0 {
+		return 0, false
+	}
+	return c.Retry.OverallDeadline + c.Retry.StreamTimeout, true
+}
+
+// RequestCeiling is the longest one client request can run. It bounds
+// work that must outlive the client that started it, because no request
+// can legitimately consume upstream beyond it. A request that declares
+// no upper limit reports the same generous ceiling the lease horizon
+// falls back to, so a caller always gets a usable bound instead of
+// "unlimited".
+func (c Config) RequestCeiling() time.Duration {
+	if budget, ok := c.requestBudget(); ok {
+		return budget
+	}
+	return unboundedRequestLeaseTTL
+}
+
+// LeaseTTL is the reclaim horizon the ledger backends run with: the
+// configured value, or the one derived from the request budget. Load
+// rejects a configuration whose value is not enough to cover the
+// longest request.
+func (c Config) LeaseTTL() time.Duration {
+	if c.Quota.LeaseTTL > 0 {
+		return c.Quota.LeaseTTL
+	}
+	if budget, ok := c.requestBudget(); ok {
+		return budget + leaseTTLHeadroom
+	}
+	return unboundedRequestLeaseTTL
 }
 
 // Postgres holds connection settings for the system of record
@@ -152,7 +225,7 @@ type Postgres struct {
 // Obs holds observability subsystem sizing.
 type Obs struct {
 	// AccessLogQueueSize caps the in-memory access log queue; overflow
-	// drops entries and must be counted explicitly (invariant I7).
+	// drops entries and must be counted explicitly.
 	AccessLogQueueSize int
 	// AccessLogPath is the JSONL file the access log writes to; empty
 	// disables the file sink (metrics stay active).

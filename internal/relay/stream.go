@@ -22,6 +22,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 
@@ -45,16 +46,29 @@ func dataPayload(line []byte) (payload []byte, ok bool) {
 // package, which owns the wire format).
 const donePayload = "[DONE]"
 
+// errStreamTruncated reports a stream the upstream ended without the
+// [DONE] terminator. The reply is incomplete, and the translated wires
+// would otherwise synthesize a normal completion the provider never
+// sent.
+var errStreamTruncated = errors.New("relay: upstream stream ended without the [DONE] terminator")
+
 // pumpTranscoded feeds the upstream SSE sequence through a stream
 // transcoder: the preamble opens the exchange, every data frame is
 // translated, the terminator (or the abort sequence) closes it. Usage
 // is still scraped passively for settlement.
+//
+// The [DONE] sentinel is what separates a finished stream from a
+// truncated one. Byte passthrough needs no such distinction — the
+// client sees the missing terminator for itself — but a translated
+// stream is terminated by the gateway, so without this check a cut
+// stream would be dressed up as a complete answer.
 func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol.StreamTranscoder, model string) (protocol.Usage, bool, int64, error) {
 	reader := bufio.NewReader(body)
 	flusher, flushes := out.(http.Flusher)
 	var usage protocol.Usage
 	usageKnown := false
 	var total int64
+	doneSeen := false
 
 	flush := func() {
 		if flushes {
@@ -79,6 +93,8 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 					if err := transcoder.Delta(out, payload); err != nil {
 						return usage, usageKnown, total, err
 					}
+				} else {
+					doneSeen = true
 				}
 				total += int64(len(trimmed)) + 1
 				flush()
@@ -86,6 +102,9 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
+				if !doneSeen {
+					return usage, usageKnown, total, errStreamTruncated
+				}
 				return usage, usageKnown, total, transcoder.Finish(out, usage, usageKnown)
 			}
 			return usage, usageKnown, total, readErr
@@ -98,6 +117,13 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 // stream carried one plus the total byte count it passed through. A
 // returned error means the stream broke mid-flight — the caller owns
 // the abort contract.
+//
+// Bytes are copied verbatim, but the [DONE] sentinel is still tracked.
+// The client can see the missing terminator for itself; the gateway
+// cannot, and a truncated stream is upstream evidence the breaker and
+// the latency tracker must see identically for every client format. A
+// non-SSE body (no data line at all) has no sentinel to wait for, so
+// plain EOF is still a success.
 func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, int64, error) {
 	reader := bufio.NewReader(body)
 	flusher, flushes := out.(http.Flusher)
@@ -108,12 +134,18 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 	// building a fresh string per frame would put one allocation per
 	// SSE line on the hot path.
 	outBuf := make([]byte, 0, 512)
+	doneSeen := false
+	sawData := false
 
 	for {
 		line, readErr := readLine(reader)
 		if len(line) > 0 {
 			trimmed := trimEOL(line)
 			if payload, isData := dataPayload(trimmed); isData {
+				sawData = true
+				if string(payload) == donePayload {
+					doneSeen = true
+				}
 				if u, ok := protocol.ParseUsage(payload); ok {
 					usage, usageKnown = u, true
 				}
@@ -132,6 +164,9 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
+				if sawData && !doneSeen {
+					return usage, usageKnown, total, errStreamTruncated
+				}
 				return usage, usageKnown, total, nil
 			}
 			return usage, usageKnown, total, readErr

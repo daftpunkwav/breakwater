@@ -95,10 +95,13 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	wire := protocol.WireFor(carrier.Format)
 	// Tier model authorization — defense in depth: the pipeline's authz
-	// stage applies the same rule earlier (before any governance spend),
-	// and this is the fail-closed last line for the ungoverned mode (no
-	// identity store, no stage installed). AuthorizeModel is the one
-	// authority both call, so the verdicts cannot drift.
+	// stage applies the same rule earlier, before any governance spend.
+	// Here it runs again immediately before routing, and in the
+	// ungoverned mode (no identity store, so no stage is installed) it
+	// is the only tier check that runs at all — though with a zero tenant
+	// it enforces model presence rather than entitlement.
+	// AuthorizeModel is the one authority both call, so the verdicts
+	// cannot drift.
 	if !pipeline.AuthorizeModel(w, r, carrier) {
 		return
 	}

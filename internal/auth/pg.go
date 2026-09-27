@@ -10,7 +10,7 @@
  *
  * Keys are stored and looked up hashed, so the database never holds a
  * usable credential. Revocation is a status flip whose effect surfaces
- * within the auth cache TTL — the documented public latency.
+ * within the auth cache TTL — how long a write becomes visible to live traffic.
  */
 package auth
 

@@ -34,7 +34,6 @@ const (
 	StreamModeAbort StreamMode = "abort"
 )
 
-// Fault injection request headers.
 const (
 	headerDelay         = "X-Mockllm-Delay-Ms"
 	headerStatus        = "X-Mockllm-Status"

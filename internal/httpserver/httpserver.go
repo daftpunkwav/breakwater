@@ -1,7 +1,7 @@
 /**
  * @file httpserver
  * @description Neutral HTTP transport mechanics shared by every binary
- * in this repository: the serve/drain lifecycle (invariant I8) and
+ * in this repository: the serve/drain lifecycle and
  * stdlib-only transport helpers (e.g. the response tee used by
  * forwarding).
  *
@@ -24,12 +24,17 @@ import (
 
 // Options configures one server run.
 type Options struct {
-	// Addr is the listen address.
+	// Addr is the listen address. Ignored when Listener is set.
 	Addr string
 	// Handler is the root handler to serve.
 	Handler http.Handler
 	// ShutdownGrace bounds the drain window after shutdown begins.
 	ShutdownGrace time.Duration
+	// Listener, when set, is served instead of binding Addr. A caller
+	// that already holds a bound listener passes it here, which removes
+	// the reserve-release-rebind race a caller would otherwise have to
+	// accept when it needs a known address up front.
+	Listener net.Listener
 }
 
 // ErrDrainTimeout reports that the drain window expired with requests
@@ -50,9 +55,13 @@ func Run(ctx context.Context, opts Options) error {
 		opts.ShutdownGrace = 10 * time.Second
 	}
 
-	listener, err := net.Listen("tcp", opts.Addr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", opts.Addr, err)
+	listener := opts.Listener
+	if listener == nil {
+		var err error
+		listener, err = net.Listen("tcp", opts.Addr)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", opts.Addr, err)
+		}
 	}
 
 	httpSrv := &http.Server{

@@ -14,7 +14,7 @@
  * Issued keys are returned exactly once, in the CreateKey response —
  * the store persists only the hash, mirroring the resolution side.
  * Override changes surface to live traffic within the auth cache TTL,
- * the documented revocation latency.
+ * how long a revocation takes to reach live traffic.
  */
 package auth
 

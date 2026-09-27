@@ -10,15 +10,16 @@
  *   (relayed through Outcome); candidate pre-filtering belongs to the
  *   router via StateOf
  *
- * Contract points (invariant I4):
+ * Contract points:
  * - open denies every call without touching the upstream
  * - half-open admits exactly one outstanding probe; concurrent
  *   arrivals are denied, never queued
- * - a granted call reports its outcome exactly once; abandoned probes
- *   (panic, cancellation, hang) are reclaimed structurally — the
- *   earliest later Allow or Report observes the expired deadline and
- *   treats it as a failure, so the probe slot cannot leak
- * - state is process-local by design (PRD Q5); the port stays
+ * - a granted call reports its outcome exactly once; a probe whose
+ *   holder never reports is reclaimed when a later Allow, StateOf or
+ *   Report observes the expired deadline, so the probe slot cannot leak
+ *   for longer than the probe timeout. Nothing detects a panic or a
+ *   cancellation directly — an expired deadline is the only signal.
+ * - state is process-local; the port stays
  *   replaceable for a shared backend
  */
 package circuit
@@ -43,7 +44,7 @@ type Config struct {
 	ProbeTimeout time.Duration
 }
 
-// defaults for zero Config members.
+// Config values substituted for zero members.
 const (
 	defaultFailThreshold = 5
 	defaultCooldown      = 30 * time.Second
@@ -138,8 +139,10 @@ func (b *Registry) Allow(_ context.Context, upstreamID string) (Permission, bool
 
 	case StateHalfOpen:
 		// Exactly one probe may be outstanding. An expired one is
-		// reclaimed as a failure first (structural guarantee): the
-		// upstream hung, which is a server fault.
+		// reclaimed first and counted as a server fault: past its
+		// deadline a probe is no longer evidence about the upstream,
+		// whoever still holds it — a hung holder and a holder that
+		// finished successfully but reported late look the same here.
 		if s.probe != nil {
 			if now.After(s.probe.deadline) {
 				b.reclaimProbe(s, now)

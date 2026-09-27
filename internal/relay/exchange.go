@@ -8,7 +8,7 @@
  *   terminal passthrough, and stash what the finish stage needs
  * - Streaming: commit the reply headers, pump chunks with passive usage
  *   scraping, and terminate honestly through the error event contract
- *   once bytes have reached the client (invariant I6)
+ *   once bytes have reached the client
  * - Nothing else: the attempt loop and budgets live in the retry
  *   package, client rendering with the protocol wires
  */
@@ -60,11 +60,25 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 	lease, fwdCtx := r.beginStream()
 	resp, err := cand.Forward(fwdCtx, req)
 	if err != nil {
+		// end() is what stops the timers, so both flags are read after
+		// it: a timer that fires between the read and the stop would
+		// otherwise be read as not having fired, and the gateway's own
+		// cut would be charged to the upstream.
 		lease.end()
 		if lease.ttftFired.Load() {
 			// Classified as a timeout so the loop may retry or fail
 			// over to the next candidate.
 			return circuit.OutcomeServerFault, r.ttftTimeoutError()
+		}
+		if lease.ceilingFired.Load() {
+			// The gateway's own stream ceiling cut the forward before
+			// any byte arrived: a policy execution, not upstream
+			// evidence, exactly like the post-commit case below. The
+			// error wraps a deadline rather than the cancellation the
+			// forward context actually produced, because the next
+			// candidate gets a fresh ceiling and failing over to it is
+			// a real option.
+			return circuit.OutcomeGatewayTerminated, r.ceilingTimeoutError()
 		}
 		return transportOutcome(r.ctx, err), err
 	}
@@ -167,7 +181,7 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	}
 	defer lease.end()
 
-	// Mid-stream failure: honest termination per the frozen contract —
+	// Mid-stream failure: honest termination —
 	// one error frame in the client's format; chunks already sent stay
 	// sent. The same transcoder instance closes the stream it opened:
 	// a fresh one would carry a new object id no client frame introduced.
@@ -249,8 +263,15 @@ func (r *run) ttftTimeoutError() error {
 	return fmt.Errorf("time-to-first-byte exceeded %v: %w", r.exec.policy.AttemptTimeout, context.DeadlineExceeded)
 }
 
-// abortCode maps a mid-stream failure to its frozen in-stream error
-// code.
+// ceilingTimeoutError renders a stream ceiling that fired before the
+// first byte as the retryable timeout the attempt loop understands. A
+// deadline rather than a cancellation, so the loop may fail over to a
+// candidate whose own ceiling has not expired yet.
+func (r *run) ceilingTimeoutError() error {
+	return fmt.Errorf("stream ceiling %v exceeded before the first byte: %w", r.exec.streamTimeout, context.DeadlineExceeded)
+}
+
+// abortCode maps a mid-stream failure to its in-stream error code.
 func abortCode(err error) protocol.Code {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return protocol.CodeUpstreamTimeout

@@ -14,10 +14,12 @@ import (
 	"encoding/hex"
 )
 
-// KeyFor derives the cache key of a request body. The input must already
-// be normalized; normalization rules, including which parameter
-// combinations are cache-eligible, live with the caller.
-func KeyFor(normalizedBody []byte) string {
-	sum := sha256.Sum256(normalizedBody)
+// KeyFor derives the cache key of a request body: the SHA-256 of its
+// bytes. Matching is therefore byte-exact — two requests that differ
+// only in JSON key order, spacing or an SDK's extra whitespace are
+// different keys. The caller decides which parameter combinations are
+// eligible at all; see Eligible.
+func KeyFor(body []byte) string {
+	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }

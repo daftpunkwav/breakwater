@@ -4,13 +4,16 @@
  *
  * Responsibilities:
  * - Periodically reclaim RESERVED leases whose holder vanished before
- *   settling (process crash between reserve and settle, invariant I9)
+ *   settling (a process crash between reserve and settle leaves the
+ *   lease RESERVED with no live holder to settle or release it)
  * - Surface every reclamation through a counter hook so the operations
  *   story stays honest
  * - Nothing else: the reclaim transition itself belongs to the ledger
  *
- * One sweeper goroutine per process; reclamation is idempotent, so
- * even a multi-process future stays correct.
+ * StartSweeper is invoked once per process from the assembly.
+ * Reclamation is idempotent: the release path only moves a RESERVED
+ * lease to a terminal state, so two sweepers racing over the same lease
+ * would refund it once.
  */
 package quota
 

@@ -3,7 +3,7 @@
  * @description The minimal management API: tenant quota balances
  * (read + top-up), breaker states and the runtime traffic switches
  * over models and upstreams — exactly what operating the gateway
- * needs (PRD F9), never more.
+ * needs, never more.
  *
  * Responsibilities:
  * - Own the surface's shared machinery: the bearer guard, the route

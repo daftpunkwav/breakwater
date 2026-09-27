@@ -9,9 +9,10 @@
  * - Serve tests and the in-memory degradation posture
  *
  * Terminal leases are retained for audit (settle-after-terminal stays
- * observable) but only for the same bounded audit window the Redis
- * backend applies: the sweeper purges records past it, so the lease map
- * cannot grow with request volume.
+ * observable) for leaseAuditTTL, the same window the Redis ledger uses.
+ * The mechanism differs: Redis expires each record by its own key TTL,
+ * while here the sweeper drops terminal records past that age — so this
+ * bound holds only while the sweeper is running.
  */
 package quota
 
@@ -53,6 +54,17 @@ func NewMemory() *Memory {
 	}
 }
 
+// WithLeaseTTL sets how long a RESERVED lease may live before the
+// sweeper reclaims it. It must outlast the longest request the gateway
+// will run, or a live request's reservation is refunded while it is
+// still spending tokens.
+func (m *Memory) WithLeaseTTL(d time.Duration) *Memory {
+	if d > 0 {
+		m.leaseTTL = d
+	}
+	return m
+}
+
 // WithClock overrides the clock for tests.
 func (m *Memory) WithClock(now func() time.Time) *Memory {
 	m.now = now
@@ -85,7 +97,10 @@ func (m *Memory) Reserve(_ context.Context, tenantID string, amount int64) (Leas
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	balance, ok := m.balances[tenantID]
-	if !ok || balance < amount {
+	if !ok {
+		return Lease{}, ErrUnknownTenant
+	}
+	if balance < amount {
 		return Lease{}, ErrInsufficientBalance
 	}
 	m.balances[tenantID] = balance - amount
@@ -157,18 +172,20 @@ func (m *Memory) Balance(_ context.Context, tenantID string) (int64, error) {
 
 // scanBatch caps how many leases one SweepOnce pass walks. The lock is
 // shared with every Reserve/Settle/Cancel, so a pass must stay bounded
-// no matter how the audit window has grown — the map's randomized
-// iteration order guarantees successive passes keep making progress
-// over the whole set. The Redis backend bounds the same pass with its
-// zset page; this is the memory-side equivalent.
+// no matter how many leases have accumulated. Go randomizes map
+// iteration order per range, so successive passes converge on the whole
+// set in practice, but a given entry's coverage is probabilistic rather
+// than guaranteed. The Redis ledger bounds the same pass with a zset
+// page; this is the memory-side equivalent.
 const scanBatch = 8192
 
 // SweepOnce reclaims RESERVED leases older than the lease TTL, refunding
 // their amounts and marking them EXPIRED; it returns how many leases
-// were reclaimed (bounded by limit per call). Terminal leases past the
-// shared audit window (leaseAuditTTL, the Redis backend's retention) are
-// purged in the same pass — reclaim count excludes purges, and purges
-// never touch balances. One pass walks at most scanBatch leases.
+// were reclaimed, never more than limit. That bound caps the reclaim
+// count only — a pass that reaches it keeps walking. Terminal leases
+// past leaseAuditTTL are dropped in the same walk; purges are never
+// counted as reclaims and never touch balances. One pass examines at
+// most scanBatch leases.
 func (m *Memory) SweepOnce(_ context.Context, now time.Time, limit int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

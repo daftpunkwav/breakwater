@@ -41,9 +41,10 @@ type queryer interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// Report assembles the full assessment for [from, to). The queries
-// scan the window four times; the request_log is append-only and
-// indexed on time, which keeps the reads bounded by the window.
+// Report assembles the full assessment for [from, to). It issues one
+// summary query, one failure-mix query when there are failures, one
+// timeline query and four per-dimension queries — six or seven scans
+// of the same window, each bounded by the [from, to) predicate.
 func (s *PGStore) Report(ctx context.Context, from, to time.Time) (Report, error) {
 	return report(ctx, s.pool, from, to)
 }
@@ -132,9 +133,12 @@ func failures(ctx context.Context, q queryer, from, to time.Time) ([]Failure, er
 	return out, rows.Err()
 }
 
-// timeline buckets the window into fixed 5-minute slots — coarse
-// enough to stay a bounded series, fine enough to see an incident.
-// date_bin keeps the query dependency-free (no timescaledb).
+// timeline buckets the window into 5-minute slots anchored on the
+// window's own start — date_bin takes that start as its origin, so the
+// bucket boundaries shift with the requested window rather than sitting
+// on wall-clock boundaries. Bins stay coarse enough to keep the series
+// bounded and fine enough to show an incident. date_bin keeps the query
+// dependency-free (no timescaledb).
 func timeline(ctx context.Context, q queryer, from, to time.Time) ([]SeriesPoint, error) {
 	rows, err := q.Query(ctx, `
 		SELECT date_bin('5 minutes', time, $3) AS bucket, count(*),

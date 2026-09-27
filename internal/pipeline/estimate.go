@@ -12,7 +12,7 @@
  * direction: an unknown completion length reserves the safe default, a
  * declared max_tokens is clamped to the tenant's per-request cap so a
  * short prompt with a huge max_tokens cannot monopolize a tenant bucket
- * (the self-inflicted DoS guard, PRD Q1).
+ * (the self-inflicted DoS guard).
  */
 package pipeline
 
@@ -39,7 +39,7 @@ func EstimateTokens(req protocol.ChatRequest, maxRequestTokens int64) int64 {
 
 // EstimatePartialTokens estimates usage for a stream that ended
 // without a usage report: the full prompt estimate plus the delivered
-// bytes converted at the usual rough four bytes per token (PRD Q2's
+// bytes converted at the usual rough four bytes per token (the
 // local fallback).
 func EstimatePartialTokens(req protocol.ChatRequest, streamBytes int64) int64 {
 	return promptEstimate(req) + streamBytes/4
