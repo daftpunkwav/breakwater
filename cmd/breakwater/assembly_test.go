@@ -322,7 +322,7 @@ func TestPublishLogDropsSyncsCounter(t *testing.T) {
 	metrics := obs.NewMetrics()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	publishLogDrops(ctx, metrics, logger, 5*time.Millisecond)
+	publishLogDrops(ctx, metrics, logger, nil, 5*time.Millisecond)
 	logger.Record(obsEntry()) // capacity 1: the next record drops one
 	logger.Record(obsEntry())
 

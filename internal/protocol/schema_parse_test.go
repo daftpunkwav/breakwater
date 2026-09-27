@@ -40,11 +40,30 @@ func TestIngestResponsesRejections(t *testing.T) {
 		"model missing": `{"input":"hi"}`,
 		"input type":    `{"model":"m","input":5}`,
 		"content type":  `{"model":"m","input":[{"role":"user","content":123}]}`,
+		"tools":         `{"model":"m","input":"hi","tools":[{"type":"function"}]}`,
+		"tool_choice":   `{"model":"m","input":"hi","tool_choice":"auto"}`,
+		"reasoning":     `{"model":"m","input":"hi","reasoning":{"effort":"low"}}`,
+		"text format":   `{"model":"m","input":"hi","text":{"format":{"type":"json_object"}}}`,
+		"prev response": `{"model":"m","input":"hi","previous_response_id":"resp_1"}`,
 	}
 	for name, body := range cases {
 		if _, err := Ingest(FormatOpenAIResponses, []byte(body)); err == nil {
 			t.Errorf("%s: responses ingest accepted %s", name, body)
 		}
+	}
+}
+
+// TestIngestTranslatedWiresKeepUnmodeledInertFields: fields that ride
+// no behavior (metadata, a null tools slot) stay accepted — the loud
+// rejections are reserved for fields that would change what the
+// client gets.
+func TestIngestTranslatedWiresKeepUnmodeledInertFields(t *testing.T) {
+	t.Parallel()
+	if _, err := Ingest(FormatOpenAIResponses, []byte(`{"model":"m","input":"hi","metadata":{}}`)); err != nil {
+		t.Fatalf("responses ingest rejected inert metadata: %v", err)
+	}
+	if _, err := Ingest(FormatAnthropicMessages, []byte(`{"model":"m","max_tokens":8,"messages":[],"metadata":{},"tools":null}`)); err != nil {
+		t.Fatalf("anthropic ingest rejected inert fields: %v", err)
 	}
 }
 
@@ -55,6 +74,10 @@ func TestIngestAnthropicRejections(t *testing.T) {
 		"model missing": `{"max_tokens":8,"messages":[]}`,
 		"content type":  `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":123}]}`,
 		"system type":   `{"model":"m","max_tokens":8,"system":5,"messages":[]}`,
+		"tools":         `{"model":"m","max_tokens":8,"messages":[],"tools":[{"name":"f"}]}`,
+		"tool_choice":   `{"model":"m","max_tokens":8,"messages":[],"tool_choice":{"type":"auto"}}`,
+		"thinking":      `{"model":"m","max_tokens":8,"messages":[],"thinking":{"type":"enabled"}}`,
+		"top_k":         `{"model":"m","max_tokens":8,"messages":[],"top_k":5}`,
 	}
 	for name, body := range cases {
 		if _, err := Ingest(FormatAnthropicMessages, []byte(body)); err == nil {

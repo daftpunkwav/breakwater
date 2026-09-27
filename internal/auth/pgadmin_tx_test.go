@@ -119,3 +119,33 @@ func TestCreateKeyTxCommitSuccessOrdering(t *testing.T) {
 		t.Fatalf("commits = %d, want 0 on the failure path", tx.commits)
 	}
 }
+
+// TestCreateKeyTxUnknownUserIsTheSentinel: a missing tenant row is the
+// unknown-user sentinel — the same answer the foreign key would give,
+// one query earlier.
+func TestCreateKeyTxUnknownUserIsTheSentinel(t *testing.T) {
+	t.Parallel()
+	tx := &fakeTx{answers: []scriptedRow{{err: pgx.ErrNoRows}}}
+	if _, err := createKeyTx(context.Background(), tx, "ghost", "name"); !errors.Is(err, ErrUnknownUser) {
+		t.Fatalf("err = %v, want ErrUnknownUser", err)
+	}
+	if tx.calls != 1 {
+		t.Fatalf("queries = %d, want exactly the lock probe", tx.calls)
+	}
+}
+
+// TestCreateKeyTxTooManyKeys: the count at the cap refuses before any
+// insert — the ceiling cannot be raced past the transaction.
+func TestCreateKeyTxTooManyKeys(t *testing.T) {
+	t.Parallel()
+	tx := &fakeTx{answers: []scriptedRow{
+		{values: []any{"u1"}},
+		{values: []any{int64(MaxKeysPerUser)}},
+	}}
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); !errors.Is(err, ErrTooManyKeys) {
+		t.Fatalf("err = %v, want ErrTooManyKeys", err)
+	}
+	if tx.calls != 2 {
+		t.Fatalf("queries = %d, want no insert past the cap", tx.calls)
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -139,6 +140,38 @@ func TestInferenceFallsBackAcrossModels(t *testing.T) {
 	}
 	if len(healthy.models) != 1 || healthy.models[0] != "m2" {
 		t.Fatalf("fallback exchanges = %v, want one for m2: the body's model must ride the chain", healthy.models)
+	}
+}
+
+// TestInferenceResolverAuthorizesFallbackModels: the tier verdict rides
+// every fallback hop — a model outside the tenant's tier is skipped
+// like an unavailable one and never served, whatever the chain lists.
+func TestInferenceResolverAuthorizesFallbackModels(t *testing.T) {
+	t.Parallel()
+	failing := &scriptedInferenceUpstream{id: "u1", status: http.StatusServiceUnavailable}
+	healthy := &scriptedInferenceUpstream{id: "u2", status: http.StatusOK}
+	handler := NewInference(protocol.FormatOpenAIChat,
+		modelRouter{byModel: map[string][]upstream.Upstream{"m1": {failing}, "m2": {healthy}}},
+		relay.New(retry.Policy{MaxAttempts: 2}, nil),
+		WithFallbacks(map[string][]string{"m1": {"m2"}}))
+
+	raw, err := json.Marshal(protocol.ChatRequest{Model: "m1", Messages: longPrompt()})
+	if err != nil {
+		t.Fatalf("marshal chat: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(raw))
+	req = req.WithContext(pipeline.WithCarrier(req.Context(), &pipeline.Carrier{
+		Format: protocol.FormatOpenAIChat,
+		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"m1"}}},
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body = %s, want 503: the tier-denied fallback must be skipped, not served", rec.Code, rec.Body.String())
+	}
+	if len(healthy.models) != 0 {
+		t.Fatalf("fallback exchanges = %v, want none: a tier-denied model must never be served", healthy.models)
 	}
 }
 

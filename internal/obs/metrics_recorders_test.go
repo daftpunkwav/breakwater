@@ -7,6 +7,8 @@
 package obs
 
 import (
+	"bytes"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -144,14 +146,86 @@ func TestMetricsChildOfConcurrentCreation(t *testing.T) {
 	}
 }
 
-// TestLabelsWithLEPins the bucket-label rendering, including the bare
-// label set of unlabeled histograms.
-func TestLabelsWithLE(t *testing.T) {
+// TestLabelRenderingPins the bucket-label rendering, including the bare
+// label set of unlabeled histograms and the strict value escaping.
+func TestLabelRendering(t *testing.T) {
 	t.Parallel()
-	if got := labelsWithLE("", 1.5); got != `{le="1.5"}` {
+	if got := renderLabels(nil, nil, lePair(1.5)); got != `{le="1.5"}` {
 		t.Fatalf("empty labels = %q, want the bare le set", got)
 	}
-	if got := labelsWithLE(`{upstream="u1"}`, math.Inf(1)); got != `{upstream="u1",le="+Inf"}` {
+	if got := renderLabels([]string{"upstream"}, []string{"u1"}, lePair(math.Inf(1))); got != `{upstream="u1",le="+Inf"}` {
 		t.Fatalf("labeled form = %q", got)
+	}
+	// Only the exposition's three escapes are emitted; every other
+	// byte stays literal — including the tab, which the text format
+	// allows verbatim and %q would have mangled into an unparseable
+	// \t escape.
+	want := "{model=\"a\tb\\nc\\\\d\\\"e\"}"
+	if got := renderLabels([]string{"model"}, []string{"a\tb\nc\\d\"e"}); got != want {
+		t.Fatalf("escaped form = %q, want %q", got, want)
+	}
+}
+
+// TestChildCapDropsPastTheLimit pins the cardinality floor: past
+// maxChildren new label sets are dropped while existing leaves keep
+// counting — the registry degrades to under-counting instead of
+// growing without bound under a hostile model label.
+func TestChildCapDropsPastTheLimit(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	for i := range maxChildren + 25 {
+		m.Request("t", fmt.Sprintf("model-%d", i), "u", 200)
+	}
+	f := m.families["breakwater_requests_total"]
+	if len(f.children) != maxChildren {
+		t.Fatalf("children = %d, want the cap %d", len(f.children), maxChildren)
+	}
+	// An existing leaf keeps counting after the cap: drops only hit
+	// label sets the registry has never seen.
+	m.Request("t", "model-0", "u", 200)
+	m.Request("t", "model-0", "u", 200)
+	if len(f.children) != maxChildren {
+		t.Fatalf("children = %d after repeat traffic, want the cap to hold", len(f.children))
+	}
+}
+
+// TestNilLeafCallsAreSafe: past the cap every recorder call site is a
+// no-op — counters, gauges and both histograms — instead of a panic.
+func TestNilLeafCallsAreSafe(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	for i := range maxChildren {
+		m.CacheFetch(fmt.Sprintf("u%d", i)) // fill one family to the cap
+	}
+	// Overflow attempts across every recorder shape: dropped silently.
+	m.CacheFetch("overflow")
+	m.ObserveDuration("overflow", 1)
+	m.ObserveTTFT("overflow", 1)
+	m.CircuitState("overflow", 2)
+	m.RateLimited("overflow")
+
+	var buf bytes.Buffer
+	if err := m.Render(&buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	f := m.families["breakwater_cache_upstream_fetch_total"]
+	if len(f.children) != maxChildren {
+		t.Fatalf("children = %d, want the cap %d", len(f.children), maxChildren)
+	}
+}
+
+// TestSetInsightsDroppedRenders: the insights drop counter follows its
+// setter the same way the access log's does, and both land in the
+// exposition.
+func TestSetInsightsDroppedRenders(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.SetInsightsDropped(7)
+	var buf bytes.Buffer
+	if err := m.Render(&buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(buf.String(), "breakwater_insights_records_dropped_total 7") {
+		t.Fatalf("exposition missing the insights drop counter:\n%s", buf.String())
 	}
 }

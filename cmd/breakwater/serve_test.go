@@ -69,15 +69,15 @@ func TestServeRunsAndStops(t *testing.T) {
 	}
 }
 
-// TestServeRedisModeWithIdentityAndReconciliation drives the full
-// assembly: Redis backends, static identity, balance seeding, the
-// reconcile worker and the fail-closed pipeline — everything the
-// memory-mode test skips.
-func TestServeRedisModeWithIdentityAndReconciliation(t *testing.T) {
+// TestServeRedisModeWithIdentity drives the full assembly: Redis
+// backends, static identity, balance seeding and the fail-closed
+// pipeline — everything the memory-mode test skips. No DSN: the static
+// identity mode has no snapshot store, so the reconciler stays off.
+func TestServeRedisModeWithIdentity(t *testing.T) {
 	mr := miniredis.RunT(t)
 	setEnv(t, baseEnv("127.0.0.1:0"))
 	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
-	t.Setenv("BREAKWATER_POSTGRES_DSN", "postgres://breakwater:breakwater@127.0.0.1:1/db")
+	t.Setenv("BREAKWATER_POSTGRES_DSN", "")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -90,6 +90,32 @@ func TestServeRedisModeWithIdentityAndReconciliation(t *testing.T) {
 	}()
 	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
 		t.Fatalf("serve: %v", err)
+	}
+}
+
+// TestServeReconcilerNeedsReachableIdentity pins the reconciler's
+// assembly contract: with Redis, a DSN and an interval armed, the
+// worker enumerates tenants from the identity database — an
+// unreachable one is a deployment failure surfaced at startup, not a
+// silently missing reconcile loop.
+func TestServeReconcilerNeedsReachableIdentity(t *testing.T) {
+	mr := miniredis.RunT(t)
+	setEnv(t, baseEnv("127.0.0.1:0"))
+	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
+	t.Setenv("BREAKWATER_POSTGRES_DSN", "postgres://breakwater:breakwater@127.0.0.1:1/db")
+	t.Setenv("BREAKWATER_RECONCILE_INTERVAL", "1m")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err == nil {
+		t.Fatal("serve: an unreachable identity database must fail the reconciler's startup")
 	}
 }
 
@@ -262,5 +288,34 @@ func TestSeedBalancesProvisionsTenants(t *testing.T) {
 	bal, err := ledger.Balance(context.Background(), "t1")
 	if err != nil || bal != 1000 {
 		t.Fatalf("balance = %d err = %v, want the tier monthly quota", bal, err)
+	}
+}
+
+// TestServeReconcilerArmsAgainstLivePostgres (CI only): with Redis, a
+// reachable identity database and an interval, serve() arms the
+// reconcile worker over the database's tenants and starts cleanly —
+// the assembly path a live deployment runs.
+func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
+	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("BREAKWATER_TEST_POSTGRES_DSN not set: reconcile arming needs a live PostgreSQL")
+	}
+	mr := miniredis.RunT(t)
+	setEnv(t, baseEnv("127.0.0.1:0"))
+	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
+	t.Setenv("BREAKWATER_POSTGRES_DSN", dsn)
+	t.Setenv("BREAKWATER_RECONCILE_INTERVAL", "1m")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
+		t.Fatalf("serve: %v", err)
 	}
 }

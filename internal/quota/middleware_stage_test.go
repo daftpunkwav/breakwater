@@ -293,3 +293,30 @@ func TestQuotaMiddlewareLogsSettlementFailures(t *testing.T) {
 		t.Fatalf("settle failure not logged: %v", handler.records)
 	}
 }
+
+// TestQuotaMiddlewareSettlementSurvivesPanic: a panic deeper in the
+// chain must not strand the lease — the deferred settlement cancels
+// (full refund, sweeper stays out of it) and the panic keeps going to
+// whoever contains it.
+func TestQuotaMiddlewareSettlementSurvivesPanic(t *testing.T) {
+	t.Parallel()
+	req := quotaRequest(t, 500)
+	ledger := &stubLedger{lease: Lease{ID: "lease-panic"}}
+	handler := Middleware(ledger, obs.NewMetrics())(http.HandlerFunc(
+		func(http.ResponseWriter, *http.Request) { panic("boom") }))
+
+	rec := httptest.NewRecorder()
+	func() {
+		defer func() {
+			if rec := recover(); rec == nil {
+				t.Error("the panic must propagate past the stage, never be swallowed")
+			}
+		}()
+		handler.ServeHTTP(rec, req)
+	}()
+
+	if ledger.cancelCalls != 1 || ledger.cancelID != "lease-panic" {
+		t.Fatalf("settle = %d cancel = %d (%s), want the deferred full release on the panic path",
+			ledger.settleCalls, ledger.cancelCalls, ledger.cancelID)
+	}
+}

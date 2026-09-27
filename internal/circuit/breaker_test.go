@@ -84,6 +84,47 @@ func TestBreakerClientFaultNeverCounts(t *testing.T) {
 	}
 }
 
+// TestBreakerGatewayTerminationIsNotEvidence: the gateway cutting a
+// stream under its own ceiling is policy execution, not upstream
+// health evidence — closed keeps the failure count exactly as it was
+// (neither advanced nor reset), and a truncated half-open probe goes
+// back to open with a fresh cooldown instead of closing on no evidence.
+func TestBreakerGatewayTerminationIsNotEvidence(t *testing.T) {
+	t.Parallel()
+	b, advance := testRegistry(t, nil)
+	ctx := context.Background()
+
+	// Closed: two real faults, then a gateway-cut stream. The counter
+	// must still be at 2 — one more fault opens, a termination does not.
+	for range 2 {
+		p, _ := b.Allow(ctx, "u")
+		p.Report(OutcomeServerFault)
+	}
+	p, _ := b.Allow(ctx, "u")
+	p.Report(OutcomeGatewayTerminated)
+	p, _ = b.Allow(ctx, "u")
+	p.Report(OutcomeServerFault)
+	if got := b.StateOf(ctx, "u"); got != StateOpen {
+		t.Fatalf("state = %s, want open: the counter must have stayed at 2 through the termination", got)
+	}
+
+	// Half-open: the probe stream is cut by the gateway — no evidence,
+	// so the breaker returns to open with a fresh cooldown rather than
+	// closing on a truncated probe.
+	advance(2 * time.Second)
+	if got := b.StateOf(ctx, "u"); got != StateHalfOpen {
+		t.Fatalf("state = %s after cooldown, want half-open", got)
+	}
+	p, ok := b.Allow(ctx, "u")
+	if !ok {
+		t.Fatal("half-open must admit the probe")
+	}
+	p.Report(OutcomeGatewayTerminated)
+	if got := b.StateOf(ctx, "u"); got != StateOpen {
+		t.Fatalf("state = %s, want open: a truncated probe proves nothing", got)
+	}
+}
+
 func TestBreakerHalfOpenAdmitsSingleProbe(t *testing.T) {
 	t.Parallel()
 	b, advance := testRegistry(t, nil)

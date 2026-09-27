@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
@@ -168,5 +169,36 @@ func TestStreamCeilingTerminatesHonestly(t *testing.T) {
 	// The canonical wire's frozen termination: one error event, then [DONE].
 	if !strings.HasSuffix(string(result.Body), "data: [DONE]\n\n") {
 		t.Fatalf("aborted stream must end with the [DONE] sentinel: %q", result.Body)
+	}
+}
+
+// TestStreamCeilingNeverPunishesTheBreaker pins the attribution: the
+// gateway cutting a stream under its own ceiling is policy execution,
+// not upstream evidence — a threshold-of-one breaker stays closed
+// across repeated ceiling cuts, where a single server fault would
+// open it.
+func TestStreamCeilingNeverPunishesTheBreaker(t *testing.T) {
+	t.Parallel()
+	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
+		header := http.Header{}
+		header.Set("Content-Type", "text/event-stream")
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(dripStream(ctx, 20, 50*time.Millisecond)),
+		}, nil
+	}}
+	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour, ProbeTimeout: time.Second})
+	exec := New(retry.Policy{MaxAttempts: 1, AttemptTimeout: 2 * time.Second},
+		nil, WithStreamTimeout(100*time.Millisecond), WithBreaker(breaker))
+
+	for range 3 {
+		result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
+		if !result.Aborted {
+			t.Fatal("stream past its ceiling must abort")
+		}
+	}
+	if got := breaker.StateOf(context.Background(), "s"); got != circuit.StateClosed {
+		t.Fatalf("breaker state = %s after 3 ceiling-cut streams, want closed: the ceiling is gateway policy, not upstream evidence", got)
 	}
 }

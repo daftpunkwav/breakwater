@@ -23,13 +23,15 @@ import (
 )
 
 // scriptedUpstream answers every request with a fixed status and
-// records the model of each exchange. retryAfter sets a Retry-After
-// header; streamOverride replaces the body wholesale (for streams that
-// die mid-flight).
+// records the model, the body-carrying model and the body bytes of
+// each exchange. retryAfter sets a Retry-After header; streamOverride
+// replaces the body wholesale (for streams that die mid-flight).
 type scriptedUpstream struct {
 	id             string
 	status         int
 	models         []string
+	bodyModels     []string
+	bodies         [][]byte
 	streamOverride io.Reader
 	retryAfter     string
 }
@@ -38,6 +40,8 @@ func (s *scriptedUpstream) ID() string { return s.id }
 
 func (s *scriptedUpstream) Forward(_ context.Context, req upstream.Request) (*upstream.Response, error) {
 	s.models = append(s.models, req.Model)
+	s.bodyModels = append(s.bodyModels, req.BodyModel)
+	s.bodies = append(s.bodies, req.Body)
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")
 	if s.retryAfter != "" {
@@ -99,6 +103,13 @@ func TestFallbackAdvancesWhenCandidatesExhausted(t *testing.T) {
 	}
 	if len(fallback.models) != 1 || fallback.models[0] != "m2" {
 		t.Fatalf("fallback saw models %v, want [m2]: the body's model must ride the batch", fallback.models)
+	}
+	// The body still carries the primary model's name; the batch's
+	// model rides as the adapter's rewrite target, so a real adapter
+	// forwards a body naming m2 (the byte rewrite itself is pinned in
+	// the upstream package's adapter tests).
+	if len(fallback.bodyModels) != 1 || fallback.bodyModels[0] != "m1" {
+		t.Fatalf("fallback saw body models %v, want [m1]: the stale carrier name is what forces the rewrite", fallback.bodyModels)
 	}
 	if len(resolved) != 1 || resolved[0] != "m2" {
 		t.Fatalf("resolver called for %v, want [m2]", resolved)

@@ -7,6 +7,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -99,7 +100,8 @@ func TestRunRejectsMissingHandler(t *testing.T) {
 
 // TestRunDrainTimeoutSurfacesError pins the drain bound: a handler
 // holding its connection open past the shutdown grace makes Run return
-// the drain failure instead of hanging forever.
+// ErrDrainTimeout (a warning, not a startup failure) instead of hanging
+// forever.
 func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 	t.Parallel()
 	addr := freePort(t)
@@ -147,11 +149,8 @@ func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 
 	select {
 	case err := <-runErr:
-		if err == nil {
-			t.Fatal("drain timeout not reported")
-		}
-		if !strings.Contains(err.Error(), "drain connections") {
-			t.Fatalf("err = %v, want the drain failure", err)
+		if !errors.Is(err, ErrDrainTimeout) {
+			t.Fatalf("err = %v, want ErrDrainTimeout", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not return after the drain window")

@@ -50,6 +50,34 @@ func TestSwitchRejectsUnknownNames(t *testing.T) {
 	}
 }
 
+// TestSwitchWildcardModelsToggleOnDemand: under a wildcard binding the
+// concrete names arrive unenumerated, so a named toggle lands on the
+// model the wildcard serves — and the disabled state stays visible in
+// the view even though no binding ever named it.
+func TestSwitchWildcardModelsToggleOnDemand(t *testing.T) {
+	t.Parallel()
+	s := NewSwitch(nil, []string{"u1"}, WithWildcardModels(true))
+
+	if err := s.SetModel("gpt-4o", false); err != nil {
+		t.Fatalf("SetModel under a wildcard: %v", err)
+	}
+	if s.ModelEnabled("gpt-4o") {
+		t.Fatal("a wildcard-disabled model must read as disabled")
+	}
+	if err := s.SetModel("gpt-4o", true); err != nil {
+		t.Fatalf("re-enable: %v", err)
+	}
+	if !s.ModelEnabled("gpt-4o") {
+		t.Fatal("a re-enabled model must read as enabled")
+	}
+
+	// The typo protection still guards non-wildcard deployments.
+	strict := NewSwitch(nil, []string{"u1"}, WithWildcardModels(false))
+	if err := strict.SetModel("typo", false); !errors.Is(err, ErrUnknownModel) {
+		t.Fatalf("err = %v, want ErrUnknownModel without a wildcard", err)
+	}
+}
+
 // TestSwitchReadsFailOpen: names the switch does not know read as
 // enabled — the switch must not become a shadow model registry.
 func TestSwitchReadsFailOpen(t *testing.T) {

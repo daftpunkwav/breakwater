@@ -8,6 +8,7 @@ package upstream
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -285,6 +286,73 @@ func TestForwardRejectsUnparsableBaseURL(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "build request") {
 		t.Fatalf("error = %q, want the build-request wrap", err)
+	}
+}
+
+// TestForwardRewritesFallbackBodyModel: a body still carrying another
+// batch's model name is rewritten to the model this attempt serves —
+// the mechanism that makes a fallback hop a real model switch. An
+// unmapped fallback forwards its own name, a mapped one the
+// provider-real name; a body already on the batch's model stays
+// verbatim.
+func TestForwardRewritesFallbackBodyModel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		models    []string
+		req       Request
+		wantModel string
+	}{
+		{
+			name:      "unmapped fallback name forwards itself",
+			models:    []string{"m2"},
+			req:       Request{Model: "m2", BodyModel: "m1", Body: []byte(`{"model":"m1","messages":[]}`)},
+			wantModel: "m2",
+		},
+		{
+			name:      "mapped fallback name forwards the real name",
+			models:    []string{"m2=real-m2"},
+			req:       Request{Model: "m2", BodyModel: "m1", Body: []byte(`{"model":"m1","messages":[]}`)},
+			wantModel: "real-m2",
+		},
+		{
+			name:      "body already on the batch's model passes through",
+			models:    []string{"m2"},
+			req:       Request{Model: "m2", BodyModel: "m2", Body: []byte(`{"model":"m2","messages":[]}`)},
+			wantModel: "m2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var gotBody []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody, _ = io.ReadAll(r.Body)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL, ModelMap: ParseModelMap(tc.models)})
+			if err != nil {
+				t.Fatalf("NewOpenAI: %v", err)
+			}
+			resp, err := adapter.Forward(context.Background(), tc.req)
+			if err != nil {
+				t.Fatalf("Forward: %v", err)
+			}
+			_ = resp.Body.Close()
+
+			var top struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(gotBody, &top); err != nil {
+				t.Fatalf("forwarded body %q is not JSON: %v", gotBody, err)
+			}
+			if top.Model != tc.wantModel {
+				t.Fatalf("forwarded body model = %q, want %q", top.Model, tc.wantModel)
+			}
+		})
 	}
 }
 

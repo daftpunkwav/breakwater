@@ -28,15 +28,21 @@ func TestLivenessAnswersOK(t *testing.T) {
 
 func TestReadinessReflectsInjectedProbe(t *testing.T) {
 	t.Parallel()
-	// A failing dependency flips readiness to 503 with the reason.
+	// A failing dependency flips readiness to 503 with a stable body:
+	// the endpoint is unauthenticated, so the dependency error's
+	// infrastructure detail (addresses, database name) stays in the
+	// log, never on the wire.
 	failing := makeReadiness(func() error { return errors.New("redis: connection refused") })
 	rec := httptest.NewRecorder()
 	failing(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 for a failing probe", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "not ready: redis: connection refused") {
-		t.Fatalf("body = %q, want the probe error verbatim", rec.Body.String())
+	if body := rec.Body.String(); strings.Contains(body, "redis") || strings.Contains(body, "connection refused") {
+		t.Fatalf("body = %q, want the stable phrase without dependency detail", body)
+	}
+	if !strings.HasPrefix(rec.Body.String(), "not ready") {
+		t.Fatalf("body = %q, want the stable not-ready phrase", rec.Body.String())
 	}
 
 	// A healthy dependency reports ready.

@@ -103,6 +103,30 @@ func TestPumpTranscodedTranslatesAndScrapesUsage(t *testing.T) {
 	}
 }
 
+// TestPumpTranscodedAcceptsSpacelessDataLines: the SSE grammar makes
+// the space after "data:" optional; a compatible backend that omits it
+// must reach the translator just the same, or its payloads would be
+// silently dropped from the client's stream.
+func TestPumpTranscodedAcceptsSpacelessDataLines(t *testing.T) {
+	t.Parallel()
+	stream := "data:{\"delta\":\"a\"}\n\n" +
+		"data:{\"usage\":{\"total_tokens\":9}}\n\n" +
+		"data:[DONE]\n\n"
+	tr := &fakeTranscoder{}
+	rec := httptest.NewRecorder()
+
+	usage, known, _, err := pumpTranscoded(rec, strings.NewReader(stream), tr, "m1")
+	if err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if len(tr.deltas) != 2 || tr.deltas[0] != `{"delta":"a"}` {
+		t.Fatalf("deltas = %v, want both spaceless payloads translated", tr.deltas)
+	}
+	if !known || usage.TotalTokens != 9 || tr.finishUsage.TotalTokens != 9 {
+		t.Fatalf("usage = %+v known=%v finish=%+v, want 9 scraped from the spaceless frame", usage, known, tr.finishUsage)
+	}
+}
+
 func TestPumpTranscodedStartFailureAbortsBeforeFrames(t *testing.T) {
 	t.Parallel()
 	tr := &fakeTranscoder{startErr: errors.New("cannot write preamble")}

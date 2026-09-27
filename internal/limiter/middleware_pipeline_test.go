@@ -187,8 +187,8 @@ func TestLimiterMiddlewareRejects429WithRetryAfter(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", rec.Code)
 	}
-	if got := rec.Header().Get("Retry-After"); got != "2" {
-		t.Fatalf("retry-after = %q, want 2 (2500ms truncated to seconds)", got)
+	if got := rec.Header().Get("Retry-After"); got != "3" {
+		t.Fatalf("retry-after = %q, want 3 (2500ms rounded up: an advertised 2s would send the client into a second 429)", got)
 	}
 	if !strings.Contains(rec.Body.String(), string(protocol.CodeRateLimited)) {
 		t.Fatalf("body = %s", rec.Body.String())
