@@ -15,8 +15,10 @@
  *   - insufficient_quota (OpenAI reports it as a 429, so the status
  *     alone cannot tell it apart from a transient rate limit)
  *   - 401: the credentials are rejected
- *   - 403 carrying a provider-API error envelope (an API-level
- *     refusal; a 403 from a proxy or WAF interstitial carries none)
+ *   - 403 carrying a credential-class provider error (authentication
+ *     error, invalid api key). A wider "any envelope" rule would let a
+ *     single request-scoped 403 — model access, region block, content
+ *     policy — evict the upstream for every tenant and model on it.
  */
 package relay
 
@@ -59,7 +61,10 @@ func fatalUpstreamReason(status int, body []byte) string {
 		return reasonQuotaExhausted
 	case status == http.StatusUnauthorized:
 		return reasonAuthFailure
-	case status == http.StatusForbidden && (typ != "" || env.Error.Code != nil):
+	case status == http.StatusForbidden && (typ == "authentication_error" || code == "invalid_api_key"):
+		// Credential-class refusals only. Everything else a 403 can
+		// mean (model access, geography, content policy) is per-request
+		// and stays retryable — the rest of the upstream is healthy.
 		return reasonAuthFailure
 	}
 	return ""

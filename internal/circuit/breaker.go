@@ -267,6 +267,10 @@ func (g *granted) Report(outcome Outcome) {
 			if s.failures >= b.cfg.FailThreshold {
 				b.transition(s, StateOpen)
 			}
+		default:
+			// OutcomeGatewayTerminated: the gateway cut the call under
+			// its own policy — neither success nor failure evidence.
+			// The counter stays exactly as it is.
 		}
 
 	case StateHalfOpen:
@@ -274,6 +278,13 @@ func (g *granted) Report(outcome Outcome) {
 			// Absorbed: the probe was already reclaimed by a concurrent
 			// Allow or StateOf, or this report belongs to an earlier
 			// probe and must not hijack the outstanding one.
+			return
+		}
+		if outcome == OutcomeGatewayTerminated {
+			// A probe the gateway itself truncated proves nothing about
+			// the upstream: back to open with a fresh cooldown, exactly
+			// like an expired probe, instead of closing on no evidence.
+			b.reclaimProbe(s, now)
 			return
 		}
 		if now.After(s.probe.deadline) && outcome == OutcomeSuccess {

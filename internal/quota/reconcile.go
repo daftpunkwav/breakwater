@@ -27,6 +27,8 @@ package quota
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 )
@@ -84,22 +86,30 @@ func NewReconciler(source SnapshotSource, tenants []string, store SnapshotStore)
 // ReconcileOnce snapshots every tenant and diffs against the previous
 // snapshot. It returns how many intervals were checked and how many
 // drifted; drift also surfaces per tenant through the returned report.
+// One tenant's failure skips only that tenant: a poisoned ledger must
+// not silence the drift detection of every tenant after it — the
+// aggregated errors come back so the caller still sees the round was
+// incomplete.
 func (r *Reconciler) ReconcileOnce(ctx context.Context) (checked, drifted int, drifts []TenantDrift, err error) {
 	takenAt := r.now()
+	var failures []error
 	for _, tenantID := range r.tenants {
 		snap, err := r.source.TenantSnapshot(ctx, tenantID, takenAt)
 		if err != nil {
-			return checked, drifted, drifts, err
+			failures = append(failures, fmt.Errorf("tenant %s: %w", tenantID, err))
+			continue
 		}
 		if snap == nil {
 			continue // no ledger provisioned: nothing to reconcile
 		}
 		prev, err := r.store.Latest(ctx, tenantID)
 		if err != nil {
-			return checked, drifted, drifts, err
+			failures = append(failures, fmt.Errorf("tenant %s: %w", tenantID, err))
+			continue
 		}
 		if err := r.store.Append(ctx, *snap); err != nil {
-			return checked, drifted, drifts, err
+			failures = append(failures, fmt.Errorf("tenant %s: %w", tenantID, err))
+			continue
 		}
 		if prev == nil || prev.Epoch != snap.Epoch {
 			continue // first sight, or a manual correction: skip by design
@@ -110,7 +120,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (checked, drifted int, d
 			drifts = append(drifts, TenantDrift{TenantID: tenantID, Drift: drift})
 		}
 	}
-	return checked, drifted, drifts, nil
+	return checked, drifted, drifts, errors.Join(failures...)
 }
 
 // TenantDrift is one tenant's reconciliation failure over one interval.
@@ -142,8 +152,12 @@ func StartReconciler(ctx context.Context, reconciler *Reconciler, every time.Dur
 			case <-ticker.C:
 				checked, drifted, drifts, err := reconciler.ReconcileOnce(ctx)
 				if err != nil {
-					slog.Warn("quota reconcile failed", "error", err)
-					continue
+					// An incomplete round (some tenants failed) still
+					// carries the drifts of the tenants that did
+					// reconcile — those verdicts are as trustworthy as
+					// in a clean round, so they are processed below
+					// instead of being skipped with the error.
+					slog.Warn("quota reconcile incomplete", "error", err)
 				}
 				if checked > 0 {
 					slog.Debug("quota reconcile ran", "checked", checked, "drifted", drifted)

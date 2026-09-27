@@ -26,8 +26,11 @@ end
 local amount = tonumber(redis.call('HGET', KEYS[2], 'amount'))
 local used = tonumber(ARGV[1])
 local refund = amount - used
+-- %d keeps every money movement an integer string: the raw Lua double
+-- would serialize as scientific notation past 14 digits and the INCRBY
+-- would reject it.
 if refund > 0 then
-    redis.call('INCRBY', KEYS[1], refund)
+    redis.call('INCRBY', KEYS[1], string.format('%d', refund))
 end
 redis.call('HSET', KEYS[2], 'state', 'SETTLED')
 redis.call('INCRBY', KEYS[4], string.format('%d', used))

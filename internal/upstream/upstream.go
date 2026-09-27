@@ -33,6 +33,12 @@ import (
 type Request struct {
 	// Model is the model identifier requested by the client.
 	Model string
+	// BodyModel is the model name the body currently carries; empty
+	// means "same as Model". It differs from Model when a fallback hop
+	// advanced the target model without re-encoding the client body —
+	// the adapter must then rewrite the body to Model (mapped through
+	// the provider's model map) instead of passing it through.
+	BodyModel string
 	// Stream reports whether a streaming (SSE) response is expected.
 	Stream bool
 	// Body is the neutral, OpenAI-format request body. Translating it to

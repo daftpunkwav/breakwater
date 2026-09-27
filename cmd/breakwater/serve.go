@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,8 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/cache"
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
+	"github.com/daftpunkwav/breakwater/internal/httpserver"
+	"github.com/daftpunkwav/breakwater/internal/insights"
 	"github.com/daftpunkwav/breakwater/internal/limiter"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
@@ -134,10 +137,32 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		if gov.sweepTarget != nil {
 			quota.StartSweeper(ctx, gov.sweepTarget, sweepInterval, expiredHook(metrics))
 		}
-		if staticIdentity != nil && gov.snapshotSource != nil && cfg.Postgres.DSN != "" && cfg.ReconcileInterval > 0 {
-			if err := startReconciler(ctx, cfg, gov.snapshotSource, staticIdentity.Tenants(), metrics, logger); err != nil {
+		// Quota reconciliation (PRD Q6) needs all three: the Redis hot
+		// ledger to read, PostgreSQL to persist snapshots into, and the
+		// interval armed. The tenant list comes from the system of
+		// record — the static set is configuration (no DSN, no snapshot
+		// store), so PostgreSQL identity mode is the reconcilable one.
+		reconcileArmed := gov.snapshotSource != nil && identityAdmin != nil && cfg.Postgres.DSN != ""
+		switch {
+		case reconcileArmed && cfg.ReconcileInterval > 0:
+			users, err := identityAdmin.Users(ctx)
+			if err != nil {
+				return fmt.Errorf("reconciler: list tenants: %w", err)
+			}
+			tenants := make([]string, 0, len(users))
+			for _, u := range users {
+				tenants = append(tenants, u.ID)
+			}
+			if err := startReconciler(ctx, cfg, gov.snapshotSource, tenants, metrics, logger); err != nil {
 				return err
 			}
+		case cfg.ReconcileInterval > 0:
+			// The interval is set but a prerequisite is missing: say so
+			// at startup instead of leaving an armed-looking config
+			// silently inert.
+			logger.Warn("quota reconciliation disabled: it needs Redis for the hot ledger and a reachable PostgreSQL identity store for snapshots",
+				"interval", cfg.ReconcileInterval, "redis", gov.snapshotSource != nil,
+				"postgres", cfg.Postgres.DSN != "")
 		}
 		if staticIdentity != nil {
 			seedBalances(ctx, staticIdentity, gov.ledger, logger)
@@ -157,8 +182,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	if err != nil {
 		return err
 	}
-	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams))
-	if err := validateModelNames(knownModels(cfg.Upstreams), cfg.Fallbacks, cfg.ContextLimits); err != nil {
+	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams),
+		router.WithWildcardModels(wildcardServed(cfg.Upstreams)))
+	if err := validateModelNames(cfg.Upstreams, cfg.Fallbacks, cfg.ContextLimits); err != nil {
 		return err
 	}
 	tracker := router.NewTracker()
@@ -195,6 +221,10 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 			pipeline.RequestIDStage(),
 			pipeline.FormatStage(format),
 		}, governance...)
+		// Innermost: a handler panic renders as a counted 500 instead of
+		// a killed connection the observation stage would misread as a
+		// client disconnect.
+		stages = append(stages, pipeline.RecoveryStage())
 		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer,
 			server.WithFallbacks(cfg.Fallbacks),
 			server.WithContextLimits(cfg.ContextLimits)))
@@ -233,11 +263,11 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		Metrics:       metricsHandler(metrics),
 		Admin:         buildAdmin(cfg, gov, breaker, metrics, upstreamIDs(cfg.Upstreams), adapters, probes, adminOpts...),
 		Readiness:     mergeReadiness(gov.readiness, identityReady),
-		Models:        knownModels(cfg.Upstreams),
+		Models:        discoverableModels(cfg.Upstreams),
 		Version:       version,
 	})
 
-	publishLogDrops(ctx, metrics, accessLog.logger, dropPublishInterval)
+	publishLogDrops(ctx, metrics, accessLog.logger, recorder.store, dropPublishInterval)
 	// Active recovery probing: upstreams taken out of rotation (auto
 	// disabled, breaker ejected) are asked periodically whether they
 	// are back; only those with a configured probe_url can be asked.
@@ -248,8 +278,20 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		"version", version,
 		"addr", cfg.Server.Addr,
 		"upstreams", len(cfg.Upstreams),
-		"governance", gov.mode)
+		"governance", gov.mode,
+		"admin_auth", adminAuthState(cfg.Security.AdminToken))
 	if err := srv.Run(ctx); err != nil {
+		if errors.Is(err, httpserver.ErrDrainTimeout) {
+			// A shutdown past its grace window with requests still in
+			// flight is a shutdown with a warning, not a failure: exiting
+			// non-zero here would turn every rolling restart that carries
+			// a long stream into a failed unit. The stragglers were cut;
+			// say so loudly and stop cleanly.
+			accessLog.close()
+			logger.Warn("shutdown grace expired with requests in flight", "grace", cfg.Server.ShutdownGrace)
+			logger.Info("gateway stopped")
+			return nil
+		}
 		// The deferred close would still run on the happy path, but a
 		// serve error must flush the observation queue before the caller
 		// turns the error into an exit code (invariant I8).
@@ -258,6 +300,17 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	}
 	logger.Info("gateway stopped")
 	return nil
+}
+
+// adminAuthState names the admin surface's credential posture for the
+// startup log: an empty token leaves the surface open, and an operator
+// must be able to tell a deliberate dev deployment from a dropped
+// secret at a glance.
+func adminAuthState(token string) string {
+	if token == "" {
+		return "disabled (admin surface is open)"
+	}
+	return "bearer token"
 }
 
 // startReconciler wires the quota reconciliation protocol (PRD Q6):
@@ -353,9 +406,11 @@ func metricsHandler(m *obs.Metrics) http.Handler {
 	})
 }
 
-// publishLogDrops keeps the logs-dropped counter in sync with the
-// access log's internal counter.
-func publishLogDrops(ctx context.Context, m *obs.Metrics, l *obs.Logger, every time.Duration) {
+// publishLogDrops keeps both sink drop counters in sync with their
+// owners' internal counts: the access log's capacity drops and the
+// insights store's dropped records. A silently missing insight record
+// must be as visible as a silently missing log line.
+func publishLogDrops(ctx context.Context, m *obs.Metrics, l *obs.Logger, s *insights.PGStore, every time.Duration) {
 	if l == nil || every <= 0 {
 		return
 	}
@@ -368,6 +423,9 @@ func publishLogDrops(ctx context.Context, m *obs.Metrics, l *obs.Logger, every t
 				return
 			case <-ticker.C:
 				m.SetLogsDropped(l.Dropped())
+				if s != nil {
+					m.SetInsightsDropped(s.Dropped())
+				}
 			}
 		}
 	}()
@@ -402,14 +460,12 @@ func autoDisableHook(routingSwitch *router.Switch, metrics *obs.Metrics, logger 
 
 // validateModelNames fails startup when a fallback chain or a context
 // ceiling names a model no configured upstream serves: a typo'd name
-// must refuse to boot, never fire silently or filter silently.
-func validateModelNames(known []string, fallbacks map[string][]string, limits map[string]int64) error {
-	set := make(map[string]struct{}, len(known))
-	for _, n := range known {
-		set[n] = struct{}{}
-	}
+// must refuse to boot, never fire silently or filter silently. The
+// served check mirrors the router's own resolution semantics — an
+// exact name or a wildcard binding serves a model.
+func validateModelNames(cfgs []config.Upstream, fallbacks map[string][]string, limits map[string]int64) error {
 	check := func(model, kind string) error {
-		if _, ok := set[model]; ok {
+		if servesModel(cfgs, model) {
 			return nil
 		}
 		return fmt.Errorf("config: %s %q names no configured client-facing model", kind, model)
@@ -430,6 +486,23 @@ func validateModelNames(known []string, fallbacks map[string][]string, limits ma
 		}
 	}
 	return nil
+}
+
+// servesModel reports whether the router would resolve the model: an
+// upstream lists it exactly, or lists the wildcard that serves
+// everything.
+func servesModel(cfgs []config.Upstream, model string) bool {
+	if model == "*" {
+		return false // the wildcard is not itself a requestable model
+	}
+	for _, c := range cfgs {
+		for _, m := range clientModels(c.Models) {
+			if m == model || m == "*" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildBindings turns configured upstreams into ordered router bindings,
@@ -466,10 +539,14 @@ func clientModels(models []string) []string {
 	return names
 }
 
-// knownModels lists every client-facing model name the configuration
-// serves, for the routing switch's typo protection. The wildcard is
-// not a model: disabling it would read as enabled for every concrete
-// request name, so it never enters the switch.
+// knownModels lists the concrete client-facing model names the
+// configuration serves, for the routing switch's typo protection. The
+// wildcard is not a model: disabling it would read as enabled for
+// every concrete request name, so it never enters the switch. Two
+// other consumers need different views of the same list — model
+// validation asks servesModel (which knows the wildcard serves any
+// name), discovery asks discoverableModels (which reports the
+// wildcard as the catch-all model it is).
 func knownModels(cfgs []config.Upstream) []string {
 	seen := make(map[string]struct{})
 	var names []string
@@ -484,6 +561,30 @@ func knownModels(cfgs []config.Upstream) []string {
 			seen[m] = struct{}{}
 			names = append(names, m)
 		}
+	}
+	return names
+}
+
+// wildcardServed reports whether any binding serves every model via
+// the "*" wildcard.
+func wildcardServed(cfgs []config.Upstream) bool {
+	for _, c := range cfgs {
+		for _, m := range clientModels(c.Models) {
+			if m == "*" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// discoverableModels lists what GET /v1/models advertises: every
+// concrete client-facing name, plus the wildcard itself when a binding
+// serves it — the honest description of a catch-all deployment.
+func discoverableModels(cfgs []config.Upstream) []string {
+	names := knownModels(cfgs)
+	if wildcardServed(cfgs) {
+		names = append(names, "*")
 	}
 	return names
 }

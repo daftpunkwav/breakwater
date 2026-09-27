@@ -27,7 +27,10 @@ import (
 )
 
 // anthropicRequest is the subset of the Messages schema the gateway
-// consumes.
+// consumes. Unmodeled fields that would change what the client gets
+// (tools, thinking, sampling knobs the canonical form cannot carry)
+// are declared here only so ingest can refuse them loudly instead of
+// silently dropping them; metadata rides no behavior and is dropped.
 type anthropicRequest struct {
 	Model         string          `json:"model"`
 	Stream        bool            `json:"stream"`
@@ -37,6 +40,10 @@ type anthropicRequest struct {
 	Temperature   *float64        `json:"temperature,omitempty"`
 	TopP          *float64        `json:"top_p,omitempty"`
 	StopSequences []string        `json:"stop_sequences,omitempty"`
+	Tools         json.RawMessage `json:"tools"`
+	ToolChoice    json.RawMessage `json:"tool_choice"`
+	Thinking      json.RawMessage `json:"thinking"`
+	TopK          *int64          `json:"top_k"`
 }
 
 // anthropicMsg is one conversation entry with flexible content.
@@ -63,6 +70,22 @@ func ingestAnthropic(body []byte) (IngestResult, error) {
 		// Silently dropping stop sequences would change what the client
 		// gets; refuse instead.
 		return IngestResult{}, fmt.Errorf("stop_sequences is not supported by this gateway")
+	}
+	for field, raw := range map[string]json.RawMessage{
+		"tools":       req.Tools,
+		"tool_choice": req.ToolChoice,
+		"thinking":    req.Thinking,
+	} {
+		if len(raw) > 0 && string(raw) != "null" {
+			// A silently dropped tool declaration would make an agent
+			// accept prose as its final answer; refuse loudly instead.
+			return IngestResult{}, fmt.Errorf("%s is not supported by this gateway", field)
+		}
+	}
+	if req.TopK != nil {
+		// The canonical form has no top_k; a dropped sampling knob would
+		// silently change the reply.
+		return IngestResult{}, fmt.Errorf("top_k is not supported by this gateway")
 	}
 
 	chat := ChatRequest{
@@ -293,7 +316,10 @@ func (s *anthropicStream) Delta(w ioWriter, payload []byte) error {
 }
 
 // Finish implements StreamTranscoder: block stop, message_delta with
-// stop reason and usage, message_stop.
+// stop reason and usage, message_stop. The final usage chunk (when the
+// upstream sent one) reports both directions — input tokens included —
+// so usage-based settlement and the client's own accounting see the
+// real numbers instead of the zeroed message_start placeholder.
 func (s *anthropicStream) Finish(w ioWriter, usage Usage, usageKnown bool) error {
 	if s.block {
 		if err := WriteEvent(w, "content_block_stop", map[string]any{
@@ -305,14 +331,15 @@ func (s *anthropicStream) Finish(w ioWriter, usage Usage, usageKnown bool) error
 	if s.stop == "" {
 		s.stop = "end_turn"
 	}
-	outputTokens := int64(0)
+	outputTokens, inputTokens := int64(0), int64(0)
 	if usageKnown {
 		outputTokens = usage.CompletionTokens
+		inputTokens = usage.PromptTokens
 	}
 	if err := WriteEvent(w, "message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": s.stop, "stop_sequence": nil},
-		"usage": map[string]any{"output_tokens": outputTokens},
+		"usage": map[string]any{"input_tokens": inputTokens, "output_tokens": outputTokens},
 	}); err != nil {
 		return err
 	}

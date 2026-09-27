@@ -67,28 +67,34 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 			carrier.Lease = lease.ID
 			metrics.QuotaReserved(carrier.Tenant.ID, amount)
 
-			next.ServeHTTP(w, r)
-
+			// Settlement converges on every exit path — including a panic
+			// deeper in the chain (the recovery stage contains the panic,
+			// this defer keeps the lease from leaking to the sweeper,
+			// which would refund a request that consumed tokens).
 			// Settlement deliberately detaches from request cancellation
 			// (invariant I10): a client gone mid-flight still settles by
 			// the tokens it consumed. The upstream request itself was
 			// cancelled through the request context; only the ledger
 			// write outlives it. Anything that still fails falls to the
 			// sweeper, which errs on the tenant's side.
-			settleCtx := context.WithoutCancel(r.Context())
-			if carrier.Consumed <= 0 {
-				if err := ledger.Cancel(settleCtx, lease.ID); err != nil {
-					slog.Warn("quota cancel failed", "lease", lease.ID, "error", err)
+			defer func() {
+				settleCtx := context.WithoutCancel(r.Context())
+				if carrier.Consumed <= 0 {
+					if err := ledger.Cancel(settleCtx, lease.ID); err != nil {
+						slog.Warn("quota cancel failed", "lease", lease.ID, "error", err)
+					}
+					metrics.QuotaRefunded(carrier.Tenant.ID, amount)
+					return
 				}
-				metrics.QuotaRefunded(carrier.Tenant.ID, amount)
-				return
-			}
-			if refund := amount - carrier.Consumed; refund > 0 {
-				metrics.QuotaRefunded(carrier.Tenant.ID, refund)
-			}
-			if err := ledger.Settle(settleCtx, lease.ID, carrier.Consumed); err != nil {
-				slog.Warn("quota settle failed", "lease", lease.ID, "error", err)
-			}
+				if refund := amount - carrier.Consumed; refund > 0 {
+					metrics.QuotaRefunded(carrier.Tenant.ID, refund)
+				}
+				if err := ledger.Settle(settleCtx, lease.ID, carrier.Consumed); err != nil {
+					slog.Warn("quota settle failed", "lease", lease.ID, "error", err)
+				}
+			}()
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }

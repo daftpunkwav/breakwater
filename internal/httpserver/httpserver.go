@@ -15,6 +15,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -31,9 +32,16 @@ type Options struct {
 	ShutdownGrace time.Duration
 }
 
+// ErrDrainTimeout reports that the drain window expired with requests
+// still in flight. That is a shutdown with a warning, not a failure:
+// callers exit zero on it and log instead. Other Shutdown errors
+// (genuine transport breakdowns) surface wrapped as before.
+var ErrDrainTimeout = errors.New("httpserver: drain window expired with requests in flight")
+
 // Run serves opts.Handler on opts.Addr until ctx is cancelled, then
 // drains connections within opts.ShutdownGrace. A startup failure (e.g.
-// port already in use) is returned as-is.
+// port already in use) is returned as-is; a drain that outlives the
+// grace window returns ErrDrainTimeout.
 func Run(ctx context.Context, opts Options) error {
 	if opts.Handler == nil {
 		return fmt.Errorf("httpserver: no handler configured")
@@ -50,10 +58,15 @@ func Run(ctx context.Context, opts Options) error {
 	httpSrv := &http.Server{
 		Handler:           opts.Handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds reading one request (headers plus body) —
+		// with the 4 MiB body cap, tens of seconds are generous, and a
+		// slowloris body must not hold a worker forever. It never
+		// touches the response side, so SSE streams are unaffected.
 		// IdleTimeout reaps keep-alive connections whose client vanished
-		// without a FIN; it never bounds an in-flight request, so SSE
-		// streams are unaffected. ReadTimeout and WriteTimeout stay
-		// unset on purpose: either would kill long legitimate streams.
+		// without a FIN; it never bounds an in-flight request either.
+		// WriteTimeout stays unset on purpose: it would kill long
+		// legitimate streams.
+		ReadTimeout: 30 * time.Second,
 		IdleTimeout: 120 * time.Second,
 	}
 
@@ -71,6 +84,9 @@ func Run(ctx context.Context, opts Options) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), opts.ShutdownGrace)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return ErrDrainTimeout
+		}
 		return fmt.Errorf("drain connections: %w", err)
 	}
 	return nil

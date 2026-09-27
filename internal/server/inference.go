@@ -140,16 +140,22 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The fallback chain and its resolver: the relay walks the chain
-	// only when the primary model's candidates are exhausted, and the
-	// resolver applies the same context filter to every hop.
+	// only when the primary model's candidates are exhausted. The
+	// resolver applies every gate the primary passed — tier
+	// authorization first (a fallback must never serve a model the
+	// tenant is not entitled to, deny winning per the tier contract),
+	// then the context filter.
 	var chain []string
 	if len(s.fallbacks) > 0 {
 		chain = s.fallbacks[carrier.Chat.Model]
 	}
 	var resolve relay.CandidateResolver
 	if len(chain) > 0 {
-		limits, rt := s.contextLimits, s.router
+		limits, rt, tenant := s.contextLimits, s.router, carrier.Tenant
 		resolve = func(ctx context.Context, model string) ([]upstream.Upstream, error) {
+			if tenant.ID != "" && !tenant.Tier.AllowsModel(model) {
+				return nil, router.ErrUnavailable
+			}
 			if overContext(limits, model, inputTokens) {
 				return nil, router.ErrUnavailable
 			}

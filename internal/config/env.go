@@ -11,6 +11,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -281,9 +282,29 @@ func Load() (Config, error) {
 			}
 		}
 	}
+	seenUpstreamIDs := make(map[string]struct{}, len(cfg.Upstreams))
 	for i, u := range cfg.Upstreams {
 		if u.ID == "" || u.BaseURL == "" {
 			return Config{}, fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
+		}
+		// A duplicated id would alias two distinct providers into one
+		// circuit-breaker state and one admin target — the second copy
+		// silently shadowing the first. Refuse at load, like every other
+		// identity collision.
+		if _, dup := seenUpstreamIDs[u.ID]; dup {
+			return Config{}, fmt.Errorf("config: upstreams[%d] repeats id %q", i, u.ID)
+		}
+		seenUpstreamIDs[u.ID] = struct{}{}
+		// Scheme and host must parse now, not per request: a missing
+		// scheme otherwise surfaces as a transport error against a
+		// "healthy" gateway, 100% of requests failing with no startup
+		// signal at all.
+		parsed, err := url.Parse(u.BaseURL)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has an unparsable base_url %q: %w", i, u.ID, u.BaseURL, err)
+		}
+		if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) base_url %q needs an http(s) scheme and a host", i, u.ID, u.BaseURL)
 		}
 		if len(u.Models) == 0 {
 			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)

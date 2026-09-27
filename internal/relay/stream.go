@@ -28,12 +28,17 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
-// dataPrefix marks an SSE data line.
-const dataPrefix = "data: "
-
-// dataPrefixBytes is the byte form of dataPrefix for zero-copy prefix
-// tests against buffered lines.
-var dataPrefixBytes = []byte(dataPrefix)
+// dataPayload extracts an SSE data line's payload: the "data:" field
+// name plus at most one separating space, per the SSE grammar (a
+// writer that skips the space is equally canonical). ok is false for
+// any other line kind.
+func dataPayload(line []byte) (payload []byte, ok bool) {
+	rest, isData := bytes.CutPrefix(line, []byte("data:"))
+	if !isData {
+		return nil, false
+	}
+	return bytes.TrimPrefix(rest, []byte(" ")), true
+}
 
 // donePayload is the [DONE] token carried inside the canonical wire's
 // terminator data line (the full line form lives in the protocol
@@ -66,7 +71,7 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 		line, readErr := readLine(reader)
 		if len(line) > 0 {
 			trimmed := trimEOL(line)
-			if payload, isData := bytes.CutPrefix(trimmed, dataPrefixBytes); isData {
+			if payload, isData := dataPayload(trimmed); isData {
 				if string(payload) != donePayload {
 					if u, ok := protocol.ParseUsage(payload); ok {
 						usage, usageKnown = u, true
@@ -108,7 +113,7 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 		line, readErr := readLine(reader)
 		if len(line) > 0 {
 			trimmed := trimEOL(line)
-			if payload, isData := bytes.CutPrefix(trimmed, dataPrefixBytes); isData {
+			if payload, isData := dataPayload(trimmed); isData {
 				if u, ok := protocol.ParseUsage(payload); ok {
 					usage, usageKnown = u, true
 				}

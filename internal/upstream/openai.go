@@ -59,7 +59,8 @@ type OpenAI struct {
 }
 
 // NewOpenAI builds an adapter. It returns an error for a missing ID or
-// BaseURL so misconfiguration fails at assembly, not per request.
+// BaseURL; the config layer owns the deeper URL validation (scheme,
+// host), so a malformed base_url never reaches this constructor.
 func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error) {
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("upstream: openai adapter needs an id")
@@ -84,14 +85,32 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error) {
 // ID implements Upstream.
 func (o *OpenAI) ID() string { return o.id }
 
-// Forward implements Upstream: one POST exchange with the neutral body
-// passed through verbatim, after a model rewrite when the client-facing
-// name maps to a provider-real one. Attempt timeout and cancellation
-// are owned by the caller through ctx.
+// bodyModel resolves the model name the forwarded body must carry and
+// reports whether that differs from what it carries now. A mapped name
+// forwards its provider-real name, an unmapped one forwards itself; the
+// current carrier is the body's own model (BodyModel, defaulting to
+// Model) — a fallback hop advanced the batch model without re-encoding
+// the client body, so the rewrite applies whenever the two diverge.
+func (o *OpenAI) bodyModel(req Request) (string, bool) {
+	target := req.Model
+	if real, ok := o.modelMap[req.Model]; ok {
+		target = real
+	}
+	carrier := req.Model
+	if req.BodyModel != "" {
+		carrier = req.BodyModel
+	}
+	return target, target != carrier
+}
+
+// Forward implements Upstream: one POST exchange with the neutral body,
+// rewritten to carry the model this attempt serves (mapped through the
+// model map) whenever the body still names a different one. Attempt
+// timeout and cancellation are owned by the caller through ctx.
 func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
 	body := req.Body
-	if real, ok := o.modelMap[req.Model]; ok && real != req.Model {
-		rewritten, err := rewriteModelBody(body, real)
+	if target, differs := o.bodyModel(req); differs {
+		rewritten, err := rewriteModelBody(body, target)
 		if err != nil {
 			return nil, fmt.Errorf("upstream %s: %w", o.id, err)
 		}

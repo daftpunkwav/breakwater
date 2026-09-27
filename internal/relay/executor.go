@@ -21,7 +21,6 @@
 package relay
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -390,8 +389,11 @@ func (r *run) finish(err error) Result {
 			Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	default:
+		// The transport error's text carries the upstream URL and
+		// network internals; the client gets the stable code only, the
+		// details stay with the server side (correlate via request id).
 		r.wire.RenderError(job.Out, http.StatusBadGateway, "upstream_unreachable",
-			"upstream did not answer: "+err.Error())
+			"upstream did not answer")
 		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
 			ErrorCode: "upstream_unreachable"}
 	}
@@ -436,7 +438,9 @@ func readBounded(body io.Reader, limit int64) ([]byte, error) {
 }
 
 // snapshot builds an exchangeSnapshot from a response and its buffered
-// body; the header is cloned so later mutation cannot race the render.
+// body. The body comes from readBounded's io.ReadAll — private to this
+// goroutine — so it is held as-is; only the header is cloned, because
+// the upstream Response contract lets the adapter keep mutating it.
 func snapshot(status int, header http.Header, body []byte) *exchangeSnapshot {
-	return &exchangeSnapshot{status: status, header: header.Clone(), body: bytes.Clone(body)}
+	return &exchangeSnapshot{status: status, header: header.Clone(), body: body}
 }

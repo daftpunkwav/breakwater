@@ -52,6 +52,13 @@ const (
 	// OutcomeServerFault marks an upstream-side failure (5xx, timeout,
 	// connection reset).
 	OutcomeServerFault
+	// OutcomeGatewayTerminated marks a call the gateway cut short under
+	// its own policy (the stream ceiling). The upstream kept answering
+	// until the gateway stopped listening, so the outcome is no health
+	// evidence either way: closed keeps the failure counter as it is,
+	// and a truncated half-open probe goes back to open with a fresh
+	// cooldown — a probe that proves nothing must not close the breaker.
+	OutcomeGatewayTerminated
 )
 
 // Permission is one granted call slot. The holder reports the outcome of

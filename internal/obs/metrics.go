@@ -14,7 +14,10 @@
  * is a leaf of counters, gauges and histograms, which keeps the
  * dependency surface at zero and the exposition format inspectable.
  * Cardinality discipline: labels are tenant, model, upstream, status —
- * nothing unbounded (no request IDs, no paths).
+ * no request IDs, no paths. The model label comes from client input
+ * (it is the requested model name, known before routing), so it is not
+ * intrinsically bounded; the per-family child cap below bounds what a
+ * hostile or buggy client can grow, dropping series past the cap.
  */
 package obs
 
@@ -70,14 +73,27 @@ type family struct {
 	mu sync.RWMutex
 }
 
-// childOf returns the leaf for a label value tuple.
+// maxChildren caps the label-set leaves of one family. The configured
+// label vocabulary keeps every legitimate deployment far below it; the
+// cap only bounds what a hostile or buggy client (an unbounded model
+// name) can grow. Past the cap new label sets are dropped — the
+// registry degrades to under-counting instead of growing without
+// bound.
+const maxChildren = 4096
+
+// childOf returns the leaf for a label value tuple, or nil past the
+// family's child cap (the call is then a no-op for the caller).
 func (f *family) childOf(values ...string) *child {
 	key := strings.Join(values, "\x00")
 	f.mu.RLock()
 	c, ok := f.children[key]
+	n := len(f.children)
 	f.mu.RUnlock()
 	if ok {
 		return c
+	}
+	if n >= maxChildren {
+		return nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -97,8 +113,9 @@ func (f *family) childOf(values ...string) *child {
 type Metrics struct {
 	families map[string]*family
 
-	inflight atomic.Int64
-	logDrops atomic.Int64
+	inflight     atomic.Int64
+	logDrops     atomic.Int64
+	insightDrops atomic.Int64
 }
 
 // NewMetrics builds the registry with every family declared.
@@ -165,11 +182,16 @@ func NewMetrics() *Metrics {
 	// as the healthy zero — from the first scrape, before the periodic
 	// sync ever runs.
 	m.families["breakwater_logs_dropped_total"].childOf()
+	reg("breakwater_insights_records_dropped_total", "Insight records dropped for capacity or after shutdown.", "counter", nil, nil)
+	m.families["breakwater_insights_records_dropped_total"].childOf()
 	return m
 }
 
 func (m *Metrics) inc(name string, amount float64, values ...string) {
 	c := m.families[name].childOf(values...)
+	if c == nil {
+		return
+	}
 	addFloat(&c.value, amount)
 	c.count.Add(1)
 }
@@ -189,6 +211,9 @@ func (m *Metrics) ObserveDuration(upstream string, seconds float64) {
 	}
 	f := m.families["breakwater_request_duration_seconds"]
 	c := f.childOf(upstream)
+	if c == nil {
+		return
+	}
 	addFloat(&c.value, seconds)
 	c.count.Add(1)
 	for i, bound := range f.buckets {
@@ -307,7 +332,9 @@ func (m *Metrics) CircuitState(upstream string, stateValue float64) {
 	if m == nil {
 		return
 	}
-	m.families["breakwater_circuit_state"].childOf(upstream).value.Store(math.Float64bits(stateValue))
+	if c := m.families["breakwater_circuit_state"].childOf(upstream); c != nil {
+		c.value.Store(math.Float64bits(stateValue))
+	}
 }
 
 // RetryScheduled records a retry attempt beyond the first.
@@ -371,6 +398,9 @@ func (m *Metrics) ObserveTTFT(upstream string, seconds float64) {
 	}
 	f := m.families["breakwater_upstream_ttft_seconds"]
 	c := f.childOf(upstream)
+	if c == nil {
+		return
+	}
 	addFloat(&c.value, seconds)
 	c.count.Add(1)
 	for i, bound := range f.buckets {
@@ -387,6 +417,15 @@ func (m *Metrics) SetLogsDropped(n int64) {
 		return
 	}
 	m.logDrops.Store(n)
+}
+
+// SetInsightsDropped publishes the insights store drop counter; Render
+// sources the sample value from here, like SetLogsDropped.
+func (m *Metrics) SetInsightsDropped(n int64) {
+	if m == nil {
+		return
+	}
+	m.insightDrops.Store(n)
 }
 
 // Render writes every family in the Prometheus text format 0.0.4,
@@ -416,11 +455,11 @@ func (m *Metrics) Render(w io.Writer) error {
 				var cumulative uint64
 				for i, bound := range f.buckets {
 					cumulative = c.buckets[i].Load()
-					if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, labelsWithLE(labels, bound), cumulative); err != nil {
+					if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, renderLabels(f.labels, c.values, lePair(bound)), cumulative); err != nil {
 						return err
 					}
 				}
-				if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, labelsWithLE(labels, math.Inf(1)), c.count.Load()); err != nil {
+				if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", f.name, renderLabels(f.labels, c.values, lePair(math.Inf(1))), c.count.Load()); err != nil {
 					return err
 				}
 				if _, err := fmt.Fprintf(w, "%s_sum%s %g\n", f.name, labels, loadFloat(&c.value)); err != nil {
@@ -434,8 +473,11 @@ func (m *Metrics) Render(w io.Writer) error {
 			for _, c := range children {
 				labels := renderLabels(f.labels, c.values)
 				value := loadFloat(&c.value)
-				if f.name == "breakwater_logs_dropped_total" {
+				switch f.name {
+				case "breakwater_logs_dropped_total":
 					value = float64(m.logDrops.Load())
+				case "breakwater_insights_records_dropped_total":
+					value = float64(m.insightDrops.Load())
 				}
 				if _, err := fmt.Fprintf(w, "%s%s %g\n", f.name, labels, value); err != nil {
 					return err
@@ -448,23 +490,33 @@ func (m *Metrics) Render(w io.Writer) error {
 	return err
 }
 
+// labelEscaper escapes label values per the Prometheus text format:
+// backslash, double quote and newline only, every other byte literal.
+// Go's %q would also emit escapes the exposition parsers reject (\t,
+// \x.., \u....) — one such value would poison the whole scraped
+// payload, so values are escaped strictly here instead.
+var labelEscaper = strings.NewReplacer(
+	`\`, `\\`,
+	`"`, `\"`,
+	"\n", `\n`,
+)
+
 // renderLabels joins label names and values into the {k="v",...} form.
-func renderLabels(names, values []string) string {
-	if len(names) == 0 {
+// extraPairs, when given, render as trailing pairs (the histogram le
+// bucket); each must already be a fully rendered "name=\"value\"" pair.
+func renderLabels(names, values []string, extraPairs ...string) string {
+	if len(names) == 0 && len(extraPairs) == 0 {
 		return ""
 	}
-	pairs := make([]string, len(names))
+	pairs := make([]string, 0, len(names)+len(extraPairs))
 	for i, name := range names {
-		pairs[i] = fmt.Sprintf("%s=%q", name, values[i])
+		pairs = append(pairs, name+`="`+labelEscaper.Replace(values[i])+`"`)
 	}
+	pairs = append(pairs, extraPairs...)
 	return "{" + strings.Join(pairs, ",") + "}"
 }
 
-// labelsWithLE renders the label set with the histogram le bucket.
-func labelsWithLE(rendered string, bound float64) string {
-	le := fmt.Sprintf("%g", bound)
-	if rendered == "" {
-		return "{le=\"" + le + "\"}"
-	}
-	return strings.Replace(rendered, "}", ",le=\""+le+"\"}", 1)
+// lePair renders the histogram bucket boundary as a label pair.
+func lePair(bound float64) string {
+	return `le="` + fmt.Sprintf("%g", bound) + `"`
 }

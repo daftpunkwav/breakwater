@@ -70,9 +70,12 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 			}
 			status := tee.Status()
 			if status == 0 {
-				// No header ever reached the wire: the client walked away
-				// (or the handler died) before the response started. The
-				// aggregation counts it as a disconnect, never a failure.
+				// No header ever reached the wire and the client is gone.
+				// Handler panics never land here — the recovery stage
+				// renders them as counted 500s — so a 499 is a client
+				// that truly walked away before the response started.
+				// The aggregation counts it as a disconnect, never a
+				// failure.
 				status = obs.StatusClientClosedRequest
 			}
 

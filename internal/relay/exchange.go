@@ -33,7 +33,12 @@ import (
 // Job's original model.
 func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model string) (circuit.Outcome, error) {
 	req := upstream.Request{
-		Model:     model,
+		Model: model,
+		// The body still carries the Job's primary model name (it is the
+		// client's own bytes); the adapter rewrites it when this batch's
+		// model differs — the mechanism that makes a fallback hop a real
+		// model switch.
+		BodyModel: r.job.Model,
 		Stream:    r.job.Stream,
 		Body:      r.job.Body,
 		RequestID: r.job.RequestID,
@@ -181,6 +186,13 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 		_ = transcoder.Abort(r.job.Out, code, message)
 	} else {
 		_ = protocol.WriteAbort(r.job.Out, code, message)
+	}
+	if lease.ceilingFired.Load() {
+		// The gateway's own stream ceiling cut this stream: a policy
+		// execution, not upstream evidence. The breaker hears the
+		// neutral verdict — a healthy but slow upstream must not be
+		// voted out of rotation by its own configuration.
+		return circuit.OutcomeGatewayTerminated, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
 	return circuit.OutcomeServerFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 }

@@ -28,15 +28,22 @@ import (
 )
 
 // responsesRequest is the subset of the Responses schema the gateway
-// consumes.
+// consumes. Unmodeled fields that would change what the client gets
+// are declared here only so ingest can refuse them loudly instead of
+// silently dropping them.
 type responsesRequest struct {
-	Model           string          `json:"model"`
-	Stream          bool            `json:"stream"`
-	Input           json.RawMessage `json:"input"`
-	Instructions    string          `json:"instructions"`
-	MaxOutputTokens *int64          `json:"max_output_tokens,omitempty"`
-	Temperature     *float64        `json:"temperature,omitempty"`
-	TopP            *float64        `json:"top_p,omitempty"`
+	Model            string          `json:"model"`
+	Stream           bool            `json:"stream"`
+	Input            json.RawMessage `json:"input"`
+	Instructions     string          `json:"instructions"`
+	MaxOutputTokens  *int64          `json:"max_output_tokens,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"top_p,omitempty"`
+	Tools            json.RawMessage `json:"tools"`
+	ToolChoice       json.RawMessage `json:"tool_choice"`
+	PreviousResponse string          `json:"previous_response_id"`
+	Reasoning        json.RawMessage `json:"reasoning"`
+	TextFormat       json.RawMessage `json:"text"`
 }
 
 // responsesMessage is one input array entry.
@@ -53,6 +60,24 @@ func ingestResponses(body []byte) (IngestResult, error) {
 	}
 	if req.Model == "" {
 		return IngestResult{}, fmt.Errorf("model is required")
+	}
+	for field, raw := range map[string]json.RawMessage{
+		"tools":       req.Tools,
+		"tool_choice": req.ToolChoice,
+		"reasoning":   req.Reasoning,
+		"text":        req.TextFormat,
+	} {
+		if len(raw) > 0 && string(raw) != "null" {
+			// A silently dropped tool declaration or output format would
+			// make the client accept a reply shaped by fields that never
+			// reached the upstream; refuse loudly instead.
+			return IngestResult{}, fmt.Errorf("%s is not supported by this gateway", field)
+		}
+	}
+	if req.PreviousResponse != "" {
+		// Dropping it would silently lose the conversation context the
+		// client asked to continue.
+		return IngestResult{}, fmt.Errorf("previous_response_id is not supported by this gateway")
 	}
 
 	chat := ChatRequest{

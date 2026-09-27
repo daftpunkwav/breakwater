@@ -18,13 +18,15 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 )
 
 // ErrBudgetExhausted reports that the process-wide in-flight retry
-// budget has no slot for another attempt. Callers fail fast; wrapping
-// keeps the triggering error visible.
+// budget has no slot for another attempt. The wrapped chain keeps the
+// triggering attempt's error visible — operators see what the budget
+// was spent fighting, not just that it ran out.
 var ErrBudgetExhausted = errors.New("retry: global retry budget exhausted")
 
 // AttemptFunc runs one upstream attempt under the derived attempt
@@ -55,13 +57,18 @@ func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Clas
 		defer cancel()
 	}
 
+	var lastErr error
 	for attempt := 1; ; attempt++ {
 		if attempt > 1 {
 			if budget != nil && !budget.Acquire() {
-				return ErrBudgetExhausted
+				// Wrap the failure that wanted the retry: the budget
+				// verdict lands on the last attempt's error, and the
+				// caller renders both.
+				return fmt.Errorf("%w: %w", ErrBudgetExhausted, lastErr)
 			}
 		}
 		err := runAttempt(overall, policy, fn, attempt)
+		lastErr = err
 		if attempt > 1 && budget != nil {
 			budget.Release()
 		}

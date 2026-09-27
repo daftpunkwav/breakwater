@@ -16,6 +16,7 @@ package server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"runtime"
 )
@@ -41,14 +42,18 @@ func makeVersion(version string) http.HandlerFunc {
 
 // makeReadiness binds the injected probe. While the limiter is
 // fail-closed, readiness must gate on the dependency health or the
-// probe would lie.
+// probe would lie. The endpoint is unauthenticated and dependency
+// errors carry infrastructure details (addresses, database user and
+// name — the exact things that must not leak during an outage), so the
+// body stays a stable phrase and the detail goes to the log.
 func makeReadiness(probe func() error) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		if probe != nil {
 			if err := probe(); err != nil {
+				slog.Warn("readiness probe failed", "error", err)
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte("not ready: " + err.Error() + "\n"))
+				_, _ = w.Write([]byte("not ready\n"))
 				return
 			}
 		}

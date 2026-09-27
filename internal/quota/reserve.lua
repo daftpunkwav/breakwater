@@ -25,11 +25,15 @@ if bal < amount then
 end
 
 bal = bal - amount
-redis.call('SET', KEYS[1], bal)
+-- Lua numbers are doubles: write balances and amounts back through
+-- %d so the stored form stays an integer string — the raw double form
+-- would serialize as scientific notation past 14 digits and every
+-- later INCRBY would reject it.
+redis.call('SET', KEYS[1], string.format('%d', bal))
 redis.call('INCRBY', KEYS[4], string.format('%d', amount))
 redis.call('HSET', KEYS[2],
     'tenant', ARGV[5],
-    'amount', amount,
+    'amount', string.format('%d', amount),
     'state', 'RESERVED',
     'created', ARGV[1])
 redis.call('ZADD', KEYS[3], ARGV[1] + ARGV[3], ARGV[4])

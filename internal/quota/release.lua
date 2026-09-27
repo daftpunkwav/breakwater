@@ -20,7 +20,10 @@ if not state or state ~= 'RESERVED' then
 end
 
 local amount = tonumber(redis.call('HGET', KEYS[2], 'amount'))
-redis.call('INCRBY', KEYS[1], amount)
+-- %d keeps the refund an integer string; the raw Lua double would
+-- serialize as scientific notation past 14 digits and the INCRBY
+-- would reject it.
+redis.call('INCRBY', KEYS[1], string.format('%d', amount))
 redis.call('HSET', KEYS[2], 'state', ARGV[2])
 redis.call('INCRBY', KEYS[4], string.format('%d', amount))
 -- The terminal record stays for a bounded audit window, then expires.

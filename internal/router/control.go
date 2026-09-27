@@ -66,12 +66,27 @@ type Switch struct {
 	autoDisabled      map[string]autoDisable
 	knownModels       map[string]struct{}
 	knownUpstreams    map[string]struct{}
+	// wildcardModels reports that a binding serves every model via the
+	// "*" wildcard. A concrete name is then toggleable on demand: the
+	// switch cannot know the wildcard's full model vocabulary up front,
+	// so the typo protection only applies when no wildcard exists.
+	wildcardModels bool
+}
+
+// SwitchOption customizes a Switch.
+type SwitchOption func(*Switch)
+
+// WithWildcardModels marks the deployment as wildcard-served: any
+// concrete model name may be disabled even though the config never
+// enumerated it.
+func WithWildcardModels(wildcard bool) SwitchOption {
+	return func(s *Switch) { s.wildcardModels = wildcard }
 }
 
 // NewSwitch builds a switch over the configured model names and
 // upstream ids. The known sets let the admin surface reject typos
 // instead of silently toggling a name nobody serves.
-func NewSwitch(knownModels, knownUpstreams []string) *Switch {
+func NewSwitch(knownModels, knownUpstreams []string, opts ...SwitchOption) *Switch {
 	s := &Switch{
 		disabledModels:    make(map[string]bool),
 		disabledUpstreams: make(map[string]bool),
@@ -85,15 +100,20 @@ func NewSwitch(knownModels, knownUpstreams []string) *Switch {
 	for _, u := range knownUpstreams {
 		s.knownUpstreams[u] = struct{}{}
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
 	return s
 }
 
 // SetModel disables or re-enables a model. An unknown model is an
-// operator error, not a toggle.
+// operator error, not a toggle — unless the deployment serves a
+// wildcard, in which case concrete names arrive unenumerated and the
+// toggle lands on the named model the wildcard serves.
 func (s *Switch) SetModel(model string, enabled bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.knownModels[model]; !ok {
+	if _, ok := s.knownModels[model]; !ok && !s.wildcardModels {
 		return fmt.Errorf("%w: %q", ErrUnknownModel, model)
 	}
 	if enabled {
@@ -210,13 +230,22 @@ type SwitchView struct {
 	Auto      map[string]AutoDisableInfo `json:"auto_disabled"`
 }
 
-// View snapshots the full switch state for the admin surface.
+// View snapshots the full switch state for the admin surface. Models
+// disabled while unenumerated (wildcard deployments toggle concrete
+// names on demand) appear as the disabled entries they are — a
+// disabled model must be visible to the operator even though no
+// binding ever named it.
 func (s *Switch) View() SwitchView {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	models := make(map[string]bool, len(s.knownModels))
+	models := make(map[string]bool, len(s.knownModels)+len(s.disabledModels))
 	for m := range s.knownModels {
 		models[m] = !s.disabledModels[m]
+	}
+	for m := range s.disabledModels {
+		if _, ok := s.knownModels[m]; !ok {
+			models[m] = false
+		}
 	}
 	upstreams := make(map[string]bool, len(s.knownUpstreams))
 	auto := make(map[string]AutoDisableInfo, len(s.autoDisabled))

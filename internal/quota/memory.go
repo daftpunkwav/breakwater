@@ -155,19 +155,32 @@ func (m *Memory) Balance(_ context.Context, tenantID string) (int64, error) {
 	return balance, nil
 }
 
+// scanBatch caps how many leases one SweepOnce pass walks. The lock is
+// shared with every Reserve/Settle/Cancel, so a pass must stay bounded
+// no matter how the audit window has grown — the map's randomized
+// iteration order guarantees successive passes keep making progress
+// over the whole set. The Redis backend bounds the same pass with its
+// zset page; this is the memory-side equivalent.
+const scanBatch = 8192
+
 // SweepOnce reclaims RESERVED leases older than the lease TTL, refunding
 // their amounts and marking them EXPIRED; it returns how many leases
 // were reclaimed (bounded by limit per call). Terminal leases past the
 // shared audit window (leaseAuditTTL, the Redis backend's retention) are
 // purged in the same pass — reclaim count excludes purges, and purges
-// never touch balances.
+// never touch balances. One pass walks at most scanBatch leases.
 func (m *Memory) SweepOnce(_ context.Context, now time.Time, limit int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	reservedCutoff := now.Add(-m.leaseTTL)
 	terminalCutoff := now.Add(-leaseAuditTTL)
 	expired := 0
+	scanned := 0
 	for id, lease := range m.leases {
+		if scanned >= scanBatch {
+			break
+		}
+		scanned++
 		if lease.State != LeaseStateReserved {
 			if lease.terminalAt.Before(terminalCutoff) {
 				delete(m.leases, id)

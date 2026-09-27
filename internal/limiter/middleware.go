@@ -56,7 +56,11 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 			}
 			if !decision.Allowed {
 				metrics.RateLimited(carrier.Tenant.ID)
-				seconds := int64(decision.RetryAfter / time.Second)
+				// Advertise the ceiling of the real wait: truncating
+				// 1500ms to 1s sends a well-behaved client straight into
+				// a second 429, the round trip this header exists to
+				// spare.
+				seconds := int64((decision.RetryAfter + time.Second - 1) / time.Second)
 				if seconds < 1 {
 					seconds = 1
 				}
@@ -68,14 +72,18 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 			}
 			carrier.Tokens = tokens
 
-			next.ServeHTTP(w, r)
+			// Post-call correction: whatever was not consumed goes back,
+			// on every exit path — the defer keeps a panic deeper in the
+			// chain from stranding the reservation. A client already gone
+			// cancels this context; the refund is then lost and the
+			// bucket stays slightly low — the safe direction.
+			defer func() {
+				if refund := tokens - carrier.Consumed; refund > 0 {
+					_ = l.Refund(r.Context(), carrier.Tenant.ID, limits, refund)
+				}
+			}()
 
-			// Post-call correction: whatever was not consumed goes back.
-			// A client already gone cancels this context; the refund is
-			// lost and the bucket stays slightly low — the safe direction.
-			if refund := tokens - carrier.Consumed; refund > 0 {
-				_ = l.Refund(r.Context(), carrier.Tenant.ID, limits, refund)
-			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
