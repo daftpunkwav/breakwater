@@ -1,6 +1,6 @@
 // quota-race: concurrent drains of one tenant's balance; afterwards the
 // admin balance query must reconcile exactly against the summed usage
-// (invariants I3/I9, the load-level complement of the -race unit test).
+// (the load-level complement of the -race unit test).
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... -e ADMIN_TOKEN=... quota-race.js
 import http from 'k6/http';

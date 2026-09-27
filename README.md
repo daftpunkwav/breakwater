@@ -32,8 +32,8 @@ tests, metrics and fault-injection experiments.
 | `internal/config`     | Configuration schema and loading                          |
 | `internal/obs`        | Bounded async access log, hand-written metrics registry   |
 | `deploy`              | docker-compose stack, schema, seed, container build       |
-| `loadtest`            | k6 scenarios, each targeting a system invariant           |
-| `docs`                | Evidence documents (benchmarks, chaos report)             |
+| `loadtest`            | k6 scenarios, each targeting one property of the system   |
+| `docs`                | Benchmarks, the fault-injection report, the local deployment guide and the testing conventions |
 
 ## Layout zoning
 
@@ -43,8 +43,10 @@ existing packages, never as new top-level directories. The zoning rules:
 1. Governance mechanisms are self-contained: implementations, Lua
    scripts, sweepers and their own pipeline middleware grow inside their
    package — never subpackages.
-2. Provider adapters stay flat: a new provider is a new file in
-   `internal/upstream` (`openai.go`, `deepseek.go`), not an adaptor tree.
+2. Provider adapters stay flat: every OpenAI-compatible provider is served
+   by `internal/upstream/openai.go` configured with a different
+   `base_url`. The package holds one file per provider concern (`upstream.go`,
+   `openai.go`, `modelmap.go`, `transport.go`), not an adapter tree.
 3. Everything HTTP-endpoint-shaped belongs to `internal/server`
    (business `/v1/*`, `/admin/*`, probes); everything wire-format-shaped
    belongs to `internal/protocol`.
@@ -59,11 +61,13 @@ existing packages, never as new top-level directories. The zoning rules:
 | `POST /v1/responses`       | OpenAI Responses      | `Authorization: Bearer`  | Translated: input/instructions/max_output_tokens in, Responses objects and `response.*` events out |
 | `POST /v1/messages`        | Anthropic Messages    | `x-api-key` or Bearer    | Translated: system/blocks/required `max_tokens` in, Messages objects and `message_*` events out; `stop_sequences` refused rather than silently dropped |
 
-Every response carries an `X-Request-Id` header: a well-formed
+Every inference response carries an `X-Request-Id` header: a well-formed
 client-supplied id is adopted verbatim, otherwise one is minted
 (`req-` prefix). The id travels to the upstream exchange and into the
 access log, so one identifier joins the client-visible outcome, the
-gateway's log line and the provider's records.
+gateway's log line and the provider's records. The correlation stage
+belongs to the inference chain: the admin, discovery and probe routes do
+not carry one.
 
 `GET /v1/models` lists the client-facing model names in the OpenAI
 list form, so OpenAI-compatible clients can discover what to ask for.
@@ -94,8 +98,11 @@ All three walk the identical governance pipeline (auth → model
 authorization → concurrency → rate limit → quota → cache) and the identical relay engine; only the wire differs.
 The canonical wire is openai-chat: unknown request fields survive byte
 passthrough, while translated formats ingest a declared subset and
-reject what they cannot express honestly. Text content only — image or
-tool blocks are rejected at ingest. The exact-match cache serves the
+reject what they cannot express honestly. Translated formats take text
+only: a non-text input part or message block is rejected at ingest. The
+canonical wire forwards verbatim, so tool declarations and tool messages pass
+through untouched, while a multimodal `content` array fails the canonical decode
+and is rejected as a malformed request. The exact-match cache serves the
 canonical wire (translated replays would need response re-rendering,
 which is deliberately not faked).
 
@@ -145,15 +152,17 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants` with `role` and user-level `overrides`); arms the governance pipeline |
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
+| `BREAKWATER_REDIS_NAMESPACE`          | _(none)_       | Prefixes every limiter and quota key. Set it whenever two deployments share one Redis instance — otherwise they share tenant balances, and one environment's sweeper refunds the other's live leases. Empty assumes this gateway owns its Redis outright. **Setting it on a deployment that already has balances moves every key, and the static-identity seeder then re-provisions each tenant at its full monthly budget** — treat it as a reset, not a rename. A PostgreSQL-identity deployment has no seeder, so there a namespace change leaves every tenant without a ledger until one is provisioned. |
+| `BREAKWATER_QUOTA_LEASE_TTL`          | _derived_      | How long a reserved quota lease may live before the sweeper reclaims and refunds it. Derived from `OverallDeadline + StreamTimeout` plus headroom, because a horizon shorter than the longest request silently refunds a request that really spent tokens; a value below that is rejected at startup. An unbounded stream or deadline leaves nothing to derive from, so those default to 24h. |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | Upstream attempts per request                              |
 | `BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT` | `64`         | Process-wide concurrent retry cap                          |
-| `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | Ceiling of a committed stream's body (after the headers); `0` lets the client own the stream's lifetime |
+| `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | Ceiling of a committed stream's body (after the headers); `0` lets the client own the stream's lifetime. Keep it looser than the attempt timeout, which bounds time-to-first-byte: otherwise a slow header is cut by this ceiling, and the request fails over instead of waiting for it. |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | Exact-match response cache      |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
-| `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing (PRD Q6); needs Redis + PostgreSQL; `0` disables |
+| `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing; needs Redis + PostgreSQL; `0` disables |
 | `BREAKWATER_INSIGHTS_DSN`             | _(main DSN)_   | PostgreSQL the monitoring records persist to; defaults to `BREAKWATER_POSTGRES_DSN`; unset without any DSN |
 
 ## Operations surface
@@ -179,8 +188,10 @@ Beyond the operator switches, the gateway keeps upstreams honest on
 its own:
 
 - A completed upstream exchange that proves a **fatal condition** —
-  rejected credentials (401, or a 403 with a provider-API error
-  envelope) or an exhausted budget (`insufficient_quota`, which OpenAI
+  rejected credentials (401, or a 403 whose provider error envelope is
+  credential-class — type `authentication_error` or code `invalid_api_key`; a
+  403 for model access, region or content policy stays retryable) or an
+  exhausted budget (`insufficient_quota`, which OpenAI
   reports as a 429) — takes the upstream out of rotation immediately,
   with the reason recorded in `/admin/routing` and counted in
   `breakwater_upstream_auto_disabled_total`.
@@ -284,15 +295,15 @@ through the composed gateway:
 
 CI enforces `gofmt`, `go vet`, `golangci-lint` and `go test -race ./...`
 (with Redis and PostgreSQL service containers for the Lua and identity
-integration tests). Statement coverage is held at or above 95% per
-package, with one documented exception: the PostgreSQL-backed stores
-keep part of their SQL behind the DSN-gated integration tests and read
-somewhat lower on a local run (`docs/TESTING.md` carries the numbers).
+integration tests). Every package meets the 95% statement-coverage bar in
+that environment; a local run without Redis and PostgreSQL reads lower for
+the three packages whose SQL paths sit behind the database-gated tests,
+and `docs/TESTING.md` lists the measured numbers for both.
 The taxonomy (unit / functional / integration / concurrency /
 benchmark) and the naming rules live in `docs/TESTING.md`. Reliability
-mechanisms (token bucket, circuit breaker, retry, singleflight) are
-implemented in this repository by discipline; third-party governance
-libraries are rejected by lint rule.
+mechanisms (token bucket, circuit breaker, singleflight, rate limiting) are
+implemented in this repository by discipline; the four matching third-party
+libraries are denied at lint time by the `no-off-the-shelf-governance` rule.
 
 ## Documentation
 

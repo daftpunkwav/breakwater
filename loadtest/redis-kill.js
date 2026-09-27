@@ -1,6 +1,6 @@
 // redis-kill: the governance backend dies mid-run; every degradation
 // must be visible and safe — rate limiting fail-closed (503/429, never
-// silent pass-through), cache bypass, quota fail-closed (PRD Q4).
+// silent pass-through), the process-local cache unaffected, quota
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... redis-kill.js
 // Mid-run: docker stop $(docker ps -qf name=redis); restart it a few

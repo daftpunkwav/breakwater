@@ -9,8 +9,10 @@
 
 - Load generator: k6 (`loadtest/`), constant-arrival-rate executors so
   offered load is independent of system response time.
-- Upstream: `mockllm` with fixed completion length (`X-Mockllm-Completion-Tokens`),
-  so byte volume is comparable across runs.
+- Upstream: `mockllm` with its default completion length of 32 words, so
+  byte volume is comparable across runs. The mock also accepts
+  `X-Mockllm-Completion-Tokens`, but the gateway forwards no client header
+  to the upstream, so a gateway-mediated run always uses the default.
 - Machine and process placement, Go version and Redis/PostgreSQL
   versions are recorded per run below.
 - Latency is end-to-end client-side (k6 `http_req_duration`); gateway
@@ -40,7 +42,7 @@
 
 ## Gateway self-loss
 
-Acceptance target (PRD §7.6): with a zero-delay upstream, the gateway's
+Acceptance target: with a zero-delay upstream, the gateway's
 P99 forwarding overhead should stay in single-digit milliseconds.
 
 | Run | mockllm P99 direct | through gateway | delta |

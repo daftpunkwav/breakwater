@@ -1,6 +1,6 @@
 // rate-limit: an over-limit stampede must get 100% 429 with
 // Retry-After, and the upstream QPS must show a hard ceiling
-// (invariant I1: rejected requests never touch an upstream).
+// (rejected requests must never touch an upstream).
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... rate-limit.js
 // Tier RPM must be small for the run (e.g. 60): over-limit is the point.

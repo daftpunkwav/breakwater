@@ -1,5 +1,5 @@
 // cache-hit: identical deterministic requests; measures hit rate and
-// the hit-vs-fetch latency gap (invariant I2 economics).
+// the hit-vs-fetch latency gap.
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... cache-hit.js
 import http from 'k6/http';
@@ -37,4 +37,4 @@ export default function () {
 }
 // Hit rate and fetch count are read from the gateway afterwards:
 //   curl -s $BASE_URL/metrics | grep -E 'cache_(hit|miss|upstream_fetch)'
-// I2 assertion: upstream_fetch_total == 1 regardless of request count.
+// The key assertion: upstream_fetch_total == 1 regardless of request count.

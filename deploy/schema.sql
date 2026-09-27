@@ -1,8 +1,8 @@
 -- Initial identity and tiering schema for the breakwater gateway.
--- Covers tiers, tenants and API keys; quota ledger and reconciliation
--- DDL land together with the lease protocol implementation.
--- Schema changes are applied on first boot of a fresh database; a
--- migration mechanism joins with the auth milestone.
+-- Covers tiers, tenants and API keys, the quota ledger snapshots the
+-- reconcile protocol reads back, and the monitoring record store.
+-- Every statement is IF NOT EXISTS, so the file is applied to a fresh
+-- database on first boot and re-applying it is a no-op.
 
 -- Tier is the unit of quota and permission management: tenants reference
 -- a tier instead of carrying their own limits, so bulk administration
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys (tenant_id);
 
--- Ledger snapshots taken by the reconcile protocol (PRD Q6): every
+-- Ledger snapshots taken by the reconcile protocol: every
 -- interval the Redis hot ledger is appended here, and consecutive
 -- snapshots must satisfy the balance identity (the balance falls only
 -- by debits minus refunds; every balance movement pairs with exactly
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS quota_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_quota_snapshots_tenant ON quota_snapshots (tenant_id, taken_at DESC);
 
--- The monitoring and assessment record (PRD observability): one row
+-- The monitoring and assessment record: one row
 -- per finished request, written asynchronously in batches. The
 -- failure taxonomy lives in error_code: the governance rejection code
 -- (missing_api_key, invalid_api_key, identity_unavailable,

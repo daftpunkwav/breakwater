@@ -1,6 +1,6 @@
 // retry-storm: an intermittently failing upstream (50% injected errors)
 // plus a small per-request attempt cap; asserts the retry amplification
-// stays bounded by the budgets (invariant I5).
+// stays bounded by the budgets.
 //
 //   go run ./cmd/mockllm -addr 127.0.0.1:8090 -error-rate 0.5
 //   k6 run -e BASE_URL=... -e API_KEY=... retry-storm.js

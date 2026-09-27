@@ -9,7 +9,7 @@ no separate test tree, no parallel hierarchy to drift.
 | Kind | Where | What |
 | ---- | ----- | ---- |
 | Unit | `internal/<pkg>/*_test.go`, same package | One mechanism, one file: state machines, Lua-backed ledger semantics (via miniredis), token buckets, limit merge layers, transcoders, codecs, helpers. White-box where branches demand it. |
-| Functional | `internal/server/chain_test.go`, `inference_formats_test.go`, `completions_test.go`, `model_authz_cache_test.go` | Full pipeline scenarios through the real routes: the S1–S8 acceptance scenarios, the three client formats, honest stream termination, cache refund accounting, the tier-authorization/cache interplay. |
+| Functional | `internal/server/chain_test.go`, `inference_formats_test.go`, `completions_test.go`, `model_authz_cache_test.go` | Full pipeline scenarios through the real routes: the eight acceptance scenarios (key rejection, rate limiting, zero-settlement on failure, quota exhaustion, streaming through governance, tier denial, client-disconnect settlement and request-id echo), the three client formats, honest stream termination, cache refund accounting, the tier-authorization/cache interplay. |
 | Integration | `*_integration_test.go`, env-gated | Real PostgreSQL and Redis (the CI workflow provisions both as service containers). Locally they skip unless `BREAKWATER_TEST_POSTGRES_DSN` / `BREAKWATER_TEST_REDIS_ADDR` are set. |
 | Concurrency / race | everywhere, `-race` is the CI default | The invariant evidence: concurrent quota drains reconcile to zero error, stampede fetches run exactly once, breaker probe slots never double-grant, the concurrency gate never exceeds its ceiling, logger drops stay counted. |
 | Benchmark | `*_bench_test.go` | SSE pump, singleflight stampede and concurrency-gate locking baselines (`go test -bench`). |
@@ -26,26 +26,49 @@ no separate test tree, no parallel hierarchy to drift.
 
 ## Invariant map
 
-Every system invariant is numbered `I1`–`I10` in the code comments of
-the package that owns it, and each number names at least one test —
-grep `invariant I` for the map of mechanisms to their guards. The
-numbering lives with the code so it cannot drift into a separate
-document.
+Every mechanism below states the property it guarantees, the code that
+owns it, and a test that fails when the property breaks. The test names
+are the index — run any of them to check the property directly.
+
+| Property | Owner | Guarding test |
+| -------- | ----- | ------------- |
+| A rejected request never reaches an upstream | `internal/server`, `internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`, `TestChainRateLimitsWithRetryAfter`, `TestChainQuotaExhaustionIsPaymentRequired`, `TestChainDeniesModelOutsideTier` |
+| Concurrent cold requests for one cache key cause exactly one upstream fetch | `internal/cache` | `TestFlightSingleFetchUnderStampede`, `TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
+| A panicking fetch releases its waiters instead of wedging them | `internal/cache` | `TestFlightPanicReleasesWaiters` |
+| A request never exceeds its attempt cap, and retries never exceed the global in-flight budget | `internal/retry` | `TestExecuteCapsAttempts`, `TestBudgetCapsInFlightRetries`, `TestBudgetReleaseAbsorbsImbalance` |
+| After the first response byte, the loop never retries | `internal/retry`, `internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
+| An open breaker denies every call; half-open admits exactly one probe and reclaims abandoned ones | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`, `TestBreakerReclaimsAbandonedProbe` |
+| A broken stream keeps its delivered bytes and ends with one error event plus `[DONE]` | `internal/relay`, `internal/protocol` | `TestWriteAbortContract`, `TestWriteAbortAllCodes`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
+| The balance never over-drafts; debits minus refunds reconcile against the balance | `internal/quota` | `TestMemoryConcurrentDrainReconciles`, `TestRedisConcurrentDrainReconciles` |
+| Every reservation has a lease record; abandoned leases are reclaimed | `internal/quota` | `TestStartSweeperReclaimsUntilCancelled` |
+| A client gone mid-stream still settles by the tokens it consumed | `internal/quota`, `internal/server` | `TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage` |
+| A full observation buffer drops and counts rather than blocking handlers | `internal/obs`, `internal/insights` | `TestLoggerDropsOldestUnderPressure`, `TestRecordQueuesAndCountsDrops` |
+| A failed batch write is counted, not retried silently | `internal/insights` | `TestCopyIntoDropsOnFailure` |
+| The observation queue drains before the process exits | `cmd/breakwater`, `internal/obs`, `internal/insights` | `TestLoggerCloseDrains`, `TestWriteLoopFlushesOnClose` |
 
 ## Coverage
 
-The bar is ≥95% statement coverage per package. Local measurement
-splits into two classes:
+The bar is ≥95% statement coverage per package, and the CI coverage job
+enforces it. That job provisions Redis and PostgreSQL, so the
+database-gated integration tests run there — which is the environment the
+bar is written for. A local `go test -cover ./...` without those two
+services reads lower, because whole SQL paths sit behind
+`BREAKWATER_TEST_POSTGRES_DSN` and `BREAKWATER_TEST_REDIS_ADDR`:
 
-- Packages whose tests are self-contained sit at 95–100% locally.
-- The PostgreSQL-backed stores (identity, insights) keep a share of
-  their SQL paths behind the DSN-gated integration tests; locally
-  they read 85–90%, with every live-database branch covered when CI's
-  coverage gate runs with both databases provisioned. The residual
-  uncovered lines are defensive guards (`crypto/rand` failure
-  branches, pool teardown) that cannot be triggered on a real host
-  and are disclosed rather than faked.
+| Package | Local, no databases | With both services |
+| ------- | ------------------- | ------------------ |
+| `internal/auth` | 90.5% | ~99% |
+| `internal/insights` | 94.5% | ~99% |
+| `cmd/breakwater` | 94.7% | ~96% |
 
-Verify with:
+Every other package reads ≥95% locally, without any service. What
+remains uncovered in `cmd/breakwater` even with both databases is a set
+of defensive error returns that no valid configuration can reach: the
+upstream adapter and the router are already built from validated
+configuration, so their error branches exist for a future where they are
+constructed some other way. Those are disclosed rather than faked with
+tests that would pass regardless.
+
+Verify the local figures with:
 
     go test -cover ./...

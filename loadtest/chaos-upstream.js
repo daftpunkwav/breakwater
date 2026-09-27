@@ -1,6 +1,6 @@
 // chaos-upstream: the mock upstream fails ~100%; asserts the breaker
 // opens (failures become fast 503s instead of slow timeouts) and later
-// recovers through a half-open probe (invariants I4/I6).
+// recovers through a half-open probe.
 //
 // Start the stack with a fully failing upstream:
 //   go run ./cmd/mockllm -addr 127.0.0.1:8090 -error-rate 1.0

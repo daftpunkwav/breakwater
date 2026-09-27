@@ -105,6 +105,13 @@ upstream and the gateway. To use it with real providers, export the
 environment for the `breakwater` service (or extend the `environment`
 block in `deploy/docker-compose.yml`) before `up`.
 
+The composed gateway resolves its keys from `BREAKWATER_IDENTITY` and
+does not set `BREAKWATER_POSTGRES_DSN`, so it reads no rows from the
+seeded database — those rows exist for the load-test scenarios, which
+call the gateway with the seeded keys. Add the DSN to make the database
+the gateway's system of record, and expect the seeded tenants to become
+the live ones.
+
 ## 6. Operate
 
 | Need                                | Surface                                            |
@@ -120,7 +127,7 @@ block in `deploy/docker-compose.yml`) before `up`.
 | Revoke one leaked key               | `PUT /admin/keys/{id}/status` `{"enabled": false}` |
 | Tenant balance / top-up             | `GET`/`PUT /admin/tenants/{id}/quota`              |
 | Stability report (the assessment view) | `GET /admin/insights?hours=24` — success rate, failure causes, latency percentiles, per-tenant/key/model/upstream slices |
-| Per-request audit trail             | `BREAKWATER_ACCESS_LOG_PATH` JSONL, keyed by `X-Request-Id` |
+| Per-request audit trail             | `BREAKWATER_ACCESS_LOG_PATH` JSONL; the `RequestID` member holds the `X-Request-Id` value |
 
 The monitoring store (`BREAKWATER_INSIGHTS_DSN`, defaulting to the
 identity DSN) persists one row per finished request — including the
