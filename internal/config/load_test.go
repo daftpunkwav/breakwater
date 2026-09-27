@@ -23,6 +23,7 @@ var envVars = []string{
 	envCircuitEnabled, envCircuitThreshold, envCircuitCooldown, envCircuitProbe,
 	envAccessLogPath, envAdminToken, envRouting,
 	envProbeInterval, envProbeTimeout, envProbePasses,
+	envFallbacks, envContextLimits,
 }
 
 // cleanEnv sets every BREAKWATER_* variable to the empty string, which
@@ -123,6 +124,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envProbeInterval, "0s")
 	t.Setenv(envProbeTimeout, "7s")
 	t.Setenv(envProbePasses, "3")
+	t.Setenv(envFallbacks, `{"m1":["m2","m3"]}`)
+	t.Setenv(envContextLimits, `{"m1":128000,"m2":32000}`)
 
 	cfg, err := Load()
 	if err != nil {
@@ -177,6 +180,12 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.Routing.Strategy != "latency" {
 		t.Fatalf("routing = %+v", cfg.Routing)
+	}
+	if cfg.Fallbacks["m1"][0] != "m2" || cfg.Fallbacks["m1"][1] != "m3" || len(cfg.Fallbacks) != 1 {
+		t.Fatalf("fallbacks = %+v", cfg.Fallbacks)
+	}
+	if cfg.ContextLimits["m1"] != 128000 || cfg.ContextLimits["m2"] != 32000 || len(cfg.ContextLimits) != 2 {
+		t.Fatalf("context limits = %+v", cfg.ContextLimits)
 	}
 }
 

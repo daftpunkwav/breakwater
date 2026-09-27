@@ -138,6 +138,13 @@ type Job struct {
 	// attempt n uses candidate min(n, len)-1, so failover walks the list
 	// once and extra attempts re-hit the last fallback.
 	Candidates []upstream.Upstream
+	// Fallbacks are the client-facing models tried, in order, when
+	// every candidate of the primary model is exhausted. Empty
+	// disables the chain.
+	Fallbacks []string
+	// Resolve turns a fallback model into its candidate list at the
+	// moment the chain reaches it; nil ignores Fallbacks.
+	Resolve CandidateResolver
 	// Wire presents the exchange in the client's format; nil selects
 	// the canonical wire (openai-chat, byte passthrough).
 	Wire protocol.Wire
@@ -215,6 +222,19 @@ type run struct {
 	// branch that will render the final error; a mid-stream abort
 	// records its in-stream code instead.
 	gatewayCode string
+
+	// batches is the fallback plan: the primary model's candidates
+	// plus every fallback batch resolved so far, append-only. bi is
+	// the current batch, batchStart the attempt index where it began,
+	// fi the next unread position of the Job's chain, and attempted
+	// the cycle guard over resolved models. lastCand is the previous
+	// attempt's candidate, for the failover metric.
+	batches    []batch
+	bi         int
+	batchStart int
+	fi         int
+	attempted  map[string]bool
+	lastCand   upstream.Upstream
 }
 
 // Execute runs the job. Exactly one HTTP response is written to
@@ -235,7 +255,12 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 	if wire == nil {
 		wire = protocol.WireFor("")
 	}
-	r := &run{exec: e, job: job, ctx: ctx, wire: wire}
+	r := &run{
+		exec: e, job: job, ctx: ctx, wire: wire,
+		batches:    []batch{{model: job.Model, candidates: job.Candidates}},
+		batchStart: 1,
+		attempted:  map[string]bool{job.Model: true},
+	}
 	err := retry.Execute(ctx, e.policy, e.budget, e.classifier, nil, r.attempt)
 	return r.finish(err)
 }
@@ -244,16 +269,15 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 // report. It is the AttemptFunc of the retry loop.
 func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	r.attempts = attempt
+	cand, model := r.target(attempt)
 	if attempt > 1 {
 		r.retries = attempt - 1
-		r.exec.metrics.RetryScheduled(r.job.Candidates[min(attempt, len(r.job.Candidates))-1].ID())
-		prev := r.job.Candidates[min(attempt-1, len(r.job.Candidates))-1]
-		curr := r.job.Candidates[min(attempt, len(r.job.Candidates))-1]
-		if prev.ID() != curr.ID() {
-			r.exec.metrics.Failover(prev.ID(), curr.ID())
+		r.exec.metrics.RetryScheduled(cand.ID())
+		if r.lastCand != nil && r.lastCand.ID() != cand.ID() {
+			r.exec.metrics.Failover(r.lastCand.ID(), cand.ID())
 		}
 	}
-	cand := r.job.Candidates[min(attempt, len(r.job.Candidates))-1]
+	r.lastCand = cand
 
 	var perm circuit.Permission
 	if r.exec.breaker != nil {
@@ -265,7 +289,7 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	}
 
 	started := time.Now()
-	outcome, err := r.exchange(attemptCtx, cand)
+	outcome, err := r.exchange(attemptCtx, cand, model)
 	if r.exec.observer != nil {
 		// A client walking away cancels the exchange; that is nobody's
 		// fault but the network's own and must not demote the upstream.
@@ -287,9 +311,11 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	// the same upstream: stripping on the final attempt would replace
 	// the error with a clone and break the identity match the
 	// last-failed passthrough in finish relies on. No retry can read
-	// the hint then, so leaving it is free.
-	if r.exec.policy.MaxAttempts > attempt {
-		if next := r.job.Candidates[min(attempt+1, len(r.job.Candidates))-1]; next.ID() != cand.ID() {
+	// the hint then, so leaving it is free — which is also why a
+	// committed error skips the lookahead entirely: the loop ends on
+	// it without ever consulting anything.
+	if !errors.Is(err, retry.ErrCommitted) && r.exec.policy.MaxAttempts > attempt {
+		if next, _ := r.target(attempt + 1); next.ID() != cand.ID() {
 			err = retry.StripRetryAfter(err)
 		}
 	}

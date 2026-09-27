@@ -80,6 +80,9 @@ const (
 	envProbeInterval = "BREAKWATER_PROBE_INTERVAL"
 	envProbeTimeout  = "BREAKWATER_PROBE_TIMEOUT"
 	envProbePasses   = "BREAKWATER_PROBE_THRESHOLD"
+
+	envFallbacks     = "BREAKWATER_FALLBACKS"
+	envContextLimits = "BREAKWATER_CONTEXT_LIMITS"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -136,6 +139,12 @@ func Load() (Config, error) {
 	}
 
 	var err error
+	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
+		return Config{}, err
+	}
+	if cfg.ContextLimits, err = envJSONMap[int64](envContextLimits); err != nil {
+		return Config{}, err
+	}
 	if cfg.Server.ShutdownGrace, err = envDuration(envShutdownGrace, cfg.Server.ShutdownGrace); err != nil {
 		return Config{}, err
 	}
@@ -251,6 +260,27 @@ func Load() (Config, error) {
 	if cfg.Probe.Interval > 0 && cfg.Probe.Threshold < 1 {
 		return Config{}, fmt.Errorf("config: %s must be positive when %s is enabled", envProbePasses, envProbeInterval)
 	}
+	for model, limit := range cfg.ContextLimits {
+		if model == "" {
+			return Config{}, fmt.Errorf("config: %s has an empty model name", envContextLimits)
+		}
+		if limit <= 0 {
+			return Config{}, fmt.Errorf("config: %s limits model %q must be positive", envContextLimits, model)
+		}
+	}
+	for model, chain := range cfg.Fallbacks {
+		if model == "" {
+			return Config{}, fmt.Errorf("config: %s has an empty model name", envFallbacks)
+		}
+		if len(chain) == 0 {
+			return Config{}, fmt.Errorf("config: %s lists no fallbacks for model %q", envFallbacks, model)
+		}
+		for _, f := range chain {
+			if f == "" {
+				return Config{}, fmt.Errorf("config: %s has an empty fallback for model %q", envFallbacks, model)
+			}
+		}
+	}
 	for i, u := range cfg.Upstreams {
 		if u.ID == "" || u.BaseURL == "" {
 			return Config{}, fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
@@ -308,6 +338,20 @@ func envJSON[T any](key string) ([]T, error) {
 		return nil, nil
 	}
 	var out []T
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", key, err)
+	}
+	return out, nil
+}
+
+// envJSONMap decodes a JSON-valued environment variable into a map; an
+// unset or empty variable yields nil without error.
+func envJSONMap[T any](key string) (map[string]T, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil, nil
+	}
+	var out map[string]T
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", key, err)
 	}

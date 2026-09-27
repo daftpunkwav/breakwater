@@ -25,6 +25,15 @@ type Config struct {
 	// deployments without a database; its schema is owned by the auth
 	// package, keeping this package a leaf.
 	Identity string
+	// Fallbacks maps a client-facing model to the ordered list of
+	// fallback models tried when every candidate of the primary model
+	// is exhausted. Membership against the configured model names is
+	// validated at assembly, not here (this package is a leaf).
+	Fallbacks map[string][]string
+	// ContextLimits maps a client-facing model to its maximum input
+	// token estimate; requests above the limit skip that model's
+	// candidates. Zero entries are rejected at load.
+	ContextLimits map[string]int64
 	// ReconcileInterval paces the quota ledger reconciliation (PRD Q6);
 	// zero disables the protocol.
 	ReconcileInterval time.Duration

@@ -16,6 +16,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -23,7 +24,16 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
 	"github.com/daftpunkwav/breakwater/internal/router"
+	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
+
+// overContext reports whether the model declares an input ceiling and
+// the prompt exceeds it — the one condition the pre-filter refuses.
+// Models without a ceiling are unlimited; the estimate fails open.
+func overContext(limits map[string]int64, model string, inputTokens int64) bool {
+	limit, ok := limits[model]
+	return ok && limit > 0 && inputTokens > limit
+}
 
 // routeOfFormat maps a client format to its route path.
 func routeOfFormat(format protocol.Format) string {
@@ -42,11 +52,37 @@ type Inference struct {
 	format  protocol.Format
 	router  router.Router
 	relayer *relay.Executor
+	// fallbacks maps the client-facing model to its ordered fallback
+	// models; a nil map or a missing model means no chain.
+	fallbacks map[string][]string
+	// contextLimits maps the client-facing model to its maximum input
+	// token estimate; a model whose ceiling the request cannot fit
+	// loses every candidate up front.
+	contextLimits map[string]int64
+}
+
+// InferenceOption customizes an Inference.
+type InferenceOption func(*Inference)
+
+// WithFallbacks installs the per-model fallback chains; nil (the
+// default) disables them.
+func WithFallbacks(m map[string][]string) InferenceOption {
+	return func(s *Inference) { s.fallbacks = m }
+}
+
+// WithContextLimits installs the per-model input ceilings; nil (the
+// default) disables the pre-filter.
+func WithContextLimits(m map[string]int64) InferenceOption {
+	return func(s *Inference) { s.contextLimits = m }
 }
 
 // NewInference builds the endpoint handler for one client format.
-func NewInference(format protocol.Format, rt router.Router, relayer *relay.Executor) *Inference {
-	return &Inference{format: format, router: rt, relayer: relayer}
+func NewInference(format protocol.Format, rt router.Router, relayer *relay.Executor, opts ...InferenceOption) *Inference {
+	s := &Inference{format: format, router: rt, relayer: relayer}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ServeHTTP implements http.Handler.
@@ -91,11 +127,43 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Context-window pre-filter: a model whose declared ceiling cannot
+	// hold the prompt loses every candidate before the relay spends an
+	// attempt on a doomed exchange. The estimate is approximate by
+	// design, so the filter fails open — models without a ceiling are
+	// never filtered.
+	inputTokens := pipeline.PromptTokens(carrier.Chat)
+	if overContext(s.contextLimits, carrier.Chat.Model, inputTokens) {
+		wire.RenderError(w, http.StatusRequestEntityTooLarge, "context_window_exceeded",
+			"prompt does not fit any candidate model for "+carrier.Chat.Model)
+		return
+	}
+
+	// The fallback chain and its resolver: the relay walks the chain
+	// only when the primary model's candidates are exhausted, and the
+	// resolver applies the same context filter to every hop.
+	var chain []string
+	if len(s.fallbacks) > 0 {
+		chain = s.fallbacks[carrier.Chat.Model]
+	}
+	var resolve relay.CandidateResolver
+	if len(chain) > 0 {
+		limits, rt := s.contextLimits, s.router
+		resolve = func(ctx context.Context, model string) ([]upstream.Upstream, error) {
+			if overContext(limits, model, inputTokens) {
+				return nil, router.ErrUnavailable
+			}
+			return rt.Candidates(ctx, model)
+		}
+	}
+
 	result := s.relayer.Execute(r.Context(), relay.Job{
 		Model:      carrier.Chat.Model,
 		Stream:     carrier.Chat.Stream,
 		Body:       carrier.UpstreamBody,
 		Candidates: candidates,
+		Fallbacks:  chain,
+		Resolve:    resolve,
 		Wire:       wire,
 		RequestID:  carrier.RequestID,
 		Out:        w,

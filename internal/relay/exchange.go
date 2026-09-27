@@ -28,10 +28,12 @@ import (
 )
 
 // exchange performs one upstream attempt and returns the breaker
-// outcome alongside the loop error.
-func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream) (circuit.Outcome, error) {
+// outcome alongside the loop error. The model is the batch's
+// client-facing name — the fallback plan may have moved it off the
+// Job's original model.
+func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model string) (circuit.Outcome, error) {
 	req := upstream.Request{
-		Model:     r.job.Model,
+		Model:     model,
 		Stream:    r.job.Stream,
 		Body:      r.job.Body,
 		RequestID: r.job.RequestID,
@@ -84,7 +86,7 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream) (circ
 		lease.end()
 		return circuit.OutcomeServerFault, r.ttftTimeoutError()
 	}
-	return r.exchangeStream(cand, resp, lease)
+	return r.exchangeStream(cand, resp, lease, model)
 }
 
 // exchangeBuffered handles a non-streaming exchange: the body is
@@ -114,7 +116,7 @@ func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) 
 // as retryable; after it, any failure terminates through the client
 // format's honest termination and is reported as committed (no
 // transparent retry).
-func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, lease *streamLease) (circuit.Outcome, error) {
+func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, lease *streamLease, model string) (circuit.Outcome, error) {
 	// Commit: from here on the loop must never see a plain error.
 	header := r.job.Out.Header()
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -140,7 +142,7 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	var pumpErr error
 	transcoder := r.wire.Stream()
 	if transcoder != nil {
-		usage, usageKnown, streamBytes, pumpErr = pumpTranscoded(r.job.Out, resp.Body, transcoder, r.job.Model)
+		usage, usageKnown, streamBytes, pumpErr = pumpTranscoded(r.job.Out, resp.Body, transcoder, model)
 	} else {
 		usage, usageKnown, streamBytes, pumpErr = pumpStream(r.job.Out, resp.Body)
 	}

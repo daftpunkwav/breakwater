@@ -83,6 +83,13 @@ request carries its own failover chain — and because each upstream
 rewrites to its own real name, a mid-request failover can cross
 providers and models, not just hosts.
 
+Chains can extend across models: `BREAKWATER_FALLBACKS` maps a model
+to fallback models tried in order once its own candidates are
+exhausted — each hop re-resolves candidates, rewrites the forwarded
+body's model name, and never re-enters a model already tried. The
+chain is a preference list, not a contract: a hop that cannot serve
+(disabled, unbound, prompt over its context ceiling) is skipped.
+
 All three walk the identical governance pipeline (auth → model
 authorization → concurrency → rate limit → quota → cache) and the identical relay engine; only the wire differs.
 The canonical wire is openai-chat: unknown request fields survive byte
@@ -133,6 +140,8 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_ADDR`                     | `:8080`        | Listen address                                             |
 | `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `models`; list order = failover priority; `"client=real"` entries alias model names) |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | Candidate order: `static` (configured order) or `latency` (measured exchange latency first; near-tied candidates trade the lead per request, configured order breaks remaining ties; untried upstreams are explored first) |
+| `BREAKWATER_FALLBACKS`                | _(none)_       | JSON map of model → ordered fallback models, tried when every candidate of the primary model is exhausted (`{"gpt-4o":["gpt-4o-mini"]}`); keys and targets must name configured client-facing models |
+| `BREAKWATER_CONTEXT_LIMITS`           | _(none)_       | JSON map of model → maximum input token estimate; a prompt above the ceiling refuses that model's candidates up front with `413 context_window_exceeded` instead of a doomed upstream exchange |
 | `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants` with `role` and user-level `overrides`); arms the governance pipeline |
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |

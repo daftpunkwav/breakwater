@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -157,6 +158,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		return err
 	}
 	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams))
+	if err := validateModelNames(knownModels(cfg.Upstreams), cfg.Fallbacks, cfg.ContextLimits); err != nil {
+		return err
+	}
 	tracker := router.NewTracker()
 	rt, err := router.NewPriority(bindings,
 		router.WithBreaker(breaker),
@@ -181,7 +185,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, metrics, logger)),
 	)
 
-	// One chain per client format, one route per chain.
+	// One chain per client format, one route per chain. The fallback
+	// chains and the context ceilings ride on every format: both are
+	// model-level decisions, and the relay applies them per request.
 	inference := make(map[protocol.Format]http.Handler, len(formats))
 	for _, format := range formats {
 		stages := append([]pipeline.Middleware{
@@ -189,7 +195,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 			pipeline.RequestIDStage(),
 			pipeline.FormatStage(format),
 		}, governance...)
-		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer))
+		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer,
+			server.WithFallbacks(cfg.Fallbacks),
+			server.WithContextLimits(cfg.ContextLimits)))
 	}
 
 	adminOpts := []server.AdminOption{
@@ -390,6 +398,38 @@ func autoDisableHook(routingSwitch *router.Switch, metrics *obs.Metrics, logger 
 		logger.Warn("upstream auto-disabled, dropping from rotation",
 			"upstream", upstreamID, "reason", reason)
 	}
+}
+
+// validateModelNames fails startup when a fallback chain or a context
+// ceiling names a model no configured upstream serves: a typo'd name
+// must refuse to boot, never fire silently or filter silently.
+func validateModelNames(known []string, fallbacks map[string][]string, limits map[string]int64) error {
+	set := make(map[string]struct{}, len(known))
+	for _, n := range known {
+		set[n] = struct{}{}
+	}
+	check := func(model, kind string) error {
+		if _, ok := set[model]; ok {
+			return nil
+		}
+		return fmt.Errorf("config: %s %q names no configured client-facing model", kind, model)
+	}
+	for model, chain := range fallbacks {
+		if err := check(model, "fallback key"); err != nil {
+			return err
+		}
+		for _, f := range chain {
+			if err := check(f, "fallback target"); err != nil {
+				return err
+			}
+		}
+	}
+	for model := range limits {
+		if err := check(model, "context limit"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // buildBindings turns configured upstreams into ordered router bindings,

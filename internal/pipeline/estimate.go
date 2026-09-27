@@ -45,6 +45,14 @@ func EstimatePartialTokens(req protocol.ChatRequest, streamBytes int64) int64 {
 	return promptEstimate(req) + streamBytes/4
 }
 
+// PromptTokens returns the prompt-only estimate: the input size the
+// context-window pre-filter compares against per-model ceilings. The
+// reservation math stays in EstimateTokens, which adds the completion
+// budget on top.
+func PromptTokens(req protocol.ChatRequest) int64 {
+	return promptEstimate(req)
+}
+
 func promptEstimate(req protocol.ChatRequest) int64 {
 	prompt := int64(0)
 	for _, m := range req.Messages {
