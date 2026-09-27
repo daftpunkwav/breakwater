@@ -1,6 +1,6 @@
 /**
  * @file stream_termination_test
- * @description The honest termination of broken streams (invariant I6):
+ * @description The honest termination of broken streams:
  * delivered bytes stay sent, one error frame in the client's format
  * closes the stream, the committing candidate owns the abort, and a
  * client that walked away first ends the stream silently.

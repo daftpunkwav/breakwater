@@ -182,8 +182,9 @@ func TestMessagesRouteHonorsXAPIKey(t *testing.T) {
 	}
 }
 
-// TestMessagesRouteStreamAbortTerminatesHonestly is the I6 evidence in
-// the Messages format: delivered deltas stay, one error event closes.
+// TestMessagesRouteStreamAbortTerminatesHonestly is the termination
+// evidence in the Messages format: delivered deltas stay, one error
+// event closes.
 func TestMessagesRouteStreamAbortTerminatesHonestly(t *testing.T) {
 	t.Parallel()
 	backend := abortingUpstreamBackend(t)

@@ -26,7 +26,7 @@ func TestRedisLiveSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	r := NewRedis(client)
+	r := NewRedis(client, "")
 	limits := Limits{RPM: 1000, TPM: 100_000}
 	if d, err := r.Allow(ctx, "smoke", limits, 10); err != nil || !d.Allowed {
 		t.Fatalf("allow: %v %v", d.Allowed, err)

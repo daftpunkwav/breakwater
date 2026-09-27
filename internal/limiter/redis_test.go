@@ -19,7 +19,7 @@ func newTestRedis(t *testing.T) (*Redis, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewRedis(client), mr
+	return NewRedis(client, ""), mr
 }
 
 func TestRedisAllowWithinLimits(t *testing.T) {

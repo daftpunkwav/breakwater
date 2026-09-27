@@ -1,7 +1,7 @@
 /**
  * @file breaker_test
  * @description Breaker state machine tests: every transition path of
- * the frozen design, concurrent probe exclusivity (invariant I4) and
+ * every transition path, concurrent probe exclusivity and
  * the structural reclaim of abandoned probes.
  */
 package circuit
@@ -45,7 +45,7 @@ func TestBreakerOpensAfterSustainedFailures(t *testing.T) {
 	}
 	// Open: every call denied.
 	if _, ok := b.Allow(ctx, "u"); ok {
-		t.Fatal("open breaker granted a call (I4)")
+		t.Fatal("open breaker granted a call")
 	}
 }
 
@@ -143,7 +143,7 @@ func TestBreakerHalfOpenAdmitsSingleProbe(t *testing.T) {
 	// Concurrent arrivals are denied, never queued.
 	for range 5 {
 		if _, ok := b.Allow(ctx, "u"); ok {
-			t.Fatal("half-open admitted a second concurrent call (I4)")
+			t.Fatal("half-open admitted a second concurrent call")
 		}
 	}
 	probe.Report(OutcomeSuccess)
@@ -198,7 +198,7 @@ func TestBreakerReclaimsAbandonedProbe(t *testing.T) {
 		t.Fatal("grant after abandoned probe must be denied")
 	}
 	if got := b.StateOf(ctx, "u"); got != StateOpen {
-		t.Fatalf("state = %s, want open: the probe slot must not leak (I4)", got)
+		t.Fatalf("state = %s, want open: the probe slot must not leak", got)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestBreakerReadThenAllowProbes(t *testing.T) {
 	}
 }
 
-// TestBreakerConcurrentProbesExactlyOne is the I4 concurrency evidence
+// TestBreakerConcurrentProbesExactlyOne is the concurrency evidence
 // under -race: a stampede against a half-open breaker must grant
 // exactly one probe.
 func TestBreakerConcurrentProbesExactlyOne(t *testing.T) {
@@ -315,7 +315,7 @@ func TestBreakerConcurrentProbesExactlyOne(t *testing.T) {
 // rule: a report from a probe whose slot was already reclaimed must be
 // absorbed instead of acting on the probe granted to a later caller —
 // otherwise a stale success could close the breaker while the live
-// probe is still in flight (I4's exactly-one-probe guarantee).
+// probe is still in flight (the exactly-one-probe guarantee).
 func TestBreakerStaleProbeReportDoesNotHijack(t *testing.T) {
 	t.Parallel()
 	b, advance := testRegistry(t, nil)

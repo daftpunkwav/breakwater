@@ -1,7 +1,7 @@
 /**
  * @file logger_test
  * @description Access log tests: async drain, drop-oldest accounting
- * under pressure (invariant I7) and the shutdown flush (I8).
+ * under pressure and the shutdown flush.
  */
 package obs
 
@@ -113,7 +113,7 @@ func TestLoggerCloseDrains(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 	if got := l.Buffered(); got != 0 {
-		t.Fatalf("buffered = %d, want 0 after close (I8)", got)
+		t.Fatalf("buffered = %d, want 0 after close", got)
 	}
 	if !strings.Contains(out.String(), `"Status":4`) && !strings.Contains(out.String(), `"status":4`) {
 		t.Fatalf("last entry missing from %q", out.String())

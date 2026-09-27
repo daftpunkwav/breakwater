@@ -96,7 +96,7 @@ func TestRedisSnapshotReportsUnparseableBalance(t *testing.T) {
 
 	// A balance corrupted outside the ledger protocol must surface as a
 	// read failure, never as a zero or a skip.
-	_ = mr.Set(balanceKey("t"), "not-a-number")
+	_ = mr.Set(r.balanceKey("t"), "not-a-number")
 	if _, err := r.TenantSnapshot(ctx, "t", time.Now()); err == nil ||
 		!strings.Contains(err.Error(), "snapshot balance") {
 		t.Fatalf("err = %v, want the balance parse failure", err)
@@ -110,7 +110,7 @@ func TestRedisCancelUnknownLeaseIsSurfacedNoOp(t *testing.T) {
 
 	// A lease whose record is gone (audit window elapsed) cancels as a
 	// logged no-op that also drops the stale sweep entry.
-	if err := r.rdb.ZAdd(ctx, sweepKey(), redis.Z{
+	if err := r.rdb.ZAdd(ctx, r.sweepKey(), redis.Z{
 		Score:  float64(time.Now().Add(-time.Hour).UnixMilli()),
 		Member: "vanished-lease",
 	}).Err(); err != nil {
@@ -119,7 +119,7 @@ func TestRedisCancelUnknownLeaseIsSurfacedNoOp(t *testing.T) {
 	if err := r.Cancel(ctx, "vanished-lease"); err != nil {
 		t.Fatalf("cancel of a vanished lease: %v", err)
 	}
-	if card := r.rdb.ZCard(ctx, sweepKey()).Val(); card != 0 {
+	if card := r.rdb.ZCard(ctx, r.sweepKey()).Val(); card != 0 {
 		t.Fatalf("stale sweep entry survived: cardinality %d", card)
 	}
 }

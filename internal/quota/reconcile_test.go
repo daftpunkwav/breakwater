@@ -1,7 +1,7 @@
 /**
  * @file reconcile_test
  * @description Reconciliation protocol tests over miniredis: the
- * balance identity must hold across intervals (I3) — including
+ * balance identity must hold across intervals — including
  * in-flight reservations and overage settles, which are ledger facts,
  * not drift — manual corrections skip the check by design, and injected
  * drift is detected and reported.

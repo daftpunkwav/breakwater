@@ -1,5 +1,5 @@
 /**
- * @file obsassembly_test
+ * @file obsassembly_sink_test
  * @description The combined observation sink: one entry fans out to
  * the file log and the assessment store, each side optional, and the
  * admin reporter installs only with a live store.

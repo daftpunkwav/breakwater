@@ -2,7 +2,7 @@
  * @file redis_test
  * @description Redis ledger tests over miniredis: script semantics,
  * sweeper convergence and the concurrent-drain reconciliation evidence
- * (invariants I3/I9, run under -race).
+ * (run under -race).
  */
 package quota
 
@@ -23,7 +23,7 @@ func newTestLedger(t *testing.T) (*Redis, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewRedis(client), mr
+	return NewRedis(client, "", 10*time.Minute), mr
 }
 
 func TestRedisReserveSettle(t *testing.T) {
@@ -60,9 +60,11 @@ func TestRedisInsufficientBalance(t *testing.T) {
 	if _, err := r.Reserve(ctx, "t", 200); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("err = %v, want ErrInsufficientBalance", err)
 	}
-	// Unprovisioned tenants are denied.
-	if _, err := r.Reserve(ctx, "ghost", 1); !errors.Is(err, ErrInsufficientBalance) {
-		t.Fatalf("unprovisioned err = %v", err)
+	// Unprovisioned tenants are denied, and denied distinctly: the
+	// script separates a missing balance key from a low one, and the Go
+	// side must not collapse the two.
+	if _, err := r.Reserve(ctx, "ghost", 1); !errors.Is(err, ErrUnknownTenant) {
+		t.Fatalf("unprovisioned err = %v, want ErrUnknownTenant", err)
 	}
 	// An unprovisioned balance query is reported, not read as zero.
 	if _, err := r.Balance(ctx, "ghost"); !errors.Is(err, ErrUnknownTenant) {
@@ -104,7 +106,8 @@ func TestRedisSweeperReclaimsAbandonedLeases(t *testing.T) {
 	}
 }
 
-// TestRedisConcurrentDrainReconciles is the I3 evidence: concurrent
+// TestRedisConcurrentDrainReconciles is the reconciliation evidence:
+// concurrent
 // reservations of a shared balance under -race, each settling with
 // varying usage, must reconcile with zero error — the identity
 // initial = final + consumed must hold exactly.
@@ -190,11 +193,11 @@ func TestRedisTerminalLeaseAuditWindowExpires(t *testing.T) {
 		t.Fatalf("cancel: %v", err)
 	}
 
-	if !mr.Exists(leaseKey(settled.ID)) || !mr.Exists(leaseKey(cancelled.ID)) {
+	if !mr.Exists(r.leaseKey(settled.ID)) || !mr.Exists(r.leaseKey(cancelled.ID)) {
 		t.Fatal("terminal records vanished before the audit window elapsed")
 	}
 	mr.FastForward(2 * leaseAuditTTL)
-	if mr.Exists(leaseKey(settled.ID)) || mr.Exists(leaseKey(cancelled.ID)) {
+	if mr.Exists(r.leaseKey(settled.ID)) || mr.Exists(r.leaseKey(cancelled.ID)) {
 		t.Fatal("terminal records survived the audit window")
 	}
 	// Balance accounting is untouched by the expiry.
@@ -215,7 +218,7 @@ func TestRedisSweepDropsGhostEntries(t *testing.T) {
 	r, _ := newTestLedger(t)
 	ctx := context.Background()
 
-	if err := r.rdb.ZAdd(ctx, sweepKey(), redis.Z{
+	if err := r.rdb.ZAdd(ctx, r.sweepKey(), redis.Z{
 		Score:  float64(time.Now().Add(-time.Hour).UnixMilli()),
 		Member: "ghost-lease",
 	}).Err(); err != nil {
@@ -229,7 +232,35 @@ func TestRedisSweepDropsGhostEntries(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("reclaimed = %d, want 0 (nothing to refund)", n)
 	}
-	if card := r.rdb.ZCard(ctx, sweepKey()).Val(); card != 0 {
+	if card := r.rdb.ZCard(ctx, r.sweepKey()).Val(); card != 0 {
 		t.Fatalf("sweep zset cardinality = %d, want 0 (ghost dropped)", card)
+	}
+}
+
+// TestRedisNamespaceIsolatesDeployments: two gateways pointed at one
+// Redis must not see each other's money. A shared keyspace would let one
+// environment spend and refund the other's balance.
+func TestRedisNamespaceIsolatesDeployments(t *testing.T) {
+	t.Parallel()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	ctx := context.Background()
+
+	staging := NewRedis(client, "staging", 10*time.Minute)
+	production := NewRedis(client, "production", 10*time.Minute)
+
+	if err := production.SetBalance(ctx, "tenant", 1000); err != nil {
+		t.Fatalf("provision production: %v", err)
+	}
+	// The tenant is unknown to the other deployment, not broke in it.
+	if _, err := staging.Reserve(ctx, "tenant", 1); !errors.Is(err, ErrUnknownTenant) {
+		t.Fatalf("staging reserve = %v, want ErrUnknownTenant", err)
+	}
+	if bal, err := production.Balance(ctx, "tenant"); err != nil || bal != 1000 {
+		t.Fatalf("production balance = %d err = %v, want untouched 1000", bal, err)
+	}
+	if !mr.Exists("production:bw:quota:bal:tenant") {
+		t.Fatalf("namespaced balance key missing; keys in the store: %v", mr.Keys())
 	}
 }

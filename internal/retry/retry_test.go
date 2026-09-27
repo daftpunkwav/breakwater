@@ -1,7 +1,7 @@
 /**
  * @file retry_test
  * @description Budget concurrency tests: the in-flight cap must hold
- * under contention and unbalanced releases must stay absorbed (I5).
+ * under contention and unbalanced releases must stay absorbed.
  */
 package retry
 

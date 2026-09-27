@@ -13,8 +13,8 @@ import (
 	"testing"
 )
 
-// fakeNetErr is a bare net.Error that is not a *url.Error, isolating
-// the net.Error branch of the table.
+// fakeNetErr is a bare net.Error that is not a *url.Error, the shape
+// an adapter returns when it wraps a failure itself.
 type fakeNetErr struct{ timedOut bool }
 
 func (f fakeNetErr) Error() string   { return "fake network error" }
@@ -37,13 +37,9 @@ func TestClassifierTransportErrors(t *testing.T) {
 	// A *url.Error reports Timeout through its wrapped net.Error.
 	urlTimeout := &url.Error{Op: "Post", URL: "http://upstream", Err: fakeNetErr{timedOut: true}}
 	wrapped := fmt.Errorf("attempt 2: %w", urlTimeout)
-	// A completed (non-timeout) exchange error, the shape net/http wraps
-	// around every transport failure. The classifier consults the url.Error
-	// timeout, then the net.Error timeout — the same *url.Error matches
-	// both — so only an actual timeout is retryable here.
-	// NOTE: this pins current behavior, which diverges from the file's
-	// own docstring and TECH-SPEC §6.5 ("connection failures are
-	// retryable"); a classifier fix must update this pin deliberately.
+	// A transport error net/http wrapped around a failure that is not a
+	// timeout. Retryable: the connection belongs to one candidate, and
+	// the next candidate may be a different host that answers.
 	notimeout := &url.Error{Op: "Post", URL: "http://upstream", Err: errors.New("connection refused")}
 
 	cases := []struct {
@@ -53,9 +49,9 @@ func TestClassifierTransportErrors(t *testing.T) {
 	}{
 		{"url error timeout", urlTimeout, true},
 		{"wrapped url error timeout", wrapped, true},
-		{"url error without timeout", notimeout, false},
+		{"url error without timeout", notimeout, true},
 		{"net error timeout", fakeNetErr{timedOut: true}, true},
-		{"net error without timeout", fakeNetErr{timedOut: false}, false},
+		{"net error without timeout", fakeNetErr{timedOut: false}, true},
 	}
 	var c DefaultClassifier
 	for _, tc := range cases {
@@ -68,7 +64,7 @@ func TestClassifierTransportErrors(t *testing.T) {
 func TestClassifierDeadlineWrappedInURLError(t *testing.T) {
 	t.Parallel()
 	// A deadline that surfaced through the transport layer stays
-	// retryable even before the url.Error branch is reached.
+	// retryable on the deadline branch, not by its wrapper type.
 	err := &url.Error{Op: "Post", URL: "http://upstream", Err: context.DeadlineExceeded}
 	var c DefaultClassifier
 	if !c.Retryable(err) {

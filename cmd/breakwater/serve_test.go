@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,15 +65,66 @@ func TestServeRunsAndStops(t *testing.T) {
 		time.Sleep(150 * time.Millisecond) // let the listener come up
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
 
-// TestServeRedisModeWithIdentity drives the full assembly: Redis
-// backends, static identity, balance seeding and the fail-closed
-// pipeline — everything the memory-mode test skips. No DSN: the static
-// identity mode has no snapshot store, so the reconciler stays off.
+// TestServeDrainTimeoutExitsCleanly pins the shutdown contract: a
+// grace window that expires with requests still in flight is a
+// shutdown with a warning, not a failure. Returning an error here would
+// make every rolling restart that carries a long stream exit non-zero,
+// which orchestrators read as a failed unit and restart in a loop.
+func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
+	// An upstream that never answers, so a request stays in flight.
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer slow.Close()
+
+	entries := baseEnv("127.0.0.1:0")
+	entries = append(entries,
+		`BREAKWATER_UPSTREAMS=[{"id":"slow","base_url":"`+slow.URL+`","models":["*"]}]`,
+		"BREAKWATER_SHUTDOWN_GRACE=1ns", // any request still in flight outlives it
+	)
+	setEnv(t, entries)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// The listener stays bound and is handed to the server, so the
+	// failure under test is the drain and not a port collision with
+	// another package's test process.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listener: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	addr := listener.Addr().String()
+	cfg.Server.Addr = addr
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Hold a request open across the shutdown signal.
+	go func() {
+		time.Sleep(100 * time.Millisecond) // let the listener come up
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			"http://"+addr+"/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+		req.Header.Set("Authorization", "Bearer k1")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	time.Sleep(250 * time.Millisecond)
+	cancel()
+
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", listener); err != nil {
+		t.Fatalf("a drain timeout is a clean shutdown, got: %v", err)
+	}
+}
 func TestServeRedisModeWithIdentity(t *testing.T) {
 	mr := miniredis.RunT(t)
 	setEnv(t, baseEnv("127.0.0.1:0"))
@@ -88,7 +140,7 @@ func TestServeRedisModeWithIdentity(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -114,7 +166,7 @@ func TestServeReconcilerNeedsReachableIdentity(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err == nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err == nil {
 		t.Fatal("serve: an unreachable identity database must fail the reconciler's startup")
 	}
 }
@@ -136,7 +188,7 @@ func TestServeWithoutIdentity(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -179,6 +231,47 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		setEnv(t, baseEnv(blocker.Listener.Addr().String()))
 		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 			t.Fatal("a busy port must surface as a returned error")
+		}
+	})
+
+	t.Run("malformed static identity", func(t *testing.T) {
+		// Rejected by the identity parser, so the failure comes from the
+		// store assembly rather than from any later step.
+		setEnv(t, baseEnv("127.0.0.1:0"))
+		t.Setenv("BREAKWATER_IDENTITY", "{not json")
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
+			t.Fatal("malformed identity JSON must fail assembly")
+		}
+	})
+
+	t.Run("invalid model binding", func(t *testing.T) {
+		// A binding the adapter cannot resolve: caught when the upstream
+		// adapters are built, after the identity store is in place.
+		setEnv(t, baseEnv("127.0.0.1:0"))
+		t.Setenv("BREAKWATER_UPSTREAMS", `[{"id":"mock","base_url":"http://127.0.0.1:1","models":["=broken"]}]`)
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
+			t.Fatal("an unresolvable model binding must fail assembly")
+		}
+	})
+
+	t.Run("fallback names an unknown model", func(t *testing.T) {
+		// A typo in the fallback chain has to refuse the boot rather than
+		// silently never fire. The upstream is pinned to concrete model
+		// names: a wildcard binding serves every name, so it would make
+		// the unknown model resolvable and the check would pass.
+		setEnv(t, baseEnv("127.0.0.1:0"))
+		t.Setenv("BREAKWATER_UPSTREAMS", `[{"id":"mock","base_url":"http://127.0.0.1:1","models":["m1"]}]`)
+		t.Setenv("BREAKWATER_FALLBACKS", `{"m1":["nope"]}`)
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
+			t.Fatal("a fallback naming an unconfigured model must fail assembly")
+		}
+	})
+
+	t.Run("unknown routing strategy", func(t *testing.T) {
+		setEnv(t, baseEnv("127.0.0.1:0"))
+		t.Setenv("BREAKWATER_ROUTING_STRATEGY", "random")
+		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
+			t.Fatal("an unknown routing strategy must fail assembly")
 		}
 	})
 }
@@ -315,7 +408,7 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		cancel()
 	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test"); err != nil {
+	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoadRejectsInvalidValues: each case sets exactly one variable to
@@ -113,5 +114,86 @@ func TestLoadAcceptsZeroBudgetAndIntervals(t *testing.T) {
 	}
 	if cfg.Probe.Interval != 0 {
 		t.Fatalf("probe interval = %s, want 0 (disabled)", cfg.Probe.Interval)
+	}
+}
+
+// TestLoadLeaseTTLMustOutlastTheRequest: a reclaim horizon shorter than
+// the longest request the gateway will run silently refunds a request
+// that really spent tokens, so Load refuses it by name.
+func TestLoadLeaseTTLMustOutlastTheRequest(t *testing.T) {
+	t.Setenv(envRetryOverall, "1m")
+	t.Setenv(envStreamTimeout, "10m")
+	t.Setenv(envQuotaLeaseTTL, "5m")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), envQuotaLeaseTTL) {
+		t.Fatalf("err = %v, want a %s rejection", err, envQuotaLeaseTTL)
+	}
+}
+
+// TestLeaseTTLDerivesFromTheRequestBudget: with no explicit value the
+// horizon covers the attempt phase plus a committed stream's body, with
+// headroom for the sweeper's own interval.
+func TestLeaseTTLDerivesFromTheRequestBudget(t *testing.T) {
+	cfg := Config{Retry: Retry{OverallDeadline: time.Minute, StreamTimeout: 10 * time.Minute}}
+	want := 11*time.Minute + leaseTTLHeadroom
+	if got := cfg.LeaseTTL(); got != want {
+		t.Fatalf("LeaseTTL = %v, want %v", got, want)
+	}
+}
+
+// TestLeaseTTLUnboundedRequestUsesTheGenerousHorizon: a client that
+// owns an unbounded stream leaves nothing to derive from, so the
+// fallback must not be the old ten minutes — that is the horizon which
+// would refund such a request mid-flight.
+func TestLeaseTTLUnboundedRequestUsesTheGenerousHorizon(t *testing.T) {
+	cfg := Config{Retry: Retry{StreamTimeout: 0, OverallDeadline: time.Minute}}
+	if got := cfg.LeaseTTL(); got != unboundedRequestLeaseTTL {
+		t.Fatalf("LeaseTTL = %v, want %v", got, unboundedRequestLeaseTTL)
+	}
+}
+
+// TestLoadAcceptsAnExplicitHorizonAboveTheBudget: an operator who wants
+// a different horizon may set one, as long as it is large enough.
+func TestLoadAcceptsAnExplicitHorizonAboveTheBudget(t *testing.T) {
+	t.Setenv(envRetryOverall, "1m")
+	t.Setenv(envStreamTimeout, "10m")
+	t.Setenv(envQuotaLeaseTTL, "30m")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LeaseTTL() != 30*time.Minute {
+		t.Fatalf("LeaseTTL = %v, want the configured 30m", cfg.LeaseTTL())
+	}
+}
+
+// TestLoadRejectsNegativeLeaseTTL: a negative reclaim horizon is not a
+// horizon, and must be named at startup rather than silently falling back
+// to the derivation.
+func TestLoadRejectsNegativeLeaseTTL(t *testing.T) {
+	t.Setenv(envQuotaLeaseTTL, "-1s")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "must not be negative") {
+		t.Fatalf("err = %v, want a negative-lease-TTL rejection", err)
+	}
+}
+
+// TestRequestCeiling: the bound work that must outlive its client runs
+// under. A request with no declared upper limit still gets a usable
+// ceiling rather than "unlimited", so a caller never has to special-case
+// zero.
+func TestRequestCeiling(t *testing.T) {
+	bounded := Config{Retry: Retry{OverallDeadline: time.Minute, StreamTimeout: 10 * time.Minute}}
+	if got := bounded.RequestCeiling(); got != 11*time.Minute {
+		t.Fatalf("RequestCeiling = %v, want 11m", got)
+	}
+	for _, cfg := range []Config{
+		{Retry: Retry{StreamTimeout: 0, OverallDeadline: time.Minute}},
+		{Retry: Retry{StreamTimeout: 10 * time.Minute, OverallDeadline: 0}},
+		{},
+	} {
+		if got := cfg.RequestCeiling(); got != unboundedRequestLeaseTTL {
+			t.Fatalf("unbounded RequestCeiling = %v, want %v", got, unboundedRequestLeaseTTL)
+		}
 	}
 }

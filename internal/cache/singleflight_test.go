@@ -1,6 +1,6 @@
 /**
  * @file singleflight_test
- * @description The I2 evidence under -race: concurrent cold-start
+ * @description The single-fetch evidence under -race: concurrent cold-start
  * fetches of one key execute the loader exactly once, waiters ride the
  * shared result, and every waiter is bounded by its own context.
  */
@@ -51,7 +51,7 @@ func TestFlightSingleFetchUnderStampede(t *testing.T) {
 	close(results)
 
 	if got := fetches.Load(); got != 1 {
-		t.Fatalf("fetches = %d, want exactly 1 (I2)", got)
+		t.Fatalf("fetches = %d, want exactly 1", got)
 	}
 	for entry := range results {
 		if entry.Status != 200 || string(entry.Body) != "payload" {

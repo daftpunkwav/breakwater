@@ -1,7 +1,7 @@
 /**
  * @file eligibility_test
  * @description Cache eligibility rules: only explicit determinism is
- * cacheable (PRD Q3).
+ * cacheable.
  */
 package cache
 

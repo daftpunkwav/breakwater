@@ -37,7 +37,7 @@ func cleanEnv(t *testing.T) {
 }
 
 // TestLoadDefaults: with zero configuration the gateway starts with
-// the documented safe defaults, cache and breaker enabled.
+// the package's built-in defaults, cache and breaker enabled.
 func TestLoadDefaults(t *testing.T) {
 	cleanEnv(t)
 

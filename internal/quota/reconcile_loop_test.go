@@ -80,7 +80,7 @@ func TestStartReconcilerReportsDriftUntilCancelled(t *testing.T) {
 	// error, and no drift is invented from a failed read.
 	source.fail()
 	// Let any read already in flight at fail-time land, so the drift
-	// count is frozen from here on.
+	// count cannot change again.
 	readsAtFail := source.readCount()
 	waitUntil(t, func() bool { return source.readCount() >= readsAtFail+2 },
 		"reconcile loop stopped after a source failure")

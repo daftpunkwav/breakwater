@@ -320,3 +320,24 @@ func TestQuotaMiddlewareSettlementSurvivesPanic(t *testing.T) {
 			ledger.settleCalls, ledger.cancelCalls, ledger.cancelID)
 	}
 }
+
+// TestQuotaMiddlewareDistinguishesUnprovisionedTenant: a tenant with no
+// ledger record is a provisioning gap, not an exhausted balance. Telling
+// the client "insufficient quota" would send its billing retry logic at
+// a fault it cannot fix and hide the real cause from the operator.
+func TestQuotaMiddlewareDistinguishesUnprovisionedTenant(t *testing.T) {
+	t.Parallel()
+	req := quotaRequest(t, 500)
+	ledger := &stubLedger{reserveErr: ErrUnknownTenant}
+	rec, _, nextCalls := serveThroughQuota(t, ledger, nil, req, 0)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "quota_not_provisioned") {
+		t.Fatalf("body = %s, want the provisioning code", body)
+	}
+	if nextCalls != 0 {
+		t.Fatal("an unprovisioned tenant must not reach an upstream")
+	}
+}

@@ -56,7 +56,7 @@ func TestMemoryExpiry(t *testing.T) {
 	}
 }
 
-// TestMemoryOwnership pins the frozen contract: mutating a returned
+// TestMemoryOwnership pins the ownership contract: mutating a returned
 // entry must never corrupt the stored copy.
 func TestMemoryOwnership(t *testing.T) {
 	t.Parallel()

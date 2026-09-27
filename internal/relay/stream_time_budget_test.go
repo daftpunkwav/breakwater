@@ -43,6 +43,7 @@ func dripStream(ctx context.Context, n int, delay time.Duration) io.Reader {
 				return
 			}
 		}
+		_, _ = fmt.Fprint(pw, "data: [DONE]\n\n")
 		_ = pw.Close()
 	}()
 	return pr
@@ -166,7 +167,7 @@ func TestStreamCeilingTerminatesHonestly(t *testing.T) {
 	if !strings.Contains(string(result.Body), `"code":"upstream_timeout"`) {
 		t.Fatalf("abort code = %q", result.Body)
 	}
-	// The canonical wire's frozen termination: one error event, then [DONE].
+	// The canonical wire's termination: one error event, then [DONE].
 	if !strings.HasSuffix(string(result.Body), "data: [DONE]\n\n") {
 		t.Fatalf("aborted stream must end with the [DONE] sentinel: %q", result.Body)
 	}
@@ -200,5 +201,39 @@ func TestStreamCeilingNeverPunishesTheBreaker(t *testing.T) {
 	}
 	if got := breaker.StateOf(context.Background(), "s"); got != circuit.StateClosed {
 		t.Fatalf("breaker state = %s after 3 ceiling-cut streams, want closed: the ceiling is gateway policy, not upstream evidence", got)
+	}
+}
+
+// TestStreamCeilingBeforeHeadersFailsOver: with the ceiling tighter than
+// the attempt timeout, an upstream that never answers is cut by the
+// gateway's own policy. That must read as a timeout the loop may fail
+// over on, and must leave the breaker no evidence of upstream fault —
+// charging the upstream for the gateway's configuration would eject
+// healthy candidates.
+func TestStreamCeilingBeforeHeadersFailsOver(t *testing.T) {
+	t.Parallel()
+	blocked := &stubUpstream{id: "slow", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	healthy := &stubUpstream{id: "healthy", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
+		header := http.Header{}
+		header.Set("Content-Type", "text/event-stream")
+		return &upstream.Response{StatusCode: http.StatusOK, Header: header,
+			Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}, nil
+	}}
+	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 2, Cooldown: time.Minute, ProbeTimeout: time.Second})
+	exec := New(retry.Policy{MaxAttempts: 2, AttemptTimeout: 2 * time.Second}, nil,
+		WithStreamTimeout(50*time.Millisecond), WithBreaker(breaker))
+
+	result := execute(t, exec, []upstream.Upstream{blocked, healthy}, true, "{}")
+	if result.Status != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want the healthy candidate to answer", result.Status, result.Body)
+	}
+	if result.UpstreamID != "healthy" {
+		t.Fatalf("served by %q, want failover to the healthy candidate", result.UpstreamID)
+	}
+	if got := breaker.StateOf(context.Background(), "slow"); got == circuit.StateOpen {
+		t.Fatal("the gateway's own ceiling opened the breaker on an upstream that never even answered")
 	}
 }

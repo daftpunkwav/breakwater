@@ -6,6 +6,8 @@
 package httpserver
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -141,5 +143,92 @@ func TestBufferingTeeMarksTruncationOnLaterWrites(t *testing.T) {
 	}
 	if inner.Body.String() != "abcdefgh" {
 		t.Fatalf("forwarded = %q, want the full body", inner.Body.String())
+	}
+}
+
+// brokenWriter stands in for a client connection that has gone away
+// mid-response.
+type brokenWriter struct {
+	header http.Header
+	code   int
+}
+
+func (b *brokenWriter) Header() http.Header       { return b.header }
+func (b *brokenWriter) WriteHeader(code int)      { b.code = code }
+func (b *brokenWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+func (b *brokenWriter) Flush()                    {}
+
+// TestDetachedBufferingTeeSurvivesAGoneClient pins the contract of the
+// tee that backs a shared fetch: a client disappearing mid-flight is
+// nobody else's business, so the capture still completes and the handler
+// chain is not aborted — otherwise every request waiting on the same
+// shared fetch would fail with it.
+func TestDetachedBufferingTeeSurvivesAGoneClient(t *testing.T) {
+	t.Parallel()
+	tee := NewDetachedBufferingTee(&brokenWriter{header: make(http.Header)}, 64)
+
+	tee.Header().Set("Content-Type", "text/plain")
+	tee.WriteHeader(200)
+	if _, err := tee.Write([]byte("shared payload")); err != nil {
+		t.Fatalf("write surfaced the client's disconnect: %v", err)
+	}
+
+	if got := string(tee.Body()); got != "shared payload" {
+		t.Fatalf("capture = %q, want the full payload", got)
+	}
+}
+
+// TestBufferingTeeStillSurfacesWriteFailures: the tolerance is specific
+// to the detached tee. An ordinary tee must keep reporting a failed
+// write, or a real client error would be silently swallowed.
+func TestBufferingTeeStillSurfacesWriteFailures(t *testing.T) {
+	t.Parallel()
+	tee := NewBufferingTee(&brokenWriter{header: make(http.Header)}, 64)
+	if _, err := tee.Write([]byte("x")); err == nil {
+		t.Fatal("an ordinary tee must report the failed write")
+	}
+}
+
+// plainWriter is an http.ResponseWriter that is not an http.Flusher, so
+// the tee must fall back to flushing nothing.
+type plainWriter struct {
+	header http.Header
+	rec    *httptest.ResponseRecorder
+}
+
+func (p *plainWriter) Header() http.Header         { return p.header }
+func (p *plainWriter) WriteHeader(code int)        { p.rec.WriteHeader(code) }
+func (p *plainWriter) Write(b []byte) (int, error) { return p.rec.Write(b) }
+
+// TestDetachedBufferingTeeMarksTruncation: the detach tolerance must
+// not affect the capture limit. A reply past the cap is still marked
+// truncated, which is what keeps it out of the shared path.
+func TestDetachedBufferingTeeMarksTruncation(t *testing.T) {
+	t.Parallel()
+	tee := NewDetachedBufferingTee(&plainWriter{header: make(http.Header), rec: httptest.NewRecorder()}, 4)
+	if _, err := tee.Write([]byte("abcdefgh")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !tee.Truncated() {
+		t.Fatal("an oversized capture must be marked truncated")
+	}
+	if got := string(tee.Body()); got != "abcd" {
+		t.Fatalf("capture = %q, want the first four bytes", got)
+	}
+}
+
+// TestDetachedBufferingTeeToleratesANonFlusher: wrapping a writer that
+// cannot flush must not panic, and must still capture.
+func TestDetachedBufferingTeeToleratesANonFlusher(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	tee := NewDetachedBufferingTee(&plainWriter{header: make(http.Header), rec: rec}, 32)
+	tee.WriteHeader(200)
+	if _, err := tee.Write([]byte("ok")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tee.Flush()
+	if got := string(tee.Body()); got != "ok" {
+		t.Fatalf("capture = %q, want %q", got, "ok")
 	}
 }

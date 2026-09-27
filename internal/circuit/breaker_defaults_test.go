@@ -1,7 +1,7 @@
 /**
  * @file breaker_defaults_test
  * @description Configuration and lookup defaults: a zero Config selects
- * the documented defaults, and an unknown upstream reads closed.
+ * the package's own defaults, and an unknown upstream reads closed.
  */
 package circuit
 
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// TestZeroConfigSelectsDefaults pins the documented defaults: with no
+// TestZeroConfigSelectsDefaults pins the package defaults: with no
 // configuration at all, five consecutive server faults open the breaker
 // — fewer do not.
 func TestZeroConfigSelectsDefaults(t *testing.T) {

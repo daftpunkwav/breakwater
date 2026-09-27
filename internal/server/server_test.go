@@ -16,24 +16,28 @@ import (
 
 // testAddr reserves an ephemeral port and releases it immediately; the
 // small reuse race is acceptable for tests.
-func testAddr(t *testing.T) string {
+// testListener returns a bound listener for a test server. The listener
+// is handed to the server rather than released first: reserving an
+// address and rebinding it later is a race with every other process
+// picking the same free port, and this suite runs its packages in
+// parallel.
+func testListener(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("reserve port: %v", err)
+		t.Fatalf("bind listener: %v", err)
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatalf("release port: %v", err)
-	}
-	return addr
+	t.Cleanup(func() { _ = l.Close() })
+	return l
 }
 
 func TestServerRunServesUntilCancel(t *testing.T) {
 	t.Parallel()
 	ready := false
+	listener := testListener(t)
 	srv := New(Options{
-		Addr: testAddr(t),
+		Addr:     listener.Addr().String(),
+		Listener: listener,
 		Readiness: func() error {
 			if ready {
 				return nil
@@ -47,7 +51,7 @@ func TestServerRunServesUntilCancel(t *testing.T) {
 	go func() { runErr <- srv.Run(ctx) }()
 
 	// Poll until the listener is up, then check both probes.
-	url := "http://" + srv.opts.Addr
+	url := "http://" + listener.Addr().String()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		resp, err := http.Get(url + "/healthz")

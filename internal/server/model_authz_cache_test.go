@@ -77,7 +77,7 @@ func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
 		pipeline.ModelAuthzStage(),
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
-		cache.Middleware(cache.NewMemory(), cache.NewFlight(), time.Minute, obs.NewMetrics()),
+		cache.Middleware(cache.NewMemory(), cache.NewFlight(), time.Minute, obs.NewMetrics(), time.Minute),
 	)(NewInference(protocol.FormatOpenAIChat, rt, relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))))
 
 	// Cache-eligible body: explicitly deterministic parameters.

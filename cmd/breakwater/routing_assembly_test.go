@@ -71,7 +71,7 @@ func TestTrackerObserverForwardsToRecord(t *testing.T) {
 func TestServeRejectsUnknownStrategy(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{Routing: config.Routing{Strategy: "psychic"}}
-	err := serve(context.Background(), cfg, slog.New(slog.DiscardHandler), "test")
+	err := serve(context.Background(), cfg, slog.New(slog.DiscardHandler), "test", nil)
 	if err == nil {
 		t.Fatal("serve accepted an unknown routing strategy")
 	}

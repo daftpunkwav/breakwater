@@ -1,6 +1,6 @@
 /**
  * @file sse_test
- * @description Contract tests for the frozen SSE stream protocol: the
+ * @description Contract tests for the SSE stream protocol: the
  * byte layout of the abort sequence is pinned exactly as specified, and
  * the error code enum is locked.
  */
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// TestWriteAbortContract pins the frozen abort sequence byte for byte:
+// TestWriteAbortContract pins the abort sequence byte for byte:
 // one error event, then the [DONE] sentinel, separated by blank lines.
 func TestWriteAbortContract(t *testing.T) {
 	t.Parallel()
@@ -31,7 +31,7 @@ func TestWriteAbortContract(t *testing.T) {
 	}
 }
 
-// TestWriteAbortAllCodes exercises every frozen code through the abort
+// TestWriteAbortAllCodes exercises every code through the abort
 // path so the enum cannot drift silently.
 func TestWriteAbortAllCodes(t *testing.T) {
 	t.Parallel()

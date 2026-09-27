@@ -103,6 +103,30 @@ func TestPumpTranscodedTranslatesAndScrapesUsage(t *testing.T) {
 	}
 }
 
+// TestPumpTranscodedRefusesToCompleteATruncatedStream: the [DONE]
+// sentinel is the only thing that separates a finished stream from one
+// cut short. Byte passthrough needs no such check — the client sees the
+// missing terminator for itself — but a translated stream is terminated
+// by the gateway, so completing one that never received the sentinel
+// would hand the client a short answer dressed as a finished one.
+func TestPumpTranscodedRefusesToCompleteATruncatedStream(t *testing.T) {
+	t.Parallel()
+	stream := "data: {\"delta\":\"a\"}\n\n" +
+		"data: {\"usage\":{\"total_tokens\":9}}\n\n"
+	tr := &fakeTranscoder{}
+
+	_, _, _, err := pumpTranscoded(httptest.NewRecorder(), strings.NewReader(stream), tr, "m1")
+	if !errors.Is(err, errStreamTruncated) {
+		t.Fatalf("err = %v, want the truncation error", err)
+	}
+	if tr.finished {
+		t.Fatal("a stream that ended without [DONE] must not be closed as complete")
+	}
+	if len(tr.deltas) != 2 {
+		t.Fatalf("deltas = %v, want both frames translated before the cut", tr.deltas)
+	}
+}
+
 // TestPumpTranscodedAcceptsSpacelessDataLines: the SSE grammar makes
 // the space after "data:" optional; a compatible backend that omits it
 // must reach the translator just the same, or its payloads would be
@@ -156,7 +180,7 @@ func TestPumpTranscodedFinishFailurePropagates(t *testing.T) {
 	t.Parallel()
 	tr := &fakeTranscoder{finishErr: errors.New("terminator write failed")}
 	_, _, _, err := pumpTranscoded(httptest.NewRecorder(),
-		strings.NewReader("data: {\"a\":1}\n\n"), tr, "m1")
+		strings.NewReader("data: {\"a\":1}\n\ndata: [DONE]\n\n"), tr, "m1")
 	if err == nil {
 		t.Fatal("finish failure swallowed")
 	}

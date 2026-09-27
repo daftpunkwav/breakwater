@@ -1,7 +1,7 @@
 /**
  * @file memory_test
  * @description In-memory ledger semantics: reserve/settle/cancel
- * transitions, no over-draft, sweeper convergence (I3/I9).
+ * transitions, no over-draft, sweeper convergence.
  */
 package quota
 
@@ -68,9 +68,11 @@ func TestMemoryInsufficientBalanceAndNoOverDraft(t *testing.T) {
 	if bal, _ := m.Balance(ctx, "t"); bal != 100 {
 		t.Fatalf("balance = %d, want untouched 100", bal)
 	}
-	// Unprovisioned tenants are denied, never created from thin air.
-	if _, err := m.Reserve(ctx, "ghost", 1); err != ErrInsufficientBalance {
-		t.Fatalf("unprovisioned reserve err = %v", err)
+	// Unprovisioned tenants are denied, never created from thin air —
+	// and denied distinctly, so a missing provisioning record is not
+	// reported to a client as a spending limit.
+	if _, err := m.Reserve(ctx, "ghost", 1); err != ErrUnknownTenant {
+		t.Fatalf("unprovisioned reserve err = %v, want ErrUnknownTenant", err)
 	}
 }
 
@@ -238,8 +240,9 @@ func TestMemoryTerminalLeasesPurgeAfterAuditWindow(t *testing.T) {
 	}
 }
 
-// TestMemoryConcurrentDrainReconciles is the memory backend's I3
-// evidence, mirroring the Redis script test: concurrent reserve/settle
+// TestMemoryConcurrentDrainReconciles is the memory backend's
+// reconciliation evidence, mirroring the Redis script test: concurrent
+// reserve/settle
 // rounds against a shared balance under -race must reconcile exactly —
 // initial = final + consumed, zero drift.
 func TestMemoryConcurrentDrainReconciles(t *testing.T) {
@@ -293,5 +296,36 @@ func TestMemoryConcurrentDrainReconciles(t *testing.T) {
 	if want := initial - consumed.Load(); final != want {
 		t.Fatalf("reconciliation error: balance = %d, want %d (drift %d)",
 			final, want, final-want)
+	}
+}
+
+// TestWithLeaseTTLGovernsReclaim: the in-memory ledger honours the
+// horizon it was given, which is what lets the assembly size the reclaim
+// window from the request budget instead of a package constant.
+func TestWithLeaseTTLGovernsReclaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory().WithLeaseTTL(time.Minute)
+	if err := m.SetBalance(ctx, "t", 100); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := m.Reserve(ctx, "t", 100); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	start := time.Now()
+	if expired, err := m.SweepOnce(ctx, start.Add(30*time.Second), 10); err != nil || expired != 0 {
+		t.Fatalf("sweep before the horizon expired %d (err %v), want 0", expired, err)
+	}
+	expired, err := m.SweepOnce(ctx, start.Add(2*time.Minute), 10)
+	if err != nil || expired != 1 {
+		t.Fatalf("sweep past the horizon expired %d (err %v), want 1", expired, err)
+	}
+	if bal, _ := m.Balance(ctx, "t"); bal != 100 {
+		t.Fatalf("balance = %d, want the reservation refunded", bal)
+	}
+	// A non-positive value keeps the package default rather than
+	// disabling the sweep.
+	if got := NewMemory().WithLeaseTTL(0).leaseTTL; got != defaultLeaseTTL {
+		t.Fatalf("leaseTTL = %v, want the default %v", got, defaultLeaseTTL)
 	}
 }

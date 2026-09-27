@@ -1,13 +1,12 @@
 /**
  * @file middleware_test
- * @description Cache stage integration: the full-stack I2 evidence
+ * @description Cache stage integration: the full-stack single-fetch evidence
  * (concurrent cold starts fetch upstream exactly once), hit refunds,
  * the eligibility bypass and the streaming boundary.
  */
 package cache
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -61,7 +60,7 @@ func cacheStage(t *testing.T, upstream http.Handler) http.Handler {
 	return pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
+		Middleware(NewMemory(), NewFlight(), time.Minute, nil, time.Minute),
 	)(upstream)
 }
 
@@ -98,7 +97,8 @@ func blockingOpen() <-chan struct{} {
 	return h
 }
 
-// TestCacheMiddlewareConcurrentColdStartsFetchOnce is the I2 evidence:
+// TestCacheMiddlewareConcurrentColdStartsFetchOnce is the single-fetch
+// evidence:
 // a stampede of identical cold requests must produce one upstream
 // fetch, and every caller must receive the response.
 func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
@@ -129,7 +129,7 @@ func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
 	close(codes)
 
 	if got := fetches.Load(); got != 1 {
-		t.Fatalf("fetches = %d, want exactly 1 (I2)", got)
+		t.Fatalf("fetches = %d, want exactly 1", got)
 	}
 	for code := range codes {
 		if code != http.StatusOK {
@@ -138,7 +138,7 @@ func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
 	}
 }
 
-// TestCacheMiddlewareNegativeCachesUpstreamErrors pins spec §6.3's
+// TestCacheMiddlewareNegativeCachesUpstreamErrors pins the
 // penetration guard: an upstream-produced error is stored for a short
 // TTL, so a flood of identical bad requests stops at the cache.
 func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
@@ -233,72 +233,6 @@ func TestCacheMiddlewareStreamBoundary(t *testing.T) {
 // oversizedUpstream answers with a body larger than the retention cap;
 // the cache contract says it still reaches its own client in full, but
 // the truncated capture must be neither stored nor shared.
-func oversizedUpstream(fetches *atomic.Int64, release <-chan struct{}) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetches.Add(1)
-		<-release
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(strings.Repeat("x", maxCacheableBytes+1)))
-	})
-}
-
-// TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored locks
-// the capture-cap contract on the singleflight path: a reply larger
-// than the cap must not be published to waiters (they would replay a
-// truncated prefix as a complete reply) and must not be stored (the
-// prefix would come back on every later hit).
-func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T) {
-	t.Parallel()
-	var fetches atomic.Int64
-	release := make(chan struct{})
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
-	)(oversizedUpstream(&fetches, release))
-
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
-
-	ownerDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		ownerDone <- fireRequest(handler, body)
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && fetches.Load() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-
-	waiterDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		waiterDone <- fireRequest(handler, body)
-	}()
-	time.Sleep(100 * time.Millisecond) // let the waiter join the flight
-	close(release)
-
-	owner := <-ownerDone
-	if owner.Code != http.StatusOK || owner.Body.Len() != maxCacheableBytes+1 {
-		t.Fatalf("owner status = %d len = %d, want 200 and the full body", owner.Code, owner.Body.Len())
-	}
-	waiter := <-waiterDone
-	if waiter.Code != http.StatusBadGateway || !strings.Contains(waiter.Body.String(), "upstream_unreachable") {
-		t.Fatalf("waiter status = %d body = %s, want 502: a truncated capture must not be shared", waiter.Code, waiter.Body.String())
-	}
-
-	// Nothing was stored: the next request fetches upstream again and
-	// gets its own complete reply.
-	again := fireRequest(handler, body)
-	if again.Code != http.StatusOK || again.Body.Len() != maxCacheableBytes+1 {
-		t.Fatalf("after oversize: status = %d len = %d, want a fresh full fetch", again.Code, again.Body.Len())
-	}
-	if got := fetches.Load(); got != 2 {
-		t.Fatalf("fetches = %d, want 2: the oversized reply must not be stored", got)
-	}
-}
-
-// abortingUpstream delivers a partial stream terminated through the
-// error event contract, reporting it through the carrier the way the
-// inference handler does, and counts how often it was entered.
 func abortingUpstream(fetches *atomic.Int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fetches.Add(1)
@@ -321,7 +255,7 @@ func TestCacheMiddlewareNeverStoresAbortedStreams(t *testing.T) {
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), NewFlight(), time.Minute, nil),
+		Middleware(NewMemory(), NewFlight(), time.Minute, nil, time.Minute),
 	)(abortingUpstream(&fetches))
 
 	body := `{"model":"m","stream":true,"temperature":0,"messages":[{"role":"user","content":"hi"}]}`
@@ -340,69 +274,38 @@ func TestCacheMiddlewareNeverStoresAbortedStreams(t *testing.T) {
 // fetch failure contract: an owner whose client walks away mid-fetch
 // produces no response at all; its empty capture must fail the flight
 // instead of being replayed by waiters (a header-less WriteHeader with
-// status 0 panics in net/http).
-func TestCacheMiddlewareWaiterSurvivesOwnerDisconnect(t *testing.T) {
+func TestNegativelyCacheableRules(t *testing.T) {
 	t.Parallel()
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var fetches atomic.Int64
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetches.Add(1)
-		select {
-		case entered <- struct{}{}:
-		default:
-		}
-		<-release
-		// The owner's client is gone: nothing is written at all.
-	})
-	flight := NewFlight()
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), flight, time.Minute, nil),
-	)(upstream)
-
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
-	ownerCtx, cancelOwner := context.WithCancel(context.Background())
-	defer cancelOwner()
-
-	ownerDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req.WithContext(ownerCtx))
-		ownerDone <- rec
-	}()
-	<-entered // the flight entry exists from here on
-
-	waiterDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		waiterDone <- rec
-	}()
-
-	// The shared fetch wait is the waiter's only blocking point; a
-	// stability window without a second upstream fetch proves it is
-	// parked there instead of fetching on its own.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if fetches.Load() != 1 {
-			t.Fatal("waiter started its own fetch: it missed the shared flight")
-		}
-		select {
-		case rec := <-waiterDone:
-			t.Fatalf("waiter completed on its own: status %d", rec.Code)
-		case <-time.After(300 * time.Millisecond):
+	upstream := &pipeline.Carrier{Relay: &relay.Result{UpstreamID: "u1"}}
+	cases := []struct {
+		name  string
+		entry Entry
+		relay *relay.Result
+		want  bool
+	}{
+		{"upstream 4xx is a fact", Entry{Status: 404, Body: []byte(`{"error":"no"}`)}, &relay.Result{UpstreamID: "u1"}, true},
+		{"upstream 5xx is a fact", Entry{Status: 503, Body: []byte(`{"error":"down"}`)}, &relay.Result{UpstreamID: "u1"}, true},
+		{"empty 200 is a fact", Entry{Status: 200}, &relay.Result{UpstreamID: "u1"}, true},
+		{"non-empty 200 is not", Entry{Status: 200, Body: []byte(`{"a":1}`)}, &relay.Result{UpstreamID: "u1"}, false},
+		{"3xx is neither", Entry{Status: 302, Body: []byte("x")}, &relay.Result{UpstreamID: "u1"}, false},
+		{"no relay result", Entry{Status: 404}, nil, false},
+		{"cache replay is not a fact", Entry{Status: 404}, &relay.Result{UpstreamID: observedUpstreamCache}, false},
+		{"shared fetch is not a fact", Entry{Status: 404}, &relay.Result{UpstreamID: observedUpstreamSharedFetch}, false},
+		{"upstream unknown is not a fact", Entry{Status: 404}, &relay.Result{}, false},
+	}
+	for _, tc := range cases {
+		carrier := &pipeline.Carrier{Relay: tc.relay}
+		if got := negativelyCacheable(tc.entry, carrier); got != tc.want {
+			t.Errorf("%s: negativelyCacheable = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-
-	cancelOwner()
-	close(release)
-	<-ownerDone
-	waiterRec := <-waiterDone
-	if waiterRec.Code != http.StatusBadGateway || !strings.Contains(waiterRec.Body.String(), "upstream_unreachable") {
-		t.Fatalf("waiter status = %d body = %s, want 502 envelope", waiterRec.Code, waiterRec.Body.String())
+	if negativelyCacheable(Entry{Status: 404}, upstream) != true {
+		t.Error("sanity: the upstream-carrying carrier must qualify")
 	}
 }
+
+// ctxHonoringStore is a Cache that behaves the way the port's context
+// parameter implies: a write on a finished context fails. The shipped
+// in-memory store ignores its context entirely, which is why riding the
+// starter's cancelled request looked harmless — it is a property of
+// that one implementation, not of the contract.

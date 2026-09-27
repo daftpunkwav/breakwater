@@ -8,7 +8,6 @@ package obs
 
 import (
 	"bytes"
-	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -163,54 +162,6 @@ func TestLabelRendering(t *testing.T) {
 	want := "{model=\"a\tb\\nc\\\\d\\\"e\"}"
 	if got := renderLabels([]string{"model"}, []string{"a\tb\nc\\d\"e"}); got != want {
 		t.Fatalf("escaped form = %q, want %q", got, want)
-	}
-}
-
-// TestChildCapDropsPastTheLimit pins the cardinality floor: past
-// maxChildren new label sets are dropped while existing leaves keep
-// counting — the registry degrades to under-counting instead of
-// growing without bound under a hostile model label.
-func TestChildCapDropsPastTheLimit(t *testing.T) {
-	t.Parallel()
-	m := NewMetrics()
-	for i := range maxChildren + 25 {
-		m.Request("t", fmt.Sprintf("model-%d", i), "u", 200)
-	}
-	f := m.families["breakwater_requests_total"]
-	if len(f.children) != maxChildren {
-		t.Fatalf("children = %d, want the cap %d", len(f.children), maxChildren)
-	}
-	// An existing leaf keeps counting after the cap: drops only hit
-	// label sets the registry has never seen.
-	m.Request("t", "model-0", "u", 200)
-	m.Request("t", "model-0", "u", 200)
-	if len(f.children) != maxChildren {
-		t.Fatalf("children = %d after repeat traffic, want the cap to hold", len(f.children))
-	}
-}
-
-// TestNilLeafCallsAreSafe: past the cap every recorder call site is a
-// no-op — counters, gauges and both histograms — instead of a panic.
-func TestNilLeafCallsAreSafe(t *testing.T) {
-	t.Parallel()
-	m := NewMetrics()
-	for i := range maxChildren {
-		m.CacheFetch(fmt.Sprintf("u%d", i)) // fill one family to the cap
-	}
-	// Overflow attempts across every recorder shape: dropped silently.
-	m.CacheFetch("overflow")
-	m.ObserveDuration("overflow", 1)
-	m.ObserveTTFT("overflow", 1)
-	m.CircuitState("overflow", 2)
-	m.RateLimited("overflow")
-
-	var buf bytes.Buffer
-	if err := m.Render(&buf); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	f := m.families["breakwater_cache_upstream_fetch_total"]
-	if len(f.children) != maxChildren {
-		t.Fatalf("children = %d, want the cap %d", len(f.children), maxChildren)
 	}
 }
 

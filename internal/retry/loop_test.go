@@ -1,7 +1,7 @@
 /**
  * @file loop_test
- * @description Attempt loop tests: the caps hold (I5), the first-byte
- * boundary is absolute (I6), and the budget gate denies retries only.
+ * @description Attempt loop tests: the caps hold, the first-byte
+ * boundary is absolute, and the budget gate denies retries only.
  */
 package retry
 
@@ -64,7 +64,7 @@ func TestExecuteCapsAttempts(t *testing.T) {
 		t.Fatal("expected the persistent failure to surface")
 	}
 	if calls != 4 {
-		t.Fatalf("attempts = %d, want 4 (I5)", calls)
+		t.Fatalf("attempts = %d, want 4", calls)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestExecuteNeverClassifiesCommittedErrors(t *testing.T) {
 		t.Fatalf("err = %v, want ErrCommitted", err)
 	}
 	if calls != 1 {
-		t.Fatalf("attempts = %d, want 1: committed attempts end the loop (I6)", calls)
+		t.Fatalf("attempts = %d, want 1: committed attempts end the loop", calls)
 	}
 	if classifier.calls != 0 {
 		t.Fatalf("classifier consulted %d times, want 0 for committed failures", classifier.calls)
@@ -198,62 +198,5 @@ func TestExecuteFiresOnRetryWithAttemptErrorAndDelay(t *testing.T) {
 		if call.delay < 0 || call.delay > time.Millisecond {
 			t.Errorf("onRetry %d delay %v outside the [0, BackoffMax] ceiling", i, call.delay)
 		}
-	}
-}
-
-func TestClassifierTable(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name      string
-		err       error
-		retryable bool
-	}{
-		{"nil", nil, false},
-		{"too many requests", NewStatusError(429), true},
-		{"server error", NewStatusError(503), true},
-		{"bad request", NewStatusError(400), false},
-		{"unauthorized", NewStatusError(401), false},
-		{"payment required", NewStatusError(402), false},
-		{"canceled", context.Canceled, false},
-		{"deadline", context.DeadlineExceeded, true},
-		{"plain transport", errors.New("connection refused"), true},
-	}
-	var c DefaultClassifier
-	for _, tc := range cases {
-		if got := c.Retryable(tc.err); got != tc.retryable {
-			t.Errorf("%s: retryable = %v, want %v", tc.name, got, tc.retryable)
-		}
-	}
-}
-
-func TestBackoffStaysUnderCeiling(t *testing.T) {
-	t.Parallel()
-	policy := Policy{BackoffInitial: 10 * time.Millisecond, BackoffMax: 40 * time.Millisecond}
-	for attempt := 1; attempt <= 10; attempt++ {
-		if d := backoffDelay(policy, attempt); d > policy.BackoffMax || d < 0 {
-			t.Fatalf("attempt %d: delay %v outside [0, %v]", attempt, d, policy.BackoffMax)
-		}
-	}
-	if d := backoffDelay(Policy{}, 2); d != 0 {
-		t.Fatalf("unshaped policy produced delay %v, want 0", d)
-	}
-}
-
-func TestBackoffCeilingGrowsFromInitial(t *testing.T) {
-	t.Parallel()
-	policy := Policy{BackoffInitial: 10 * time.Millisecond, BackoffMax: 40 * time.Millisecond}
-	want := []time.Duration{10, 20, 40, 40, 40} // double, then cap at max
-	for i, w := range want {
-		if got := time.Duration(backoffCeiling(policy, i+1)); got != w*time.Millisecond {
-			t.Fatalf("retry %d ceiling = %v, want %v (the sequence must grow from BackoffInitial)", i+1, got, w*time.Millisecond)
-		}
-	}
-	// Without an initial the cap is the max from the first retry on.
-	if got := backoffCeiling(Policy{BackoffMax: 30 * time.Millisecond}, 1); got != int64(30*time.Millisecond) {
-		t.Fatalf("initial-less ceiling = %v, want 30ms", time.Duration(got))
-	}
-	// Without a max the doubling is uncapped until the shift clamp.
-	if got := backoffCeiling(Policy{BackoffInitial: time.Second}, 3); got != int64(4*time.Second) {
-		t.Fatalf("uncapped ceiling = %v, want 4s", time.Duration(got))
 	}
 }

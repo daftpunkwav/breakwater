@@ -1,8 +1,8 @@
 /**
  * @file chain_test
  * @description The composed governance pipeline end to end: identity,
- * rate limiting and quota around the completions route — the S2 and S5
- * acceptance scenarios plus the auth rejections.
+ * rate limiting and quota around the completions route — over-limit
+ * rejection, drained-balance rejection, and the auth rejections.
  */
 package server
 
@@ -95,7 +95,7 @@ func completionRequest(t *testing.T, handler http.Handler, key, body string) (in
 const okBody = `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`
 
 // countingBackend wraps the shared test upstream and counts the requests
-// that actually reach it — the assertion surface of invariant I1
+// that actually reach it — the assertion surface that a rejected
 // (a rejected request must not touch any upstream).
 func countingBackend(t *testing.T) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
@@ -183,13 +183,13 @@ func TestChainRejectsMissingAndUnknownKeys(t *testing.T) {
 	if status != http.StatusUnauthorized || !strings.Contains(body, "invalid_api_key") {
 		t.Fatalf("bad-key status = %d body = %s", status, body)
 	}
-	// I1: an auth rejection never reaches the upstream.
+	// An auth rejection never reaches the upstream.
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("upstream hits = %d, want 0 for rejected keys", got)
 	}
 }
 
-// TestChainRateLimitsWithRetryAfter is scenario S2: over-limit
+// TestChainRateLimitsWithRetryAfter covers the over-limit path: over-limit
 // requests get 429 with Retry-After and never reach the upstream.
 func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	t.Parallel()
@@ -217,14 +217,14 @@ func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	if !strings.Contains(body, "rate_limit_exceeded") {
 		t.Fatalf("body = %s, want rate limit envelope", body)
 	}
-	// I1: exactly the two allowed requests touched the upstream; the
+	// Exactly the two allowed requests touched the upstream; the
 	// 429 stampede behind them never did.
 	if got := hits.Load(); got != 2 {
 		t.Fatalf("upstream hits = %d, want 2: rejected requests must not reach the upstream", got)
 	}
 }
 
-// TestChainFailedRequestSettlesAtZero is the S6 companion: an upstream
+// TestChainFailedRequestSettlesAtZero is its failure companion: an upstream
 // failure serves no tokens, so the reservation must refund in full —
 // a tenant never pays the estimate for a request no upstream answered.
 func TestChainFailedRequestSettlesAtZero(t *testing.T) {
@@ -251,7 +251,7 @@ func TestChainFailedRequestSettlesAtZero(t *testing.T) {
 	}
 }
 
-// TestChainQuotaExhaustionIsPaymentRequired is scenario S5: a drained
+// TestChainQuotaExhaustionIsPaymentRequired covers a drained
 // tenant gets 402 and the upstream stays untouched.
 func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {
 	t.Parallel()
@@ -276,7 +276,7 @@ func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {
 	if err != nil || bal != 10 {
 		t.Fatalf("balance = %d err = %v, want untouched 10", bal, err)
 	}
-	// I1: the 402 never reached the upstream.
+	// The 402 never reached the upstream.
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("upstream hits = %d, want 0 for a quota-rejected request", got)
 	}
@@ -379,7 +379,7 @@ func TestChainDeniesModelOutsideTier(t *testing.T) {
 		t.Fatalf("denied model status = %d body = %s, want 403 envelope", status, body)
 	}
 	// The rejection refunds in full: no quota moved for the denied call,
-	// and the denied request never reached the upstream (I1).
+	// and the denied request never reached the upstream.
 	bal, err := ledger.Balance(context.Background(), "t1")
 	if err != nil || bal != 1_000_000-3 {
 		t.Fatalf("balance = %d err = %v, want 999997 (denied call refunded)", bal, err)
@@ -389,8 +389,8 @@ func TestChainDeniesModelOutsideTier(t *testing.T) {
 	}
 }
 
-// TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage is the I10
-// evidence: a client that walks away mid-stream has its disconnect
+// TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage is the
+// settlement evidence: a client that walks away mid-stream has its disconnect
 // propagated as upstream cancellation, and the lease settles by the
 // tokens actually consumed — never refunded as if nothing happened,
 // never surcharged past the reservation.

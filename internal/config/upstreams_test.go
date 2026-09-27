@@ -1,5 +1,5 @@
 /**
- * @file config_upstreams_test
+ * @file upstreams_test
  * @description The upstream table's assembly-time guards: duplicated
  * ids and base URLs without an http(s) scheme or host refuse to boot —
  * both would otherwise surface as per-request failures against a
