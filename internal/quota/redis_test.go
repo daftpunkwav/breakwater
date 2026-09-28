@@ -264,3 +264,29 @@ func TestRedisNamespaceIsolatesDeployments(t *testing.T) {
 		t.Fatalf("namespaced balance key missing; keys in the store: %v", mr.Keys())
 	}
 }
+
+// TestRedisSettleClampsNegativeUsage pins the script against a hostile
+// upstream: a negative usage count must never mint balance — the settle
+// refunds at most what the lease reserved.
+func TestRedisSettleClampsNegativeUsage(t *testing.T) {
+	t.Parallel()
+	r, _ := newTestLedger(t)
+	ctx := context.Background()
+
+	if err := r.SetBalance(ctx, "t", 1000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	lease, err := r.Reserve(ctx, "t", 400)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := r.Settle(ctx, lease.ID, -25); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	// The clamp treats a negative count as "nothing consumed": the full
+	// reservation refunds and the balance returns to its seed - never
+	// past it, the way the unclamped arithmetic would (1425).
+	if bal, _ := r.Balance(ctx, "t"); bal != 1000 {
+		t.Fatalf("balance = %d, want the seed balance with no minted tokens (1000)", bal)
+	}
+}

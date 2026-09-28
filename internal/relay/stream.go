@@ -52,10 +52,27 @@ const donePayload = "[DONE]"
 // sent.
 var errStreamTruncated = errors.New("relay: upstream stream ended without the [DONE] terminator")
 
+// countingWriter counts the bytes a transcoder renders. The translated
+// wires rewrite every frame, so the input data lines are not what the
+// client received — the rendered output is, and StreamBytes must report
+// that for the fallback metering to stay honest.
+type countingWriter struct {
+	http.ResponseWriter
+	n int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
 // pumpTranscoded feeds the upstream SSE sequence through a stream
 // transcoder: the preamble opens the exchange, every data frame is
 // translated, the terminator (or the abort sequence) closes it. Usage
-// is still scraped passively for settlement.
+// is still scraped passively for settlement. The returned byte count is
+// what the transcoder actually rendered, not the upstream bytes it
+// consumed.
 //
 // The [DONE] sentinel is what separates a finished stream from a
 // truncated one. Byte passthrough needs no such distinction — the
@@ -67,8 +84,8 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 	flusher, flushes := out.(http.Flusher)
 	var usage protocol.Usage
 	usageKnown := false
-	var total int64
 	doneSeen := false
+	cw := &countingWriter{ResponseWriter: out}
 
 	flush := func() {
 		if flushes {
@@ -76,8 +93,8 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 		}
 	}
 
-	if err := transcoder.Start(out, model); err != nil {
-		return usage, usageKnown, total, err
+	if err := transcoder.Start(cw, model); err != nil {
+		return usage, usageKnown, cw.n, err
 	}
 	flush()
 
@@ -90,24 +107,23 @@ func pumpTranscoded(out http.ResponseWriter, body io.Reader, transcoder protocol
 					if u, ok := protocol.ParseUsage(payload); ok {
 						usage, usageKnown = u, true
 					}
-					if err := transcoder.Delta(out, payload); err != nil {
-						return usage, usageKnown, total, err
+					if err := transcoder.Delta(cw, payload); err != nil {
+						return usage, usageKnown, cw.n, err
 					}
 				} else {
 					doneSeen = true
 				}
-				total += int64(len(trimmed)) + 1
 				flush()
 			}
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
 				if !doneSeen {
-					return usage, usageKnown, total, errStreamTruncated
+					return usage, usageKnown, cw.n, errStreamTruncated
 				}
-				return usage, usageKnown, total, transcoder.Finish(out, usage, usageKnown)
+				return usage, usageKnown, cw.n, transcoder.Finish(cw, usage, usageKnown)
 			}
-			return usage, usageKnown, total, readErr
+			return usage, usageKnown, cw.n, readErr
 		}
 	}
 }

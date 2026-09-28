@@ -24,7 +24,10 @@ if state ~= 'RESERVED' then
 end
 
 local amount = tonumber(redis.call('HGET', KEYS[2], 'amount'))
-local used = tonumber(ARGV[1])
+-- The usage figure arrives from the gateway, which scraped it from the
+-- upstream reply; a negative count must not mint balance, so it clamps
+-- to zero and the settle refunds at most the reserved amount.
+local used = math.max(tonumber(ARGV[1]), 0)
 local refund = amount - used
 -- %d keeps every money movement an integer string: the raw Lua double
 -- would serialize as scientific notation past 14 digits and the INCRBY

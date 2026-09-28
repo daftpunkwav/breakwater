@@ -98,8 +98,11 @@ func TestPumpTranscodedTranslatesAndScrapesUsage(t *testing.T) {
 	if got := rec.Body.String(); got != want {
 		t.Fatalf("output = %q, want preamble, translated deltas and terminator", got)
 	}
-	if total == 0 {
-		t.Fatal("byte count not accumulated")
+	// The count is the rendered bytes actually delivered, not the
+	// upstream data lines consumed: the translated wire is what the
+	// client received, and StreamBytes meters that.
+	if total != int64(len(want)) {
+		t.Fatalf("byte count = %d, want the %d rendered bytes", total, len(want))
 	}
 }
 

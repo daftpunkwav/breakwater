@@ -171,6 +171,42 @@ func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
 	}
 }
 
+// TestCacheMiddlewareReplayCarriesRetryAfter pins the negative-cache
+// replay contract: the Retry-After a stored 429 carries is part of the
+// fact being cached, and a hit that drops it invites the immediate
+// retry the upstream asked to wait out.
+func TestCacheMiddlewareReplayCarriesRetryAfter(t *testing.T) {
+	t.Parallel()
+	var fetches atomic.Int64
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		pipeline.CarrierFrom(r.Context()).Relay = &relay.Result{
+			Status:     http.StatusTooManyRequests,
+			UpstreamID: "u1",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"slow down"}}`))
+	})
+	handler := cacheStage(t, upstream)
+
+	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	if rec := fireRequest(handler, body); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("first status = %d, want 429", rec.Code)
+	}
+	second := fireRequest(handler, body)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want the replayed 429", second.Code)
+	}
+	if got := second.Header().Get("Retry-After"); got != "7" {
+		t.Fatalf("replayed Retry-After = %q, want the stored hint", got)
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("fetches = %d, want 1 (negative entry served the second)", got)
+	}
+}
+
 // TestCacheMiddlewareNeverNegativeCachesGatewayEnvelopes pins the other
 // half: a gateway envelope is a transient state, not a fact about the
 // request — every request must reach the upstream again.

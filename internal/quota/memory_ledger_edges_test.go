@@ -73,3 +73,29 @@ func TestMemoryCancelUnknownLeaseSurfaces(t *testing.T) {
 		t.Fatalf("err = %v, want the unknown lease error surfaced", err)
 	}
 }
+
+// TestMemorySettleClampsNegativeUsage pins the ledger invariant against
+// a hostile upstream: the usage figure is scraped from the upstream
+// reply, and a negative count must never mint balance — settlement
+// refunds at most what the lease reserved.
+func TestMemorySettleClampsNegativeUsage(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+	if err := m.SetBalance(ctx, "t", 100); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	lease, err := m.Reserve(ctx, "t", 40)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := m.Settle(ctx, lease.ID, -25); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	// The clamp treats a negative count as "nothing consumed": the full
+	// reservation refunds and the balance returns to its seed - never
+	// past it, the way the unclamped arithmetic would (125).
+	if bal, _ := m.Balance(ctx, "t"); bal != 100 {
+		t.Fatalf("balance = %d, want the seed balance with no minted tokens (100)", bal)
+	}
+}

@@ -103,7 +103,12 @@ func (c *CachedStore) Resolve(ctx context.Context, apiKey string) (Tenant, error
 	return tenant, err
 }
 
-// lookup returns the cached answer when it is fresh.
+// lookup returns the cached answer when it is fresh. The returned
+// Tenant shares its Tier slice/map fields (AllowedModels, DeniedModels,
+// ModelQuotas) with the cached entry: every current caller treats the
+// snapshot as read-only, so no copy is made. A future caller that
+// mutates the snapshot must shallow-copy those fields here first, or it
+// will corrupt every other request resolving through the same entry.
 func (c *CachedStore) lookup(apiKey string) (Tenant, error, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -129,7 +129,11 @@ func (m *Memory) Settle(_ context.Context, leaseID string, usedTokens int64) err
 		slog.Info("quota settle reached a terminal lease", "lease", leaseID, "state", lease.State)
 		return nil
 	}
-	refund := lease.Amount - usedTokens
+	// The usage figure originates from the upstream reply; a broken or
+	// hostile upstream reporting a negative count must not mint balance:
+	// settlement only ever refunds what the lease reserved, never more.
+	used := max(usedTokens, 0)
+	refund := lease.Amount - used
 	if refund > 0 {
 		m.balances[lease.TenantID] += refund
 	}
