@@ -29,9 +29,9 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/quota"
 )
 
-// governance bundles the concrete governance backends one process runs
-// with.
-type governance struct {
+// governanceBackends bundles the concrete governance backends one
+// process runs with.
+type governanceBackends struct {
 	// mode names the backend pairing for startup logs.
 	mode        string
 	limiter     limiter.Limiter
@@ -52,13 +52,14 @@ type balanceSeeder interface {
 	EnsureBalance(ctx context.Context, tenantID string, initial int64) (bool, error)
 }
 
-// newGovernance builds the backend pairing for the configuration.
-// A configured Redis must answer at startup: with a fail-closed limiter
-// a dead backend is a deployment failure, not a degraded start.
-func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) {
+// newGovernanceBackends builds the backend pairing for the
+// configuration. A configured Redis must answer at startup: with a
+// fail-closed limiter a dead backend is a deployment failure, not a
+// degraded start.
+func newGovernanceBackends(ctx context.Context, cfg config.Config) (*governanceBackends, error) {
 	if cfg.Redis.Addr == "" {
 		mem := quota.NewMemory().WithLeaseTTL(cfg.LeaseTTL())
-		return &governance{
+		return &governanceBackends{
 			mode:        "memory",
 			limiter:     limiter.NewMemory(),
 			ledger:      mem,
@@ -77,7 +78,7 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 	}
 
 	redisLedger := quota.NewRedis(rdb, redisNamespace(cfg), cfg.LeaseTTL())
-	return &governance{
+	return &governanceBackends{
 		mode:           "redis",
 		limiter:        limiter.NewRedis(rdb, redisNamespace(cfg)),
 		ledger:         redisLedger,

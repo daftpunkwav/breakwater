@@ -89,7 +89,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// Governance backends: Redis when configured, in-memory otherwise
 	// (development and evidence runs). Memory mode keeps the exact same
 	// pipeline semantics with process-local state.
-	gov, err := newGovernance(ctx, cfg)
+	gov, err := newGovernanceBackends(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -100,18 +100,18 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// the static identity set otherwise. Either way the steady state
 	// resolves through the process-local LRU. Identity configuration is
 	// what arms the governance pipeline.
-	id, err := newAuthStore(ctx, cfg)
+	identity, err := newAuthStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	defer id.close()
+	defer identity.close()
 
-	governance, err := buildGovernance(ctx, cfg, gov, metrics, sink, id, logger)
+	governance, err := buildGovernance(ctx, cfg, gov, metrics, sink, identity, logger)
 	if err != nil {
 		return err
 	}
 
-	routing, err := assembleRoutingPlane(cfg, breaker, metrics, governance, id.admin, recorder.store, logger)
+	routing, err := assembleRoutingPlane(cfg, breaker, metrics, governance, identity.admin, recorder.store, logger)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 			adapters:    routing.adapters,
 			probes:      routing.probes,
 		}, routing.adminOptions...),
-		Readiness: mergeReadiness(gov.readiness, id.ready),
+		Readiness: mergeReadiness(gov.readiness, identity.ready),
 		Models:    discoverableModels(cfg.Upstreams),
 		Version:   version,
 	})
@@ -186,11 +186,11 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 // arms — the lease sweeper, the quota reconciler and static-balance
 // seeding. The returned error fails startup only where a silently
 // inert governance would be worse than a failed one.
-func buildGovernance(ctx context.Context, cfg config.Config, gov *governance, metrics *obs.Metrics, sink combinedSink, id identityAssembly, logger *slog.Logger) ([]pipeline.Middleware, error) {
+func buildGovernance(ctx context.Context, cfg config.Config, gov *governanceBackends, metrics *obs.Metrics, sink combinedSink, identity identityAssembly, logger *slog.Logger) ([]pipeline.Middleware, error) {
 	governance := []pipeline.Middleware{
 		pipeline.ObservationStage(metrics, sink),
 	}
-	if id.store == nil {
+	if identity.store == nil {
 		logger.Warn("no identity configured: running without governance stages")
 		return governance, nil
 	}
@@ -198,7 +198,7 @@ func buildGovernance(ctx context.Context, cfg config.Config, gov *governance, me
 	// in-flight state.
 	concurrencyGate := limiter.NewConcurrency()
 	governance = append(governance,
-		pipeline.AuthStage(id.store),
+		pipeline.AuthStage(identity.store),
 		// Tier model authorization before every spend and before the
 		// cache: the cache key is the request body alone, so a replay
 		// must never bypass the tier's allow/deny decision.
@@ -226,10 +226,10 @@ func buildGovernance(ctx context.Context, cfg config.Config, gov *governance, me
 	// interval armed. The tenant list comes from the system of
 	// record — the static set is configuration (no DSN, no snapshot
 	// store), so PostgreSQL identity mode is the reconcilable one.
-	reconcileArmed := gov.snapshotSource != nil && id.admin != nil && cfg.Postgres.DSN != ""
+	reconcileArmed := gov.snapshotSource != nil && identity.admin != nil && cfg.Postgres.DSN != ""
 	switch {
 	case reconcileArmed && cfg.ReconcileInterval > 0:
-		users, err := id.admin.Users(ctx)
+		users, err := identity.admin.Users(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("reconciler: list tenants: %w", err)
 		}
@@ -248,8 +248,8 @@ func buildGovernance(ctx context.Context, cfg config.Config, gov *governance, me
 			"interval", cfg.ReconcileInterval, "redis", gov.snapshotSource != nil,
 			"postgres", cfg.Postgres.DSN != "")
 	}
-	if id.static != nil {
-		seedBalances(ctx, id.static, gov.ledger, logger)
+	if identity.static != nil {
+		seedBalances(ctx, identity.static, gov.ledger, logger)
 	}
 	return governance, nil
 }
@@ -293,7 +293,7 @@ func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *o
 		return routingPlane{}, err
 	}
 	tracker := router.NewTracker()
-	rt, err := router.NewPriority(bindings,
+	priority, err := router.NewPriority(bindings,
 		router.WithBreaker(breaker),
 		router.WithSwitch(routingSwitch),
 		router.WithStrategy(strategy),
@@ -335,7 +335,7 @@ func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *o
 	inference := make(map[protocol.Format]http.Handler, len(formats))
 	for _, format := range formats {
 		inference[format] = inferenceChain(format, governance,
-			server.NewInference(format, rt, relayer,
+			server.NewInference(format, priority, relayer,
 				server.WithFallbacks(cfg.Fallbacks),
 				server.WithContextLimits(cfg.ContextLimits)))
 	}

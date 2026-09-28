@@ -51,7 +51,7 @@ func adminActions(t *testing.T, probeStatus int) (http.Handler, circuit.Breaker)
 	t.Helper()
 	srv := statusServer(t, probeStatus)
 	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1})
-	gov := &governance{ledger: quota.NewMemory()}
+	gov := &governanceBackends{ledger: quota.NewMemory()}
 	cfg := testConfig("127.0.0.1:0")
 	cfg.Probe.Timeout = time.Second
 	adapters := map[string]upstream.Upstream{
@@ -115,7 +115,7 @@ func TestAdminProbeEndpointReportsFailures(t *testing.T) {
 func TestAdminProbeWorksWithoutProbeTimeout(t *testing.T) {
 	t.Parallel()
 	srv := statusServer(t, http.StatusOK)
-	gov := &governance{ledger: quota.NewMemory()}
+	gov := &governanceBackends{ledger: quota.NewMemory()}
 	cfg := testConfig("127.0.0.1:0")
 	cfg.Probe.Interval = 0
 	cfg.Probe.Timeout = 0

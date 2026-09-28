@@ -10,8 +10,9 @@
 |---|---|
 | `main.go` | 进程边界：root `slog` logger、Makefile 注入的 `version`、`config.Load()`，然后交给 `serve`。刻意保持单薄；`serve` 返回错误而非直接退出，整条路径因此可测 |
 | `serve.go` | 组装心脏：装配顺序、每种格式的 middleware 链、运行生命周期（SIGINT/SIGTERM、关闭顺序、drain 超时处理） |
-| `governance.go` | backend 选择：`newGovernance`（Redis 需通过 fail-fast Ping，或内存实现）、`newAuthStore`（PostgreSQL / 静态 `BREAKWATER_IDENTITY` / 无，均包在 `auth.NewCachedStore` 里，正缓存 60 s、负缓存 5 s）、`seedBalances` |
-| `obsassembly.go` | 观测组装：JSONL access log 文件 sink（`BREAKWATER_ACCESS_LOG_PATH`）、insights store（`BREAKWATER_INSIGHTS_DSN`，默认取 `BREAKWATER_POSTGRES_DSN`）、`combinedSink` 扇出、`buildAdmin` |
+| `governance.go` | backend 选择：`newGovernanceBackends`（Redis 需通过 fail-fast Ping，或内存实现）、`newAuthStore`（PostgreSQL / 静态 `BREAKWATER_IDENTITY` / 无，均包在 `auth.NewCachedStore` 里，正缓存 60 s、负缓存 5 s）、`seedBalances` |
+| `obsassembly.go` | 观测组装：JSONL access log 文件 sink（`BREAKWATER_ACCESS_LOG_PATH`）、insights store（`BREAKWATER_INSIGHTS_DSN`，默认取 `BREAKWATER_POSTGRES_DSN`）、`combinedSink` 扇出 |
+| `adminassembly.go` | admin surface 组装：`buildAdmin` 把余额、breaker 状态/复位与按需探测端点绑定到 live ledger、breaker registry 与上游 adapter（`adminBindings`） |
 | `recovery.go` | 主动恢复循环：探测 auto-disabled 的上游（`BREAKWATER_PROBE_THRESHOLD` 次连续健康应答解除禁用），并为被 breaker 弹出的上游驱动合成探测 |
 
 ## Assembly order

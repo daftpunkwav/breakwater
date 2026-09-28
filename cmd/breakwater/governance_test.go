@@ -23,9 +23,9 @@ func testConfig(addr string) config.Config {
 	return cfg
 }
 
-func TestNewGovernanceMemoryMode(t *testing.T) {
+func TestNewGovernanceBackendsMemoryMode(t *testing.T) {
 	t.Parallel()
-	gov, err := newGovernance(context.Background(), testConfig("127.0.0.1:0"))
+	gov, err := newGovernanceBackends(context.Background(), testConfig("127.0.0.1:0"))
 	if err != nil {
 		t.Fatalf("governance: %v", err)
 	}
@@ -38,22 +38,22 @@ func TestNewGovernanceMemoryMode(t *testing.T) {
 	}
 }
 
-func TestNewGovernanceRejectsDeadBackend(t *testing.T) {
+func TestNewGovernanceBackendsRejectsDeadBackend(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig("127.0.0.1:0")
 	cfg.Redis.Addr = "127.0.0.1:1" // nothing listens here
-	if _, err := newGovernance(context.Background(), cfg); err == nil {
+	if _, err := newGovernanceBackends(context.Background(), cfg); err == nil {
 		t.Fatal("a dead Redis at startup must fail assembly: the fail-closed limiter cannot serve")
 	}
 }
 
-func TestNewGovernanceRedisMode(t *testing.T) {
+func TestNewGovernanceBackendsRedisMode(t *testing.T) {
 	t.Parallel()
 	mr := miniredis.RunT(t)
 	cfg := testConfig("127.0.0.1:0")
 	cfg.Redis.Addr = mr.Addr()
 
-	gov, err := newGovernance(context.Background(), cfg)
+	gov, err := newGovernanceBackends(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("governance: %v", err)
 	}

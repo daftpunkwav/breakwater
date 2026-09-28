@@ -24,7 +24,7 @@ func TestBuildAdminEndpoints(t *testing.T) {
 	if err := ledger.SetBalance(context.Background(), "t1", 250); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	gov := &governance{ledger: ledger}
+	gov := &governanceBackends{ledger: ledger}
 	breaker := circuit.NopBreaker{}
 	admin := buildAdmin(testConfig("127.0.0.1:0"), adminBindings{
 		gov:         gov,
