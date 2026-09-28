@@ -83,7 +83,7 @@ func TestStreamTimeToFirstByteRetries(t *testing.T) {
 		calls++
 		if calls == 1 {
 			select {
-			case <-time.After(400 * time.Millisecond):
+			case <-time.After(5 * time.Second):
 				t.Error("first attempt should have been cut by the ttft timer")
 				return nil, errors.New("unreachable")
 			case <-ctx.Done():
@@ -98,7 +98,12 @@ func TestStreamTimeToFirstByteRetries(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 		}, nil
 	}}
-	exec := New(retry.Policy{MaxAttempts: 2, AttemptTimeout: 60 * time.Millisecond}, nil)
+	// The margins are deliberately wide: the ttft timer must win its
+	// race against the parked first attempt by seconds, and the second
+	// attempt must land its headers seconds before its own ttft budget
+	// expires, so goroutine-scheduling jitter on a loaded machine cannot
+	// flip either verdict.
+	exec := New(retry.Policy{MaxAttempts: 2, AttemptTimeout: 2 * time.Second}, nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
 	if result.Status != http.StatusOK || result.Attempts != 2 {
