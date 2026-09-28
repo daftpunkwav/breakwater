@@ -22,7 +22,8 @@ import (
 // serveThroughConcurrency runs one carrier-backed request through the
 // stage and returns the recorder; the terminal handler answers
 // immediately, so each call takes and releases its slot synchronously.
-func serveThroughConcurrency(t *testing.T, g *Concurrency, tenant auth.Tenant) *httptest.ResponseRecorder {
+// metrics may be nil to disable recording.
+func serveThroughConcurrency(t *testing.T, g *Concurrency, metrics *obs.Metrics, tenant auth.Tenant) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(threeWordBody))
 	carrier := &pipeline.Carrier{Tenant: tenant, Format: protocol.FormatOpenAIChat}
@@ -32,7 +33,7 @@ func serveThroughConcurrency(t *testing.T, g *Concurrency, tenant auth.Tenant) *
 		w.WriteHeader(http.StatusOK)
 	})
 	rec := httptest.NewRecorder()
-	ConcurrencyMiddleware(g, obs.NewMetrics())(terminal).ServeHTTP(rec, req)
+	ConcurrencyMiddleware(g, metrics)(terminal).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -48,7 +49,7 @@ func TestConcurrencyMiddlewareRejectsOverCeiling(t *testing.T) {
 	}
 	defer release()
 
-	rec := serveThroughConcurrency(t, g, blocked)
+	rec := serveThroughConcurrency(t, g, nil, blocked)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", rec.Code)
 	}
@@ -68,13 +69,43 @@ func TestConcurrencyMiddlewareAdmitsUnderCeilingAndReleases(t *testing.T) {
 	tenant := auth.Tenant{ID: "t1", Tier: auth.Tier{Concurrency: 2}}
 
 	for i := 0; i < 5; i++ {
-		rec := serveThroughConcurrency(t, g, tenant)
+		rec := serveThroughConcurrency(t, g, nil, tenant)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d status = %d, want 200 (each request releases before returning)", i+1, rec.Code)
 		}
 	}
 	if g.InFlight("t1") != 0 {
 		t.Fatalf("in-flight = %d, want 0: the slot must ride the handler return", g.InFlight("t1"))
+	}
+}
+
+// TestConcurrencyMiddlewareCountsTheRejection: a 429 the ceiling issues
+// must reach the exposition under the tenant's label — the per-tenant
+// rejection pressure operators read is only as honest as this counter.
+func TestConcurrencyMiddlewareCountsTheRejection(t *testing.T) {
+	t.Parallel()
+	g := NewConcurrency()
+	metrics := obs.NewMetrics()
+	blocked := auth.Tenant{ID: "t1", Tier: auth.Tier{Concurrency: 1}}
+
+	// Occupy the one slot directly.
+	release, ok := g.Acquire("t1", 1)
+	if !ok {
+		t.Fatal("first acquire failed")
+	}
+	defer release()
+
+	rec := serveThroughConcurrency(t, g, metrics, blocked)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+
+	var rendered strings.Builder
+	if err := metrics.Render(&rendered); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(rendered.String(), `breakwater_concurrency_limited_total{tenant="t1"} 1`) {
+		t.Fatalf("exposition missing the t1 rejection counter:\n%s", rendered.String())
 	}
 }
 
