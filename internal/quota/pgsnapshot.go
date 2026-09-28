@@ -26,10 +26,22 @@ type PGSnapshots struct {
 	pool *pgxpool.Pool
 }
 
+// poolMaxConns bounds the snapshot pool: the reconciler reads and
+// appends from a single background loop, so a small fixed bound covers
+// it and keeps the gateway's total PostgreSQL footprint (identity,
+// snapshots, insights — three pools on one database) independent of the
+// host's CPU count, which pgx's default of max(4, NumCPU) is not.
+const poolMaxConns = 2
+
 // NewPGSnapshots connects the snapshot store; failures surface at
 // assembly.
 func NewPGSnapshots(ctx context.Context, dsn string) (*PGSnapshots, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("quota: connect snapshot database: %w", err)
+	}
+	cfg.MaxConns = poolMaxConns
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("quota: connect snapshot database: %w", err)
 	}

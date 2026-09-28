@@ -28,6 +28,14 @@ import (
 const (
 	batchSize     = 200
 	flushInterval = 2 * time.Second
+	// probeTimeout bounds the startup schema check.
+	probeTimeout = 5 * time.Second
+	// poolMaxConns bounds the insights pool: one batch writer plus the
+	// admin report queries. A fixed bound keeps the gateway's total
+	// PostgreSQL footprint (identity, snapshots, insights — three pools
+	// on one database) independent of the host's CPU count, which pgx's
+	// default of max(4, NumCPU) is not.
+	poolMaxConns = 4
 )
 
 // PGStore persists insight records into PostgreSQL and answers the
@@ -50,10 +58,15 @@ type PGStore struct {
 	closed bool
 }
 
-// NewPGStore connects and starts the batch writer; Close flushes and
-// stops it.
+// NewPGStore connects, verifies the request_log table exists and starts
+// the batch writer; Close flushes and stops it.
 func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("insights: connect: %w", err)
+	}
+	cfg.MaxConns = poolMaxConns
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("insights: connect: %w", err)
 	}
@@ -63,9 +76,29 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
+	// The schema is applied at deploy time, never by this process, so a
+	// missing request_log table would only surface as batches that fail
+	// and records that silently pile onto the drop counter. Probing the
+	// table here fails startup instead, where an operator sees it.
+	if err := s.probeSchema(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	s.insert = s.copyBatch
 	go s.writeLoop()
 	return s, nil
+}
+
+// probeSchema verifies the request_log table exists: the query is
+// planned against the catalog, so an absent table (or an unreachable
+// database) fails construction before a single record is queued.
+func (s *PGStore) probeSchema(ctx context.Context) error {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	if _, err := s.pool.Exec(probeCtx, `SELECT 1 FROM request_log LIMIT 0`); err != nil {
+		return fmt.Errorf("insights: request_log schema: %w", err)
+	}
+	return nil
 }
 
 // Record accepts one finished request without blocking; capacity

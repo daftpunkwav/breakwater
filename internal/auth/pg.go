@@ -29,9 +29,23 @@ type PG struct {
 	pool *pgxpool.Pool
 }
 
+// poolMaxConns bounds the identity pool. The gateway opens up to three
+// PostgreSQL pools against one database (identity, quota snapshots,
+// insights), and pgx's default of max(4, NumCPU) per pool scales the
+// total with the host instead of the workload — a large machine could
+// exhaust the server's max_connections on its own. Resolution rides
+// behind the process-local LRU, so a small fixed bound absorbs even a
+// cold-cache burst.
+const poolMaxConns = 8
+
 // NewPG connects the pool; connection failures surface at assembly.
 func NewPG(ctx context.Context, dsn string) (*PG, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("auth: connect identity database: %w", err)
+	}
+	cfg.MaxConns = poolMaxConns
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("auth: connect identity database: %w", err)
 	}
