@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/cache"
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
@@ -63,32 +64,27 @@ var formats = []protocol.Format{
 }
 
 // serve assembles the gateway from cfg and serves it until ctx or a
-// process signal ends the run.
-// serve assembles and runs the gateway. listener is served when
-// non-nil instead of binding cfg.Server.Addr: a caller that already
-// holds a bound listener passes it, which removes the reserve-release-
-// rebind race it would otherwise face when it needs the address up front.
-// Production leaves it nil.
+// process signal ends the run. listener is served when non-nil instead
+// of binding cfg.Server.Addr: a caller that already holds a bound
+// listener passes it, which removes the reserve-release-rebind race it
+// would otherwise face when it needs the address up front. Production
+// leaves it nil.
+//
+// The body is the composition heart of the binary: every wire-up
+// decision (which backend, which stages) is made here and nowhere
+// else, in four sub-assemblies — observation, governance, the routing
+// plane — followed by the run lifecycle.
 func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version string, listener net.Listener) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// Observation first: every stage records into the same registry.
-	metrics := obs.NewMetrics()
-	accessLog, err := newAccessLog(cfg, logger)
+	metrics, logs, recorder, sink, err := assembleObservation(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
-	defer accessLog.close()
-
-	// The monitoring and assessment store: one row per finished
-	// request, batched into PostgreSQL; disabled without a DSN.
-	recorder, err := newInsights(ctx, cfg, logger)
-	if err != nil {
-		return err
-	}
+	defer logs.close()
 	defer recorder.close()
-	sink := combinedSink{file: accessLog.sink, insights: recorder.store}
 
 	// Governance backends: Redis when configured, in-memory otherwise
 	// (development and evidence runs). Memory mode keeps the exact same
@@ -98,96 +94,193 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		return err
 	}
 	defer gov.close()
-
 	breaker := buildBreaker(cfg.Circuit, metrics)
 
 	// Identity: PostgreSQL system of record when a DSN is configured,
 	// the static identity set otherwise. Either way the steady state
 	// resolves through the process-local LRU. Identity configuration is
 	// what arms the governance pipeline.
-	authStore, staticIdentity, identityAdmin, closeIdentity, identityReady, err := newAuthStore(ctx, cfg)
+	id, err := newAuthStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	defer closeIdentity()
+	defer id.close()
 
-	// The governance stage template, shared by every client format; the
-	// format stage in front pins which wire parses and renders.
+	governance, err := buildGovernance(ctx, cfg, gov, metrics, sink, id, logger)
+	if err != nil {
+		return err
+	}
+
+	routing, err := assembleRoutingPlane(cfg, breaker, metrics, governance, id.admin, recorder.store, logger)
+	if err != nil {
+		return err
+	}
+
+	srv := server.New(server.Options{
+		Addr:          cfg.Server.Addr,
+		ShutdownGrace: cfg.Server.ShutdownGrace,
+		Listener:      listener,
+		Inference:     routing.inference,
+		Metrics:       metricsHandler(metrics),
+		Admin: buildAdmin(cfg, adminBindings{
+			gov:         gov,
+			breaker:     breaker,
+			metrics:     metrics,
+			upstreamIDs: upstreamIDs(cfg.Upstreams),
+			adapters:    routing.adapters,
+			probes:      routing.probes,
+		}, routing.adminOptions...),
+		Readiness: mergeReadiness(gov.readiness, id.ready),
+		Models:    discoverableModels(cfg.Upstreams),
+		Version:   version,
+	})
+
+	publishLogDrops(ctx, metrics, logs.logger, recorder.store, dropPublishInterval)
+	// Active recovery probing: upstreams taken out of rotation (auto
+	// disabled, breaker ejected) are asked periodically whether they
+	// are back; only those with a configured probe_url can be asked.
+	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, cfg.Probe.Threshold,
+		breaker, routing.routeSwitch, routing.probes, metrics, logger)
+
+	logger.Info("gateway starting",
+		"version", version,
+		"addr", cfg.Server.Addr,
+		"upstreams", len(cfg.Upstreams),
+		"governance", gov.mode,
+		"admin_auth", adminAuthState(cfg.Security.AdminToken),
+		"lease_ttl", cfg.LeaseTTL())
+	if cfg.Redis.Addr != "" && redisNamespace(cfg) == "" {
+		// Sharing one Redis instance between deployments without a
+		// namespace means sharing tenant balances: one environment
+		// spends the other's money, and its sweeper refunds leases the
+		// other is still serving. Nothing else can detect that at
+		// startup, so say it where an operator will actually see it.
+		logger.Warn("redis keys are not namespaced: this gateway must be the only deployment on " +
+			cfg.Redis.Addr + ", or set " + config.EnvRedisNamespace)
+	}
+	if err := srv.Run(ctx); err != nil {
+		if errors.Is(err, httpserver.ErrDrainTimeout) {
+			// A shutdown past its grace window with requests still in
+			// flight is a shutdown with a warning, not a failure: exiting
+			// non-zero here would turn every rolling restart that carries
+			// a long stream into a failed unit. The stragglers were cut;
+			// say so loudly and stop cleanly.
+			logs.close()
+			logger.Warn("shutdown grace expired with requests in flight", "grace", cfg.Server.ShutdownGrace)
+			logger.Info("gateway stopped")
+			return nil
+		}
+		// The deferred close would still run on the happy path, but a
+		// serve error must flush the observation queue before the caller
+		// turns the error into an exit code.
+		logs.close()
+		return err
+	}
+	logger.Info("gateway stopped")
+	return nil
+}
+
+// buildGovernance arms the governance pipeline: the stage list shared
+// by every client format (the format stage in front pins which wire
+// parses and renders), plus the background workers the configuration
+// arms — the lease sweeper, the quota reconciler and static-balance
+// seeding. The returned error fails startup only where a silently
+// inert governance would be worse than a failed one.
+func buildGovernance(ctx context.Context, cfg config.Config, gov *governance, metrics *obs.Metrics, sink combinedSink, id identityAssembly, logger *slog.Logger) ([]pipeline.Middleware, error) {
 	governance := []pipeline.Middleware{
 		pipeline.ObservationStage(metrics, sink),
 	}
-	if authStore != nil {
-		// One gate for the process lifetime: its slot map IS the
-		// in-flight state.
-		concurrencyGate := limiter.NewConcurrency()
-		governance = append(governance,
-			pipeline.AuthStage(authStore),
-			// Tier model authorization before every spend and before the
-			// cache: the cache key is the request body alone, so a replay
-			// must never bypass the tier's allow/deny decision.
-			pipeline.ModelAuthzStage(),
-			// Concurrency sits before the rate limit: a request rejected
-			// for concurrency must not consume rate budget or quota.
-			limiter.ConcurrencyMiddleware(concurrencyGate, metrics),
-			limiter.Middleware(gov.limiter, metrics),
-			quota.Middleware(gov.ledger, metrics),
-		)
-		if cfg.Cache.Enabled {
-			governance = append(governance, cache.Middleware(
-				cache.NewMemory(cache.WithCapacity(cfg.Cache.Capacity)),
-				cache.NewFlight(),
-				cfg.Cache.TTL,
-				metrics,
-				cfg.RequestCeiling(),
-			))
-		}
-		if gov.sweepTarget != nil {
-			quota.StartSweeper(ctx, gov.sweepTarget, sweepInterval, expiredHook(metrics))
-		}
-		// Quota reconciliation needs all three: the Redis hot
-		// ledger to read, PostgreSQL to persist snapshots into, and the
-		// interval armed. The tenant list comes from the system of
-		// record — the static set is configuration (no DSN, no snapshot
-		// store), so PostgreSQL identity mode is the reconcilable one.
-		reconcileArmed := gov.snapshotSource != nil && identityAdmin != nil && cfg.Postgres.DSN != ""
-		switch {
-		case reconcileArmed && cfg.ReconcileInterval > 0:
-			users, err := identityAdmin.Users(ctx)
-			if err != nil {
-				return fmt.Errorf("reconciler: list tenants: %w", err)
-			}
-			tenants := make([]string, 0, len(users))
-			for _, u := range users {
-				tenants = append(tenants, u.ID)
-			}
-			if err := startReconciler(ctx, cfg, gov.snapshotSource, tenants, metrics, logger); err != nil {
-				return err
-			}
-		case cfg.ReconcileInterval > 0:
-			// The interval is set but a prerequisite is missing: say so
-			// at startup instead of leaving an armed-looking config
-			// silently inert.
-			logger.Warn("quota reconciliation disabled: it needs Redis for the hot ledger and a reachable PostgreSQL identity store for snapshots",
-				"interval", cfg.ReconcileInterval, "redis", gov.snapshotSource != nil,
-				"postgres", cfg.Postgres.DSN != "")
-		}
-		if staticIdentity != nil {
-			seedBalances(ctx, staticIdentity, gov.ledger, logger)
-		}
-	} else {
+	if id.store == nil {
 		logger.Warn("no identity configured: running without governance stages")
+		return governance, nil
 	}
+	// One gate for the process lifetime: its slot map IS the
+	// in-flight state.
+	concurrencyGate := limiter.NewConcurrency()
+	governance = append(governance,
+		pipeline.AuthStage(id.store),
+		// Tier model authorization before every spend and before the
+		// cache: the cache key is the request body alone, so a replay
+		// must never bypass the tier's allow/deny decision.
+		pipeline.ModelAuthzStage(),
+		// Concurrency sits before the rate limit: a request rejected
+		// for concurrency must not consume rate budget or quota.
+		limiter.ConcurrencyMiddleware(concurrencyGate, metrics),
+		limiter.Middleware(gov.limiter, metrics),
+		quota.Middleware(gov.ledger, metrics),
+	)
+	if cfg.Cache.Enabled {
+		governance = append(governance, cache.Middleware(
+			cache.NewMemory(cache.WithCapacity(cfg.Cache.Capacity)),
+			cache.NewFlight(),
+			cfg.Cache.TTL,
+			metrics,
+			cfg.RequestCeiling(),
+		))
+	}
+	if gov.sweepTarget != nil {
+		quota.StartSweeper(ctx, gov.sweepTarget, sweepInterval, expiredHook(metrics))
+	}
+	// Quota reconciliation needs all three: the Redis hot
+	// ledger to read, PostgreSQL to persist snapshots into, and the
+	// interval armed. The tenant list comes from the system of
+	// record — the static set is configuration (no DSN, no snapshot
+	// store), so PostgreSQL identity mode is the reconcilable one.
+	reconcileArmed := gov.snapshotSource != nil && id.admin != nil && cfg.Postgres.DSN != ""
+	switch {
+	case reconcileArmed && cfg.ReconcileInterval > 0:
+		users, err := id.admin.Users(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reconciler: list tenants: %w", err)
+		}
+		tenants := make([]string, 0, len(users))
+		for _, u := range users {
+			tenants = append(tenants, u.ID)
+		}
+		if err := startReconciler(ctx, cfg, gov.snapshotSource, tenants, metrics, logger); err != nil {
+			return nil, err
+		}
+	case cfg.ReconcileInterval > 0:
+		// The interval is set but a prerequisite is missing: say so
+		// at startup instead of leaving an armed-looking config
+		// silently inert.
+		logger.Warn("quota reconciliation disabled: it needs Redis for the hot ledger and a reachable PostgreSQL identity store for snapshots",
+			"interval", cfg.ReconcileInterval, "redis", gov.snapshotSource != nil,
+			"postgres", cfg.Postgres.DSN != "")
+	}
+	if id.static != nil {
+		seedBalances(ctx, id.static, gov.ledger, logger)
+	}
+	return governance, nil
+}
 
+// routingPlane bundles the wired routing surface: the per-format
+// inference chains with the router and relay engine joined in, the
+// switch the recovery loop and the admin API drive, the admin options
+// that hang the routing controls on the admin surface, and the adapter
+// maps the admin endpoints key off.
+type routingPlane struct {
+	routeSwitch  *router.Switch
+	inference    map[protocol.Format]http.Handler
+	adminOptions []server.AdminOption
+	adapters     map[string]upstream.Upstream
+	probes       map[string]upstream.Upstream
+}
+
+// assembleRoutingPlane resolves the configured upstreams into ordered
+// router bindings, the routing switch, the retry budget and the relay
+// engine, and joins them into one inference chain per client format.
+func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *obs.Metrics, governance []pipeline.Middleware, identityAdmin auth.AdminStore, insightsStore *insights.PGStore, logger *slog.Logger) (routingPlane, error) {
 	bindings, rings, err := buildBindings(cfg.Upstreams)
 	if err != nil {
-		return err
+		return routingPlane{}, err
 	}
 	// Runtime routing controls and measured-performance tracking: the
 	// switch gates eligibility (admin API), the tracker only orders
 	// candidates when the latency strategy is on.
 	strategy, err := router.ParseStrategy(cfg.Routing.Strategy)
 	if err != nil {
-		return err
+		return routingPlane{}, err
 	}
 	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams),
 		router.WithWildcardModels(wildcardServed(cfg.Upstreams)))
@@ -197,7 +290,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// conditions retired inside it.
 	routingSwitch.OnUpstreamEnable = reviveRing(rings, logger)
 	if err := validateModelNames(cfg.Upstreams, cfg.Fallbacks, cfg.ContextLimits); err != nil {
-		return err
+		return routingPlane{}, err
 	}
 	tracker := router.NewTracker()
 	rt, err := router.NewPriority(bindings,
@@ -206,7 +299,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		router.WithStrategy(strategy),
 		router.WithTracker(tracker))
 	if err != nil {
-		return err
+		return routingPlane{}, err
 	}
 
 	// The retry budget: a fixed cap by default, or a share of live
@@ -216,7 +309,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	if cfg.Retry.BudgetPercent > 0 {
 		share, err := retry.NewShareBudget(cfg.Retry.BudgetPercent, cfg.Retry.BudgetMinInFlight, metrics.Inflight)
 		if err != nil {
-			return err
+			return routingPlane{}, err
 		}
 		budget = share
 	}
@@ -251,11 +344,11 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		server.WithRouting(routingSwitch),
 		server.WithIdentityStore(identityAdmin),
 	}
-	if recorder.store != nil {
+	if insightsStore != nil {
 		// Install the reporter only with a live store: a nil *PGStore
 		// inside the Reporter interface is not a nil interface, and the
 		// endpoint's nil check would never fire.
-		adminOpts = append(adminOpts, server.WithInsights(recorder.store))
+		adminOpts = append(adminOpts, server.WithInsights(insightsStore))
 	}
 
 	// Upstream adapters by id, and the probe-capable subset: the admin
@@ -273,61 +366,13 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		}
 	}
 
-	srv := server.New(server.Options{
-		Addr:          cfg.Server.Addr,
-		ShutdownGrace: cfg.Server.ShutdownGrace,
-		Listener:      listener,
-		Inference:     inference,
-		Metrics:       metricsHandler(metrics),
-		Admin:         buildAdmin(cfg, gov, breaker, metrics, upstreamIDs(cfg.Upstreams), adapters, probes, adminOpts...),
-		Readiness:     mergeReadiness(gov.readiness, identityReady),
-		Models:        discoverableModels(cfg.Upstreams),
-		Version:       version,
-	})
-
-	publishLogDrops(ctx, metrics, accessLog.logger, recorder.store, dropPublishInterval)
-	// Active recovery probing: upstreams taken out of rotation (auto
-	// disabled, breaker ejected) are asked periodically whether they
-	// are back; only those with a configured probe_url can be asked.
-	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, cfg.Probe.Threshold,
-		breaker, routingSwitch, probes, metrics, logger)
-
-	logger.Info("gateway starting",
-		"version", version,
-		"addr", cfg.Server.Addr,
-		"upstreams", len(cfg.Upstreams),
-		"governance", gov.mode,
-		"admin_auth", adminAuthState(cfg.Security.AdminToken),
-		"lease_ttl", cfg.LeaseTTL())
-	if cfg.Redis.Addr != "" && redisNamespace(cfg) == "" {
-		// Sharing one Redis instance between deployments without a
-		// namespace means sharing tenant balances: one environment
-		// spends the other's money, and its sweeper refunds leases the
-		// other is still serving. Nothing else can detect that at
-		// startup, so say it where an operator will actually see it.
-		logger.Warn("redis keys are not namespaced: this gateway must be the only deployment on " +
-			cfg.Redis.Addr + ", or set " + config.EnvRedisNamespace)
-	}
-	if err := srv.Run(ctx); err != nil {
-		if errors.Is(err, httpserver.ErrDrainTimeout) {
-			// A shutdown past its grace window with requests still in
-			// flight is a shutdown with a warning, not a failure: exiting
-			// non-zero here would turn every rolling restart that carries
-			// a long stream into a failed unit. The stragglers were cut;
-			// say so loudly and stop cleanly.
-			accessLog.close()
-			logger.Warn("shutdown grace expired with requests in flight", "grace", cfg.Server.ShutdownGrace)
-			logger.Info("gateway stopped")
-			return nil
-		}
-		// The deferred close would still run on the happy path, but a
-		// serve error must flush the observation queue before the caller
-		// turns the error into an exit code.
-		accessLog.close()
-		return err
-	}
-	logger.Info("gateway stopped")
-	return nil
+	return routingPlane{
+		routeSwitch:  routingSwitch,
+		inference:    inference,
+		adminOptions: adminOpts,
+		adapters:     adapters,
+		probes:       probes,
+	}, nil
 }
 
 // inferenceChain wraps one client format's endpoint in the full request

@@ -26,7 +26,12 @@ func TestBuildAdminEndpoints(t *testing.T) {
 	}
 	gov := &governance{ledger: ledger}
 	breaker := circuit.NopBreaker{}
-	admin := buildAdmin(testConfig("127.0.0.1:0"), gov, breaker, obs.NewMetrics(), []string{"u1"}, nil, nil)
+	admin := buildAdmin(testConfig("127.0.0.1:0"), adminBindings{
+		gov:         gov,
+		breaker:     breaker,
+		metrics:     obs.NewMetrics(),
+		upstreamIDs: []string{"u1"},
+	})
 
 	rec := httptest.NewRecorder()
 	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/tenants/t1/quota", nil))

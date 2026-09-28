@@ -59,7 +59,15 @@ func adminActions(t *testing.T, probeStatus int) (http.Handler, circuit.Breaker)
 		"noprobe": probeAdapter(t, "noprobe", srv),
 	}
 	probes := map[string]upstream.Upstream{"u1": adapters["u1"]}
-	return buildAdmin(cfg, gov, breaker, obs.NewMetrics(), []string{"u1", "noprobe"}, adapters, probes), breaker
+	admin := buildAdmin(cfg, adminBindings{
+		gov:         gov,
+		breaker:     breaker,
+		metrics:     obs.NewMetrics(),
+		upstreamIDs: []string{"u1", "noprobe"},
+		adapters:    adapters,
+		probes:      probes,
+	})
+	return admin, breaker
 }
 
 func TestAdminProbeEndpoint(t *testing.T) {
@@ -112,7 +120,14 @@ func TestAdminProbeWorksWithoutProbeTimeout(t *testing.T) {
 	cfg.Probe.Interval = 0
 	cfg.Probe.Timeout = 0
 	adapters := map[string]upstream.Upstream{"u1": probeAdapter(t, "u1", srv)}
-	admin := buildAdmin(cfg, gov, circuit.NopBreaker{}, obs.NewMetrics(), []string{"u1"}, adapters, adapters)
+	admin := buildAdmin(cfg, adminBindings{
+		gov:         gov,
+		breaker:     circuit.NopBreaker{},
+		metrics:     obs.NewMetrics(),
+		upstreamIDs: []string{"u1"},
+		adapters:    adapters,
+		probes:      adapters,
+	})
 
 	rec := httptest.NewRecorder()
 	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/upstreams/u1/probe", nil))

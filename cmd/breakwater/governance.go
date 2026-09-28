@@ -135,40 +135,62 @@ func redisOptions(cfg config.Config) *redis.Options {
 	return opts
 }
 
-// newAuthStore resolves the identity source. A nil store means no
+// identityAssembly bundles what one identity source wires up: the
+// resolving store behind the auth stage, the static set (nil without
+// static identity configuration), the administration port (nil without
+// PostgreSQL), the shutdown close, and the readiness probe of the
+// dependency authentication fail-closes on. A nil store means no
 // identity is configured and the gateway runs without governance
-// stages. The readiness probe covers the dependency authentication
-// fail-closes on (the identity database); nil for the static set.
+// stages.
+type identityAssembly struct {
+	store  auth.Store
+	static *auth.Static
+	admin  auth.AdminStore
+	close  func()
+	ready  func() error
+}
+
+// newAuthStore resolves the identity source: PostgreSQL system of
+// record when a DSN is configured, the static identity set otherwise.
 // The administration port rides along: PostgreSQL is the one source
 // with a management surface; the static set is configuration, not a
 // surface.
-func newAuthStore(ctx context.Context, cfg config.Config) (auth.Store, *auth.Static, auth.AdminStore, func(), func() error, error) {
+func newAuthStore(ctx context.Context, cfg config.Config) (identityAssembly, error) {
 	switch {
 	case cfg.Postgres.DSN != "":
 		pg, err := auth.NewPG(ctx, cfg.Postgres.DSN)
 		if err != nil {
-			return nil, nil, nil, nil, nil, err
+			return identityAssembly{}, err
 		}
 		probe := func() error {
 			pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			return pg.Ping(pingCtx)
 		}
-		return auth.NewCachedStore(pg, authPosTTL, authNegTTL), nil, pg, pg.Close, probe, nil
+		return identityAssembly{
+			store: auth.NewCachedStore(pg, authPosTTL, authNegTTL),
+			admin: pg,
+			close: pg.Close,
+			ready: probe,
+		}, nil
 
 	case cfg.Identity != "":
 		staticCfg, err := auth.ParseStaticConfig([]byte(cfg.Identity))
 		if err != nil {
-			return nil, nil, nil, nil, nil, err
+			return identityAssembly{}, err
 		}
 		staticStore, err := auth.NewStatic(staticCfg)
 		if err != nil {
-			return nil, nil, nil, nil, nil, err
+			return identityAssembly{}, err
 		}
-		return auth.NewCachedStore(staticStore, authPosTTL, authNegTTL), staticStore, nil, func() {}, nil, nil
+		return identityAssembly{
+			store:  auth.NewCachedStore(staticStore, authPosTTL, authNegTTL),
+			static: staticStore,
+			close:  func() {},
+		}, nil
 
 	default:
-		return nil, nil, nil, func() {}, nil, nil
+		return identityAssembly{close: func() {}}, nil
 	}
 }
 

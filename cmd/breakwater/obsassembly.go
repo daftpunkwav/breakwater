@@ -158,40 +158,71 @@ func (c combinedSink) Flush(ctx context.Context) error {
 	return c.file.Flush(ctx)
 }
 
+// assembleObservation wires the observation surface: the metrics
+// registry every stage records into, the access log, the assessment
+// record store, and the combined sink fanning each access entry out to
+// both sinks.
+func assembleObservation(ctx context.Context, cfg config.Config, logger *slog.Logger) (*obs.Metrics, *accessLog, *insightsStore, combinedSink, error) {
+	metrics := obs.NewMetrics()
+	logs, err := newAccessLog(cfg, logger)
+	if err != nil {
+		return nil, nil, nil, combinedSink{}, err
+	}
+	recorder, err := newInsights(ctx, cfg, logger)
+	if err != nil {
+		return nil, nil, nil, combinedSink{}, err
+	}
+	return metrics, logs, recorder, combinedSink{file: logs.sink, insights: recorder.store}, nil
+}
+
+// adminBindings names the live backends the admin surface reads and
+// acts on: the ledger behind the balance endpoints, the breaker
+// registry behind the state and reset views, the configured upstream
+// list and adapters that decide what is known, and the probe-capable
+// subset behind the on-demand probe.
+type adminBindings struct {
+	gov         *governance
+	breaker     circuit.Breaker
+	metrics     *obs.Metrics
+	upstreamIDs []string
+	adapters    map[string]upstream.Upstream
+	probes      map[string]upstream.Upstream
+}
+
 // buildAdmin binds the admin endpoints to the live backends; options
 // forward to server.NewAdmin (the routing switches, the identity
 // administration store). The breaker-reset and on-demand probe
 // actions are bound here too: reset consults the configured upstream
 // set, the probe consults the probe-capable subset and counts on the
 // same metric the recovery loop records.
-func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, metrics *obs.Metrics, upstreamIDs []string, adapters, probes map[string]upstream.Upstream, opts ...server.AdminOption) http.Handler {
+func buildAdmin(cfg config.Config, b adminBindings, opts ...server.AdminOption) http.Handler {
 	balances := func(r *http.Request, tenantID string) (int64, error) {
-		return gov.ledger.Balance(r.Context(), tenantID)
+		return b.gov.ledger.Balance(r.Context(), tenantID)
 	}
 	setBalance := func(r *http.Request, tenantID string, balance int64) error {
-		return gov.ledger.SetBalance(r.Context(), tenantID, balance)
+		return b.gov.ledger.SetBalance(r.Context(), tenantID, balance)
 	}
 	states := func(r *http.Request) []server.BreakerView {
-		views := make([]server.BreakerView, 0, len(upstreamIDs))
-		for _, id := range upstreamIDs {
+		views := make([]server.BreakerView, 0, len(b.upstreamIDs))
+		for _, id := range b.upstreamIDs {
 			views = append(views, server.BreakerView{
 				Upstream: id,
-				State:    breaker.StateOf(r.Context(), id),
+				State:    b.breaker.StateOf(r.Context(), id),
 			})
 		}
 		return views
 	}
 	reset := func(r *http.Request, id string) error {
-		if _, ok := adapters[id]; !ok {
+		if _, ok := b.adapters[id]; !ok {
 			return server.ErrUnknownUpstream
 		}
-		breaker.Reset(r.Context(), id)
+		b.breaker.Reset(r.Context(), id)
 		return nil
 	}
 	probe := func(r *http.Request, id string) error {
-		target, ok := probes[id]
+		target, ok := b.probes[id]
 		if !ok {
-			if _, known := adapters[id]; known {
+			if _, known := b.adapters[id]; known {
 				return server.ErrProbeUnconfigured
 			}
 			return server.ErrUnknownUpstream
@@ -207,7 +238,7 @@ func buildAdmin(cfg config.Config, gov *governance, breaker circuit.Breaker, met
 			defer cancel()
 		}
 		err := target.Probe(ctx)
-		metrics.UpstreamProbe(id, err == nil)
+		b.metrics.UpstreamProbe(id, err == nil)
 		return err
 	}
 	opts = append(opts, server.WithBreakerReset(reset), server.WithUpstreamProbe(probe))
