@@ -313,3 +313,7 @@ Evidence methodology and scenario sets live in `docs/`:
 providers and agent applications into a local gateway). BENCHMARK and
 CHAOS-REPORT are filled from real runs of the `loadtest/` scenarios —
 see `loadtest/README.md`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
