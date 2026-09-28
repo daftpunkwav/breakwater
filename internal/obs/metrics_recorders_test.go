@@ -121,6 +121,26 @@ func TestMetricsInflightAcceptsNegativeAdjustment(t *testing.T) {
 	}
 }
 
+// TestMetricsInflightReportsLiveValue: the getter the share-mode
+// budget scales against reads the same gauge the exposition renders,
+// and a disabled registry reports zero rather than panicking.
+func TestMetricsInflightReportsLiveValue(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	if got := m.Inflight(); got != 0 {
+		t.Fatalf("idle gauge = %d, want 0", got)
+	}
+	m.InflightAdd(7)
+	if got := m.Inflight(); got != 7 {
+		t.Fatalf("gauge = %d, want 7", got)
+	}
+
+	var nilMetrics *Metrics
+	if got := nilMetrics.Inflight(); got != 0 {
+		t.Fatalf("nil receiver = %d, want the safe zero", got)
+	}
+}
+
 // TestMetricsChildOfConcurrentCreation hammers one family from many
 // goroutines: leaf creation must be race-free and never double-allocate
 // for the same label set (run under -race).
