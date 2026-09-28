@@ -132,6 +132,7 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | 变量                                  | 默认           | 作用                                                       |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
 | `BREAKWATER_ADDR`                     | `:8080`        | 监听地址                                                    |
+| `BREAKWATER_SHUTDOWN_GRACE`           | `15s`          | shutdown 开始后的排空窗口；到期仍在途的流被切断、记一条 warning，进程仍以成功退出 |
 | `BREAKWATER_UPSTREAMS`                | _(无)_         | upstream 的 JSON 列表（`id`、`base_url`、`probe_url`、`api_key`、`api_keys`、`models`；列表顺序 = failover 优先级；`"client=real"` 条目做模型别名；`api_keys` 在同一 upstream 后轮换多把凭据）。未知成员与不在 `[A-Za-z0-9._-]{1,128}` 内的 id 拒绝启动 |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | 候选顺序：`static`（配置顺序）或 `latency`（实测交换延迟优先；近乎打平的候选按请求轮换领先权，其余并列由配置顺序裁决；未试过的 upstream 优先探索） |
 | `BREAKWATER_FALLBACKS`                | _(无)_         | 模型 → 有序 fallback 模型的 JSON 映射，在主模型每个候选耗尽后尝试（`{"gpt-4o":["gpt-4o-mini"]}`）；键与目标必须指向已配置的 client-facing 模型 |
@@ -144,6 +145,10 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | `BREAKWATER_REDIS_NAMESPACE`          | _(无)_         | 给每个 limiter 与 quota key 加前缀。两个部署共享一个 Redis 实例时必须设置——否则它们共享 tenant 余额，一个环境的 sweeper 会退另一个环境的在用 lease。留空表示本网关独占其 Redis。**在已有余额的部署上设置它会让所有既有 key 被弃用（不做任何迁移），静态 identity seeder 随后按全月预算重新给每个 tenant 入账**——把它当作重置而非改名。PostgreSQL-identity 部署没有 seeder，那里改 namespace 会让所有 tenant 没有台账，直到有人入账。 |
 | `BREAKWATER_QUOTA_LEASE_TTL`          | _派生_         | 预留的 quota lease 在 sweeper 回收退款前可存活的时长。由 `OverallDeadline + StreamTimeout` 加余量派生，因为短于最长请求的视野会静默退还一个真实花了 token 的请求；低于该值的配置在启动时被拒。无界流或 deadline 没有可派生的东西，所以那些情况默认 24h。 |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | 每请求的 upstream attempt 数                                 |
+| `BREAKWATER_RETRY_ATTEMPT_TIMEOUT`    | `30s`          | 单个 upstream attempt 的 time-to-first-byte 天花板；`0` 不设限 |
+| `BREAKWATER_RETRY_OVERALL_DEADLINE`   | `60s`          | 单个请求全部 attempt 合计的天花板（failover 与重试共享）；`0` 不设限 |
+| `BREAKWATER_RETRY_BACKOFF_INITIAL`    | `100ms`        | 首次重试至多等这么久（full jitter）；之后每次重试的等待天花板翻倍 |
+| `BREAKWATER_RETRY_BACKOFF_MAX`        | `2s`           | 重试等待天花板的上界；`0` 表示翻倍不封顶                     |
 | `BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT` | `64`         | 进程级并发重试上限；配置了份额预算时被取代                    |
 | `BREAKWATER_RETRY_BUDGET_PERCENT`     | _(关)_         | 份额预算：并发重试至多占当前在途请求的这个百分比——上限随实时流量伸缩，而不是一个静态数字。`0` 保持固定上限。 |
 | `BREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT` | `3`          | 份额预算的下限：无论网关多空闲，重试上限不低于它              |
