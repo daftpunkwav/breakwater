@@ -200,3 +200,57 @@ func TestExecuteFiresOnRetryWithAttemptErrorAndDelay(t *testing.T) {
 		}
 	}
 }
+
+// TestExecuteReleasesBudgetWhenAttemptPanics pins the panic path: a
+// retry attempt that panics holds a budget slot, and the slot must
+// return even though the panic unwinds past the loop — a recovery
+// stage higher in the chain contains the panic, but the budget would
+// otherwise leak one slot per panic until every retry is denied.
+func TestExecuteReleasesBudgetWhenAttemptPanics(t *testing.T) {
+	t.Parallel()
+	b := NewBudget(1)
+	attempts := 0
+	func() {
+		defer func() {
+			if rec := recover(); rec == nil {
+				t.Fatal("expected the attempt panic to propagate to the caller's recovery")
+			}
+		}()
+		_ = Execute(context.Background(), fastPolicy(3), b, DefaultClassifier{}, nil,
+			func(context.Context, int) error {
+				attempts++
+				if attempts == 1 {
+					return errors.New("connection reset")
+				}
+				panic("upstream exploded")
+			})
+	}()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want the panic to land on attempt 2", attempts)
+	}
+	if !b.Acquire() {
+		t.Fatal("the slot held by the panicking attempt was never released")
+	}
+}
+
+// TestBackoffCeilingValueClamp pins the value clamp: a BackoffInitial
+// whose doubling wraps int64 nanoseconds must clamp to the maximum
+// instead of wrapping into a tiny value that silently collapses the
+// ceiling — or, uncapped, into no delay at all.
+func TestBackoffCeilingValueClamp(t *testing.T) {
+	t.Parallel()
+	// (2^48 + 1us) shifted 16 wraps to ~65.5us in int64 arithmetic;
+	// the clamp must keep the ceiling at the BackoffMax cap instead of
+	// handing back the wrapped micro-delay.
+	policy := Policy{BackoffInitial: (1<<48)*time.Nanosecond + time.Microsecond, BackoffMax: 2 * time.Second}
+	if got := time.Duration(backoffCeiling(policy, 17)); got != 2*time.Second {
+		t.Fatalf("wrapped ceiling = %v, want the BackoffMax clamp", got)
+	}
+	// 2^48 shifted 16 wraps to exactly zero; with BackoffMax unset
+	// (uncapped) the clamped doubling must stay a delay, never a silent
+	// zero that drops the backoff altogether.
+	uncapped := Policy{BackoffInitial: (1 << 48) * time.Nanosecond}
+	if got := time.Duration(backoffCeiling(uncapped, 17)); got <= 0 {
+		t.Fatalf("uncapped ceiling = %v, want the clamped maximum", got)
+	}
+}

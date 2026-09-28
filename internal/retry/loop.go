@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"time"
 )
@@ -68,11 +69,21 @@ func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Clas
 				return fmt.Errorf("%w: %w", ErrBudgetExhausted, lastErr)
 			}
 		}
-		err := runAttempt(overall, policy, fn, attempt)
+		// The slot is held for exactly one attempt and released on every
+		// exit path, a panic in fn included: recovery stages higher in
+		// the chain contain the panic, but this defer runs during the
+		// unwind — without it a panicking attempt would permanently
+		// consume one budget slot and shrink the cap for every later
+		// request.
+		err := func() (err error) {
+			defer func() {
+				if attempt > 1 && budget != nil {
+					budget.Release()
+				}
+			}()
+			return runAttempt(overall, policy, fn, attempt)
+		}()
 		lastErr = err
-		if attempt > 1 && budget != nil {
-			budget.Release()
-		}
 
 		if err == nil {
 			return nil
@@ -161,9 +172,10 @@ func backoffDelay(policy Policy, attempt int) time.Duration {
 // backoffCeiling is the exponential cap for the retry that follows
 // attempt n: the first retry waits at most BackoffInitial, every later
 // retry doubles the cap. A zero BackoffInitial leaves the cap at
-// BackoffMax. The doubling shift is clamped to 16 bits so it cannot
-// overflow, and a zero BackoffMax means "uncapped" rather than "no
-// delay", so the doubling runs unbounded in that case.
+// BackoffMax. The doubling shift is clamped to 16 bits and the value
+// to the int64 maximum, so neither can wrap, and a zero BackoffMax
+// means "uncapped" rather than "no delay", so the doubling runs
+// unbounded in that case.
 func backoffCeiling(policy Policy, attempt int) int64 {
 	shift := attempt - 1
 	if shift < 0 {
@@ -173,7 +185,19 @@ func backoffCeiling(policy Policy, attempt int) int64 {
 		shift = 16
 	}
 	ceiling := int64(policy.BackoffMax)
-	if exp := int64(policy.BackoffInitial) << uint(shift); exp > 0 && (ceiling == 0 || exp < ceiling) {
+	// Clamp before shifting: an absurd BackoffInitial past 2^63ns would
+	// otherwise wrap into a tiny or negative value and silently collapse
+	// the ceiling to microseconds — or, with an uncapped BackoffMax, to
+	// no delay at all.
+	exp := int64(policy.BackoffInitial)
+	if exp > 0 {
+		if limit := int64(math.MaxInt64) >> uint(shift); exp > limit {
+			exp = math.MaxInt64
+		} else {
+			exp <<= uint(shift)
+		}
+	}
+	if exp > 0 && (ceiling == 0 || exp < ceiling) {
 		return exp
 	}
 	return ceiling

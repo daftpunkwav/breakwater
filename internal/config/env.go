@@ -184,6 +184,22 @@ func Load() (Config, error) {
 	if cfg.Retry.BackoffMax, err = envDuration(envRetryBackoffMax, cfg.Retry.BackoffMax); err != nil {
 		return Config{}, err
 	}
+	// Zero is the documented "no cap" for each of these in the attempt
+	// loop; a negative value is a typo that would expire every attempt
+	// context immediately (or wrap the backoff math) — refuse to boot.
+	for _, d := range []struct {
+		key string
+		val time.Duration
+	}{
+		{envRetryAttemptTimeout, cfg.Retry.AttemptTimeout},
+		{envRetryOverall, cfg.Retry.OverallDeadline},
+		{envRetryBackoffInitial, cfg.Retry.BackoffInitial},
+		{envRetryBackoffMax, cfg.Retry.BackoffMax},
+	} {
+		if d.val < 0 {
+			return Config{}, fmt.Errorf("config: %s must not be negative", d.key)
+		}
+	}
 	if cfg.Retry.BudgetMaxInFlight, err = envInt(envRetryBudget, cfg.Retry.BudgetMaxInFlight); err != nil {
 		return Config{}, err
 	}
