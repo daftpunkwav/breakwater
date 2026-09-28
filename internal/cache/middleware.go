@@ -103,7 +103,14 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 
 			fetch := httpserver.NewDetachedBufferingTee(w, maxCacheableBytes)
 			entry, fetchErr, owner := flight.Do(fetchCtx, key, func(ctx context.Context) (Entry, error) {
-				next.ServeHTTP(fetch, r.WithContext(context.WithoutCancel(ctx)))
+				// The budget rides the fetch itself, not the retry policy
+				// that may contribute none: WithoutCancel drops the
+				// deadline fetchCtx carries, so it is re-imposed here. A
+				// black-holed upstream must release the flight at the
+				// budget, or the key can never start a new flight.
+				bounded, cancelBounded := context.WithTimeout(context.WithoutCancel(ctx), fetchBudget)
+				defer cancelBounded()
+				next.ServeHTTP(fetch, r.WithContext(bounded))
 				metrics.CacheFetch(upstreamOf(carrier))
 				// A fetch whose handler produced no HTTP response at all
 				// (its own client walked away before the first byte) has

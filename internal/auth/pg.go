@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,10 +63,22 @@ func (s *PG) Close() {
 	s.pool.Close()
 }
 
+// resolveTimeout bounds one resolution against the system of record.
+// The request context alone is the wrong bound: a half-open database
+// (the connection establishes, no answer ever arrives) would hold every
+// cold-key request until its client walks away and pin the pool's
+// connections one by one. The bound lives at the system-of-record
+// boundary; a resolution that outlives it fails as a transient error,
+// which the pipeline renders as 503 — identity stays fail-closed, never
+// fail-open. A variable so the fault-injection tests can shorten it.
+var resolveTimeout = 3 * time.Second
+
 // Resolve implements Store: the tier template folded with the
 // tenant's and then the key's overrides into the one effective
 // snapshot the governance layers enforce.
 func (s *PG) Resolve(ctx context.Context, apiKey string) (Tenant, error) {
+	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
 	rows := s.pool.QueryRow(ctx, `
 		SELECT t.id, t.name, t.role, k.id,
 		       tr.id, tr.rpm, tr.tpm,

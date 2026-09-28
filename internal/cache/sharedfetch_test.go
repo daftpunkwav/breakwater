@@ -234,6 +234,64 @@ func TestCacheSharedFetchRendersTheStarterAnEnvelope(t *testing.T) {
 	}
 }
 
+// TestCacheSharedFetchStaysInsideItsBudget pins the bound of a shared
+// fetch: detached from the starter's cancellation is not unbounded. A
+// black-holed upstream must release the flight at the budget even when
+// the retry policy contributes no deadline of its own (a deployment
+// that sets the BREAKWATER_RETRY timeouts to zero), or the key can
+// never start a new flight again.
+func TestCacheSharedFetchStaysInsideItsBudget(t *testing.T) {
+	t.Parallel()
+	var fetches atomic.Int64
+	var once sync.Once
+	reached := make(chan struct{})
+	budget := 100 * time.Millisecond
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+		Middleware(NewMemory(), NewFlight(), time.Minute, nil, budget),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		once.Do(func() { close(reached) })
+		// A black hole: the exchange ends only when its context does.
+		<-r.Context().Done()
+	}))
+
+	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+
+	starterDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { starterDone <- fireRequest(handler, body) }()
+	<-reached
+
+	// The fetch ends at the budget: the starter is owed the 502
+	// envelope of a response-less fetch.
+	var starter *httptest.ResponseRecorder
+	select {
+	case starter = <-starterDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the shared fetch outlived its budget: the flight never ended")
+	}
+	if starter.Code != http.StatusBadGateway || !strings.Contains(starter.Body.String(), "upstream_unreachable") {
+		t.Fatalf("starter status = %d body = %s, want the 502 envelope", starter.Code, starter.Body.String())
+	}
+
+	// The key is free again: a new request starts a new flight instead
+	// of waiting on the dead one forever.
+	secondDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { secondDone <- fireRequest(handler, body) }()
+	select {
+	case second := <-secondDone:
+		if second.Code != http.StatusBadGateway {
+			t.Fatalf("second status = %d, want the same envelope", second.Code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the key never started a new flight: the dead flight still owns it")
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("upstream fetches = %d, want 2: the first flight held the key past its budget", got)
+	}
+}
+
 // TestNegativelyCacheableRules pins which failed exchanges are worth
 // remembering. A gateway envelope is a transient state of this process,
 // not a fact about the request, so caching it would make a circuit-open
