@@ -64,8 +64,8 @@ type Carrier struct {
 	// that refused the request, for the failure taxonomy:
 	// missing_api_key, invalid_api_key, identity_unavailable,
 	// model_not_allowed, concurrency_limit_exceeded, rate_limit_exceeded,
-	// insufficient_quota, governance_unavailable. Empty unless the
-	// request was rejected before the forward stage.
+	// insufficient_quota, quota_not_provisioned, governance_unavailable.
+	// Empty unless the request was rejected before the forward stage.
 	RejectCode string
 	// Relay captures the forward stage's outcome for the stages after
 	// it (settlement details, observation dimensions).

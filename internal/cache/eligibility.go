@@ -27,8 +27,8 @@ func Eligible(req protocol.ChatRequest) bool {
 	if req.Temperature == nil || *req.Temperature != 0 {
 		return false
 	}
-	// top_p: must be explicitly 1 (the default, but requiring it
-	// explicitly keeps the whitelist strict).
+	// top_p: absent keeps the deterministic default (1); an explicit
+	// value must be exactly 1.
 	if req.TopP != nil && *req.TopP != 1 {
 		return false
 	}

@@ -9,8 +9,10 @@
  * - Own the surface's shared machinery: the bearer guard, the route
  *   dispatch, the strict body decoder and the JSON writer
  * - Serve GET /admin/tenants/{id}/quota, PUT the same path (top-up or
- *   correction), GET /admin/breakers, GET /admin/routing and PUT
- *   /admin/models/{id} and /admin/upstreams/{id} (enable/disable)
+ *   correction), GET /admin/breakers, POST /admin/breakers/{id}/reset,
+ *   GET /admin/routing, GET /admin/insights, POST
+ *   /admin/upstreams/{id}/probe and PUT /admin/models/{id} and
+ *   /admin/upstreams/{id} (enable/disable)
  * - Guard the surface with the configured admin token; an empty token
  *   disables authentication (local development only)
  * - Nothing else: quota and breaker data come from injected lookups;
