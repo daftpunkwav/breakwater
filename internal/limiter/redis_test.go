@@ -7,6 +7,7 @@ package limiter
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,39 @@ func newTestRedis(t *testing.T) (*Redis, *miniredis.Miniredis) {
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	return NewRedis(client, ""), mr
+}
+
+func TestNamespacedKeyPrefix(t *testing.T) {
+	t.Parallel()
+	if got := namespacedKeyPrefix(""); got != defaultKeyPrefix {
+		t.Fatalf("empty namespace prefix = %q, want %q", got, defaultKeyPrefix)
+	}
+	if got, want := namespacedKeyPrefix("env-a"), "env-a:"+defaultKeyPrefix; got != want {
+		t.Fatalf("namespaced prefix = %q, want %q", got, want)
+	}
+}
+
+func TestRedisNamespaceScopesKeys(t *testing.T) {
+	t.Parallel()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	r := NewRedis(client, "env-a")
+	ctx := context.Background()
+
+	if d, err := r.Allow(ctx, "t1", Limits{RPM: 1, TPM: 0}, 0); err != nil || !d.Allowed {
+		t.Fatalf("allow: allowed=%v err=%v", d.Allowed, err)
+	}
+	// The namespace sits in front of the package prefix: two deployments
+	// sharing one Redis must never throttle against each other's buckets.
+	if !mr.Exists("env-a:bw:limiter:t1:rpm") {
+		t.Fatalf("namespaced bucket missing; keys = %v", mr.Keys())
+	}
+	for _, k := range mr.Keys() {
+		if strings.HasPrefix(k, defaultKeyPrefix) {
+			t.Fatalf("bucket %q leaked outside the namespace", k)
+		}
+	}
 }
 
 func TestRedisAllowWithinLimits(t *testing.T) {

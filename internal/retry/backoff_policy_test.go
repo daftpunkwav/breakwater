@@ -35,6 +35,18 @@ func TestBackoffDelayBoundsForZeroValuePolicies(t *testing.T) {
 	}
 }
 
+// TestBackoffCeilingUncappedDoublingStopsAtTheClamp pins the clamp
+// boundary on the uncapped path: a zero BackoffMax keeps doubling until
+// the shift clamp freezes it — one shift short and the ceiling would
+// silently halve; without the clamp it would wrap.
+func TestBackoffCeilingUncappedDoublingStopsAtTheClamp(t *testing.T) {
+	t.Parallel()
+	policy := Policy{BackoffInitial: 100 * time.Millisecond}
+	if got := time.Duration(backoffCeiling(policy, 18)); got != 100*time.Millisecond<<16 {
+		t.Fatalf("uncapped ceiling at attempt 18 = %v, want the shift clamp (100ms << 16)", got)
+	}
+}
+
 func TestBackoffCeilingShiftClamp(t *testing.T) {
 	t.Parallel()
 	// Deep into a retry sequence the doubling stops: the shift clamps at
