@@ -56,7 +56,7 @@ func TestExecutorReportsFatalOncePerExchange(t *testing.T) {
 	up := &stubUpstream{id: "u1", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
 		return jsonResponse(t, http.StatusUnauthorized, `{"error":{"type":"authentication_error"}}`), nil
 	}}
-	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(id, reason string) {
+	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(id string, _ int, reason string) {
 		reports = append(reports, id+"/"+reason)
 	}))
 	result := execute(t, exec, []upstream.Upstream{up}, false, `{}`)
@@ -75,7 +75,7 @@ func TestExecutorKeepsQuietOnTransientFailures(t *testing.T) {
 		return jsonResponse(t, http.StatusTooManyRequests,
 			`{"error":{"code":"rate_limit_exceeded","type":"rate_limit_error"}}`), nil
 	}}
-	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(string, string) { hookFired = true }))
+	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(string, int, string) { hookFired = true }))
 	result := execute(t, exec, []upstream.Upstream{up}, false, `{}`)
 	if result.Status != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want the 429 passthrough", result.Status)
@@ -96,7 +96,7 @@ func TestExecutorReportsQuotaExhaustionDespiteRetryability(t *testing.T) {
 		return jsonResponse(t, http.StatusTooManyRequests,
 			`{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}`), nil
 	}}
-	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(_ string, reason string) {
+	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(_ string, _ int, reason string) {
 		reasons = append(reasons, reason)
 	}))
 	result := execute(t, exec, []upstream.Upstream{up}, false, `{}`)

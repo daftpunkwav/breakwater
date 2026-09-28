@@ -34,9 +34,11 @@ type OpenAIConfig struct {
 	// BaseURL is the scheme and host of the provider, without a
 	// trailing slash (e.g. http://127.0.0.1:8090).
 	BaseURL string
-	// APIKey is sent as a bearer token when non-empty; the mock
-	// upstream does not require one.
-	APIKey string
+	// APIKeys are the bearer tokens rotated behind the upstream, in
+	// ring order; empty means the upstream needs no credential (the
+	// mock upstream). The config layer merges api_key and api_keys
+	// into this list.
+	APIKeys []string
 	// ProbeURL is the health endpoint consulted by Probe.
 	ProbeURL string
 	// ModelMap rewrites client-facing model names to the names this
@@ -52,7 +54,7 @@ type OpenAIConfig struct {
 type OpenAI struct {
 	id       string
 	baseURL  string
-	apiKey   string
+	ring     *credentialRing
 	probe    string
 	modelMap map[string]string
 	client   *http.Client
@@ -75,7 +77,7 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error) {
 	return &OpenAI{
 		id:       cfg.ID,
 		baseURL:  cfg.BaseURL,
-		apiKey:   cfg.APIKey,
+		ring:     newCredentialRing(cfg.APIKeys),
 		probe:    cfg.ProbeURL,
 		modelMap: cfg.ModelMap,
 		client:   &http.Client{Transport: transport},
@@ -84,6 +86,15 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error) {
 
 // ID implements Upstream.
 func (o *OpenAI) ID() string { return o.id }
+
+// AliveCredentials implements CredentialPool.
+func (o *OpenAI) AliveCredentials() int { return o.ring.alive() }
+
+// RetireCredential implements CredentialPool.
+func (o *OpenAI) RetireCredential(index int) bool { return o.ring.retire(index) }
+
+// ReviveCredentials implements CredentialPool.
+func (o *OpenAI) ReviveCredentials() { o.ring.revive() }
 
 // bodyModel resolves the model name the forwarded body must carry and
 // reports whether that differs from what it carries now. A mapped name
@@ -105,8 +116,11 @@ func (o *OpenAI) bodyModel(req Request) (string, bool) {
 
 // Forward implements Upstream: one POST exchange with the neutral body,
 // rewritten to carry the model this attempt serves (mapped through the
-// model map) whenever the body still names a different one. Attempt
-// timeout and cancellation are owned by the caller through ctx.
+// model map) whenever the body still names a different one. The exchange
+// rides the next eligible credential of the ring; a request whose earlier
+// attempt burned a credential hands the exclusion list in and the burned
+// one is skipped. Attempt timeout and cancellation are owned by the
+// caller through ctx.
 func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
 	body := req.Body
 	if target, differs := o.bodyModel(req); differs {
@@ -115,6 +129,13 @@ func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
 			return nil, fmt.Errorf("upstream %s: %w", o.id, err)
 		}
 		body = rewritten
+	}
+	index := -1
+	if len(o.ring.keys) > 0 {
+		index = o.ring.pick(req.ExcludedCredentials)
+		if index < 0 {
+			return nil, fmt.Errorf("upstream %s: no credential available", o.id)
+		}
 	}
 	target := o.baseURL + completionPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
@@ -125,8 +146,8 @@ func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
 	if req.Stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
-	if o.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	if index >= 0 {
+		httpReq.Header.Set("Authorization", "Bearer "+o.ring.keys[index])
 	}
 	if req.RequestID != "" {
 		httpReq.Header.Set("X-Request-Id", req.RequestID)
@@ -137,9 +158,10 @@ func (o *OpenAI) Forward(ctx context.Context, req Request) (*Response, error) {
 		return nil, fmt.Errorf("upstream %s: exchange: %w", o.id, err)
 	}
 	return &Response{
-		StatusCode: httpResp.StatusCode,
-		Header:     httpResp.Header.Clone(),
-		Body:       httpResp.Body,
+		StatusCode:      httpResp.StatusCode,
+		Header:          httpResp.Header.Clone(),
+		Body:            httpResp.Body,
+		CredentialIndex: index,
 	}, nil
 }
 

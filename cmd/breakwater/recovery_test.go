@@ -34,23 +34,23 @@ func TestAutoDisableHookTransitionsOnce(t *testing.T) {
 	t.Parallel()
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 	metrics := obs.NewMetrics()
-	hook := autoDisableHook(sw, metrics, discardLogger())
+	hook := autoDisableHook(sw, nil, metrics, discardLogger())
 
-	hook("u1", "upstream_auth_failure")
+	hook("u1", -1, "upstream_auth_failure")
 	if sw.UpstreamEnabled("u1") {
 		t.Fatal("hook did not take the upstream out of rotation")
 	}
 	assertAutoDisabledCount(t, metrics, 1)
 
 	// A repeat observation is absorbed: one transition, one count.
-	hook("u1", "upstream_auth_failure")
+	hook("u1", -1, "upstream_auth_failure")
 	if ids := sw.AutoDisabledIDs(); len(ids) != 1 {
 		t.Fatalf("auto disabled = %v, want exactly u1", ids)
 	}
 	assertAutoDisabledCount(t, metrics, 1)
 
 	// An unknown upstream name cannot disable anything.
-	hook("typo", "upstream_auth_failure")
+	hook("typo", -1, "upstream_auth_failure")
 }
 
 // assertAutoDisabledCount renders the registry and checks the
@@ -308,5 +308,101 @@ func TestStartRecoveryDisabledModes(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	if !sw.UpstreamEnabled("u1") {
 		t.Fatal("disabled recovery must not change switch state")
+	}
+}
+
+// TestAutoDisableHookRetiresCredentialFirst: a fatal report on a known
+// credential retires it in the ring and leaves the upstream in
+// rotation; only the last living credential's death takes the
+// upstream out, and an unknown credential index goes straight to the
+// upstream-level disable.
+func TestAutoDisableHookRetiresCredentialFirst(t *testing.T) {
+	t.Parallel()
+	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
+		ID: "u1", BaseURL: "http://127.0.0.1:8090",
+		APIKeys: []string{"k1", "k2"},
+	})
+	if err != nil {
+		t.Fatalf("adapter: %v", err)
+	}
+	rings := map[string]upstream.CredentialPool{"u1": adapter}
+	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
+	metrics := obs.NewMetrics()
+	hook := autoDisableHook(sw, rings, metrics, discardLogger())
+
+	// The first credential dies: the ring shrinks, the upstream stays.
+	hook("u1", 0, "upstream_auth_failure")
+	if !sw.UpstreamEnabled("u1") {
+		t.Fatal("one dead credential must not take the upstream out")
+	}
+	if got := adapter.AliveCredentials(); got != 1 {
+		t.Fatalf("alive = %d, want 1", got)
+	}
+	assertCredentialRetiredCount(t, metrics, 1)
+
+	// A repeat report on the already-dead credential changes nothing.
+	hook("u1", 0, "upstream_auth_failure")
+	if got := adapter.AliveCredentials(); got != 1 {
+		t.Fatalf("alive = %d, want 1 after a repeat report", got)
+	}
+	assertCredentialRetiredCount(t, metrics, 1)
+
+	// The last credential dies: the upstream leaves rotation.
+	hook("u1", 1, "upstream_auth_failure")
+	if sw.UpstreamEnabled("u1") {
+		t.Fatal("the last dead credential must take the upstream out")
+	}
+	assertCredentialRetiredCount(t, metrics, 2)
+	assertAutoDisabledCount(t, metrics, 1)
+
+	// An upstream-level report (no credential) disables directly.
+	sw2 := router.NewSwitch([]string{"m1"}, []string{"u2"})
+	hook2 := autoDisableHook(sw2, rings, obs.NewMetrics(), discardLogger())
+	hook2("u2", -1, "upstream_quota_exhausted")
+	if sw2.UpstreamEnabled("u2") {
+		t.Fatal("a credential-less report must disable the upstream")
+	}
+}
+
+// assertCredentialRetiredCount renders the registry and checks the
+// credential-retirement counter fired exactly n times.
+func assertCredentialRetiredCount(t *testing.T, metrics *obs.Metrics, want int) {
+	t.Helper()
+	var out strings.Builder
+	if err := metrics.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	wantLine := `breakwater_credential_retired_total{upstream="u1",reason="upstream_auth_failure"} `
+	if !strings.Contains(out.String(), wantLine+strconv.Itoa(want)) {
+		t.Fatalf("exposition missing %s%d:\n%s", wantLine, want, out.String())
+	}
+}
+
+// TestSwitchEnableRevivesRing: the switch's enable callback restores
+// the full ring, and disabling does not touch it.
+func TestSwitchEnableRevivesRing(t *testing.T) {
+	t.Parallel()
+	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
+		ID: "u1", BaseURL: "http://127.0.0.1:8090",
+		APIKeys: []string{"k1", "k2"},
+	})
+	if err != nil {
+		t.Fatalf("adapter: %v", err)
+	}
+	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
+	sw.OnUpstreamEnable = reviveRing(map[string]upstream.CredentialPool{"u1": adapter}, discardLogger())
+
+	adapter.RetireCredential(0)
+	if err := sw.SetUpstream("u1", false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if got := adapter.AliveCredentials(); got != 1 {
+		t.Fatalf("alive after disable = %d, want 1 — a disable revives nothing", got)
+	}
+	if err := sw.SetUpstream("u1", true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if got := adapter.AliveCredentials(); got != 2 {
+		t.Fatalf("alive after enable = %d, want the full ring restored", got)
 	}
 }

@@ -264,3 +264,46 @@ func TestSwitchViewCarriesAutoDisableReasons(t *testing.T) {
 		t.Fatal("healthy u1 must not appear in the auto view")
 	}
 }
+
+// TestSwitchFiresEnableCallback: an operator enable and a lifted auto
+// disable both fire the enable callback — the hook that restores the
+// upstream's credential ring — while disables stay silent and a
+// failing-closed unknown name never reaches it.
+func TestSwitchFiresEnableCallback(t *testing.T) {
+	t.Parallel()
+	sw := NewSwitch([]string{"m1"}, []string{"u1"})
+	var enabled []string
+	sw.OnUpstreamEnable = func(id string) { enabled = append(enabled, id) }
+
+	// Disables stay silent.
+	if err := sw.SetUpstream("u1", false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if len(enabled) != 0 {
+		t.Fatalf("enables = %v, want none after a disable", enabled)
+	}
+	// The operator enable fires.
+	if err := sw.SetUpstream("u1", true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0] != "u1" {
+		t.Fatalf("enables = %v, want u1 once", enabled)
+	}
+	// A lifted auto disable fires too.
+	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
+		t.Fatalf("auto disable: %v", err)
+	}
+	if err := sw.AutoEnableUpstream("u1"); err != nil {
+		t.Fatalf("auto enable: %v", err)
+	}
+	if len(enabled) != 2 || enabled[1] != "u1" {
+		t.Fatalf("enables = %v, want u1 twice", enabled)
+	}
+	// An unknown name fails closed without firing.
+	if err := sw.SetUpstream("typo", true); err == nil {
+		t.Fatal("unknown upstream accepted")
+	}
+	if len(enabled) != 2 {
+		t.Fatalf("enables = %v, want unchanged for an unknown name", enabled)
+	}
+}

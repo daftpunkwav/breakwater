@@ -30,7 +30,7 @@ failover 的熔断、有界重试、缓存击穿防护、基于 lease 的 quota 
 | `internal/router`     | 候选选择：static 优先级或实测延迟排序、breaker 预过滤、运行时运维开关 |
 | `internal/upstream`   | Provider port + OpenAI-compatible adapter                  |
 | `internal/config`     | 配置 schema 与加载                                          |
-| `internal/obs`        | 有界异步 access log、手写 metrics registry                 |
+| `internal/obs`        | 有界异步 access log（含逐 attempt 轨迹）、手写 metrics registry |
 | `deploy`              | docker-compose stack、schema、seed、容器构建                |
 | `loadtest`            | k6 场景，每个瞄准系统的一条性质                             |
 | `docs`                | 基准、故障注入报告、本地部署指南与测试约定                   |
@@ -132,7 +132,7 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | 变量                                  | 默认           | 作用                                                       |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
 | `BREAKWATER_ADDR`                     | `:8080`        | 监听地址                                                    |
-| `BREAKWATER_UPSTREAMS`                | _(无)_         | upstream 的 JSON 列表（`id`、`base_url`、`probe_url`、`api_key`、`models`；列表顺序 = failover 优先级；`"client=real"` 条目做模型别名） |
+| `BREAKWATER_UPSTREAMS`                | _(无)_         | upstream 的 JSON 列表（`id`、`base_url`、`probe_url`、`api_key`、`api_keys`、`models`；列表顺序 = failover 优先级；`"client=real"` 条目做模型别名；`api_keys` 在同一 upstream 后轮换多把凭据） |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | 候选顺序：`static`（配置顺序）或 `latency`（实测交换延迟优先；近乎打平的候选按请求轮换领先权，其余并列由配置顺序裁决；未试过的 upstream 优先探索） |
 | `BREAKWATER_FALLBACKS`                | _(无)_         | 模型 → 有序 fallback 模型的 JSON 映射，在主模型每个候选耗尽后尝试（`{"gpt-4o":["gpt-4o-mini"]}`）；键与目标必须指向已配置的 client-facing 模型 |
 | `BREAKWATER_CONTEXT_LIMITS`           | _(无)_         | 模型 → 最大输入 token 估算的 JSON 映射；超出上限的 prompt 提前拒绝该模型的全部候选，返回 `413 context_window_exceeded`，而不是注定失败的 upstream 交换 |
@@ -199,6 +199,24 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
   breaker 关闭（"我修好了 upstream，现在放行"），`POST
   /admin/upstreams/{id}/probe` 按需跑一次健康交换（200 健康，upstream 未
   声明 `probe_url` 时 409，探测失败 502）。
+
+### 凭据环
+
+一个 upstream 可以同时持有多把 provider 凭据——`api_keys` 列出在同一
+`base_url` 后轮换的其余 bearer token（设置了的 `api_key` 领衔）。供应商的
+限流按凭据计，环因此把 upstream 的流量摊到所有凭据上：每次 exchange 取下一
+把存活凭据，并发请求落在不同凭据上，而本请求中已被限流或被判定 fatal 的
+凭据在该请求内不再复用。
+
+fatal 条件（凭据被拒、预算耗尽）定罪的是凭据，不是 upstream：环退役该凭据
+——计入 `breakwater_credential_retired_total`——其余凭据继续服务。只有最后
+一把存活凭据死亡，才经与此前相同的 auto-disable 把 upstream 移出轮转；而
+解除该禁用的任何路径（操作员启用、恢复探测转健康）都会把环恢复满编。被
+退役的凭据本身只随 upstream 的重新进入而复位——没有按凭据的探测。
+
+attempt 预算仍然约束整个游走：一个请求至多发出
+`BREAKWATER_RETRY_MAX_ATTEMPTS` 次 exchange，想让 fatal 游走走完整个环，
+就把该值调到不小于环的大小。
 
 ### 身份管理（PostgreSQL 部署）
 

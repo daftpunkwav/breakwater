@@ -206,6 +206,8 @@ func NewMetrics() *Metrics {
 		[]string{"upstream", "result"}, nil)
 	reg("breakwater_upstream_auto_disabled_total", "Upstreams taken out of rotation by a fatal upstream condition.", "counter",
 		[]string{"upstream", "reason"}, nil)
+	reg("breakwater_credential_retired_total", "Credentials retired by a fatal credential condition while others kept the upstream serving.", "counter",
+		[]string{"upstream", "reason"}, nil)
 	reg("breakwater_upstream_ttft_seconds", "Time to first byte of streaming replies, per upstream.", "histogram",
 		[]string{"upstream"}, defaultBuckets)
 
@@ -412,6 +414,15 @@ func (m *Metrics) UpstreamAutoDisabled(upstream, reason string) {
 		return
 	}
 	m.inc("breakwater_upstream_auto_disabled_total", 1, upstream, reason)
+}
+
+// CredentialRetired records a credential retired by a fatal credential
+// condition while other credentials kept the upstream serving.
+func (m *Metrics) CredentialRetired(upstream, reason string) {
+	if m == nil {
+		return
+	}
+	m.inc("breakwater_credential_retired_total", 1, upstream, reason)
 }
 
 // ObserveTTFT records the time to first byte of one streaming reply.

@@ -97,8 +97,14 @@ type Upstream struct {
 	ID string `json:"id"`
 	// BaseURL is the scheme and host, without trailing slash.
 	BaseURL string `json:"base_url"`
-	// APIKey is the bearer token; empty for the mock upstream.
+	// APIKey is the bearer token; empty for the mock upstream. When
+	// APIKeys is also set, it leads the credential ring.
 	APIKey string `json:"api_key"`
+	// APIKeys are further bearer tokens rotated behind the same
+	// upstream: provider rate limits are per credential, so the ring
+	// spreads the upstream's traffic across all of them. The merged
+	// list (api_key first, then api_keys) is the ring order.
+	APIKeys []string `json:"api_keys"`
 	// ProbeURL is the health endpoint; empty disables probing.
 	ProbeURL string `json:"probe_url"`
 	// Models are the model identifiers served; "*" is the wildcard. An
@@ -106,6 +112,19 @@ type Upstream struct {
 	// "client" by forwarding the provider-real name "real" — the
 	// gateway routes on the client name, the adapter rewrites the body.
 	Models []string `json:"models"`
+}
+
+// Credentials merges the upstream's bearer tokens into one ordered
+// ring: api_key first, then api_keys. The order fixes each
+// credential's index for the ring's lifetime (retirement and the
+// access trail reference it), not a serving priority — every alive
+// credential serves.
+func (u Upstream) Credentials() []string {
+	keys := make([]string, 0, len(u.APIKeys)+1)
+	if u.APIKey != "" {
+		keys = append(keys, u.APIKey)
+	}
+	return append(keys, u.APIKeys...)
 }
 
 // Retry bounds the upstream attempt loop of every request.

@@ -52,10 +52,12 @@ type Executor struct {
 	observer UpstreamObserver
 	// fatalHook, when set, receives one report per fatal upstream
 	// condition observed on a completed error exchange (dead
-	// credentials, exhausted quota). The assembly wires it to the
-	// routing switch's auto-disable. It fires from the attempt
-	// goroutine and must be safe for concurrent use.
-	fatalHook func(upstreamID, reason string)
+	// credentials, exhausted quota), with the credential index the
+	// exchange used (-1 when it carried none). The assembly wires it
+	// to the credential ring's retirement and, once no credential is
+	// left, the routing switch's auto-disable. It fires from the
+	// attempt goroutine and must be safe for concurrent use.
+	fatalHook func(upstreamID string, credentialIndex int, reason string)
 	// streamTimeout bounds a committed stream's whole body; zero means
 	// the client owns the stream's lifetime outright.
 	streamTimeout time.Duration
@@ -94,8 +96,9 @@ func WithUpstreamObserver(o UpstreamObserver) Option {
 
 // WithUpstreamFatalHook installs the fatal-condition hook; nil (the
 // default) disables it. The reason is a machine-readable cause, e.g.
-// upstream_auth_failure.
-func WithUpstreamFatalHook(fn func(upstreamID, reason string)) Option {
+// upstream_auth_failure; the credential index names the credential the
+// reported exchange used (-1 when it carried none).
+func WithUpstreamFatalHook(fn func(upstreamID string, credentialIndex int, reason string)) Option {
 	return func(e *Executor) { e.fatalHook = fn }
 }
 
@@ -217,6 +220,11 @@ type run struct {
 	lastFailedErr *retry.StatusError
 	terminal      *exchangeSnapshot
 	streamBytes   int64
+	// rotated is the status error whose failure the stash convicted
+	// down to its credential alone: the run's classifier layer calls
+	// it retryable so the loop hands the request to the next
+	// credential instead of ending it.
+	rotated *retry.StatusError
 	// gatewayCode records the gateway-originated failure code of the
 	// branch that will render the final error; a mid-stream abort
 	// records its in-stream code instead.
@@ -234,6 +242,11 @@ type run struct {
 	fi         int
 	attempted  map[string]bool
 	lastCand   upstream.Upstream
+	// excluded holds the credentials this request burned per upstream
+	// id: the ones a completed exchange proved limited or broken. The
+	// next exchange on the same upstream hands the list to the adapter,
+	// which serves the request with a different credential.
+	excluded map[string][]int
 	// startedAt is the current attempt's first instant; the streaming
 	// path reads it for the time-to-first-byte observation.
 	startedAt time.Time
@@ -262,9 +275,39 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 		batches:    []batch{{model: job.Model, candidates: job.Candidates}},
 		batchStart: 1,
 		attempted:  map[string]bool{job.Model: true},
+		excluded:   map[string][]int{},
 	}
-	err := retry.Execute(ctx, e.policy, e.budget, e.classifier, nil, r.attempt)
+	err := retry.Execute(ctx, e.policy, e.budget, runClassifier{inner: e.classifier, run: r}, nil, r.attempt)
 	return r.finish(err)
+}
+
+// runClassifier layers the request's own credential verdicts over the
+// executor's static table: an exchange the stash convicted down to its
+// credential alone is retryable for this request even when the table
+// calls the status terminal — the next attempt serves the request with
+// another credential instead of ending it.
+type runClassifier struct {
+	inner retry.Classifier
+	run   *run
+}
+
+// Retryable implements Classifier, overriding the static table only
+// for the one error the request's stash rotated on.
+func (c runClassifier) Retryable(err error) bool {
+	if err != nil && c.run.rotated != nil && errors.Is(err, c.run.rotated) {
+		return true
+	}
+	return c.inner.Retryable(err)
+}
+
+// DelayHint forwards the inner classifier's hint so the loop's type
+// assertion keeps working through the decorator; a classifier without
+// one behaves as hint-less.
+func (c runClassifier) DelayHint(err error) time.Duration {
+	if dh, ok := c.inner.(interface{ DelayHint(error) time.Duration }); ok {
+		return dh.DelayHint(err)
+	}
+	return 0
 }
 
 // attempt runs one upstream attempt: breaker grant, exchange, outcome
@@ -308,21 +351,40 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 		r.servedBy = cand.ID()
 		return nil
 	}
-	// A Retry-After hint is one upstream's own recovery schedule; it
-	// must not delay the failover to a different candidate. The hint
-	// travels only when a further attempt will actually run and re-hit
-	// the same upstream: stripping on the final attempt would replace
-	// the error with a clone and break the identity match the
+	// A Retry-After hint is one credential's or one upstream's own
+	// recovery schedule; it must not delay a hand-off to a different
+	// candidate or to a different credential of the same upstream. The
+	// hint travels only when a further attempt will actually run and
+	// re-hit the same credential: stripping on the final attempt would
+	// replace the error with a clone and break the identity match the
 	// last-failed passthrough in finish relies on. No retry can read
 	// the hint then, so leaving it is free — which is also why a
 	// committed error skips the lookahead entirely: the loop ends on
 	// it without ever consulting anything.
 	if !errors.Is(err, retry.ErrCommitted) && r.exec.policy.MaxAttempts > attempt {
-		if next, _ := r.target(attempt + 1); next.ID() != cand.ID() {
+		next, _ := r.target(attempt + 1)
+		if next.ID() != cand.ID() || r.credentialRotates(cand) {
 			err = retry.StripRetryAfter(err)
 		}
 	}
 	return err
+}
+
+// credentialRotates reports whether this upstream will serve its next
+// exchange with a credential this request has not burned: the upstream
+// holds a credential ring, this request already excluded at least one
+// credential, and more alive credentials remain than the walk has
+// burned — so the pick is guaranteed to land on a fresh one.
+func (r *run) credentialRotates(cand upstream.Upstream) bool {
+	burned := r.excluded[cand.ID()]
+	if len(burned) == 0 {
+		return false
+	}
+	pool, ok := cand.(upstream.CredentialPool)
+	if !ok {
+		return false
+	}
+	return pool.AliveCredentials() > len(burned)
 }
 
 // finish renders the client response for the loop's final error and

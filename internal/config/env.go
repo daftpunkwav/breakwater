@@ -336,6 +336,21 @@ func Load() (Config, error) {
 				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
 			}
 		}
+		// The credential ring indexes retirement and log trails by list
+		// position, so the merged list must be clean: an empty entry
+		// would send a broken Authorization header, and a duplicate
+		// would rotate two slots onto one secret — a config smell that
+		// must refuse to boot, not rotate uselessly.
+		seenCredentials := make(map[string]struct{}, len(u.APIKeys)+1)
+		for j, key := range u.Credentials() {
+			if key == "" {
+				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has an empty credential at ring position %d", i, u.ID, j)
+			}
+			if _, dup := seenCredentials[key]; dup {
+				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) repeats a credential", i, u.ID)
+			}
+			seenCredentials[key] = struct{}{}
+		}
 	}
 	return cfg, nil
 }

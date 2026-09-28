@@ -178,7 +178,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		logger.Warn("no identity configured: running without governance stages")
 	}
 
-	bindings, err := buildBindings(cfg.Upstreams)
+	bindings, rings, err := buildBindings(cfg.Upstreams)
 	if err != nil {
 		return err
 	}
@@ -191,6 +191,11 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	}
 	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams),
 		router.WithWildcardModels(wildcardServed(cfg.Upstreams)))
+	// An upstream returning to rotation — operator enable or lifted
+	// auto disable — carries its credential ring back to full strength:
+	// the same decision that lifts the disable lifts what the fatal
+	// conditions retired inside it.
+	routingSwitch.OnUpstreamEnable = reviveRing(rings, logger)
 	if err := validateModelNames(cfg.Upstreams, cfg.Fallbacks, cfg.ContextLimits); err != nil {
 		return err
 	}
@@ -215,7 +220,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		relay.WithMetrics(metrics),
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
 		relay.WithUpstreamObserver(trackerObserver{tracker}),
-		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, metrics, logger)),
+		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, rings, metrics, logger)),
 	)
 
 	// One chain per client format, one route per chain. The fallback
@@ -462,10 +467,31 @@ func (a trackerObserver) ObserveUpstream(upstreamID string, latency time.Duratio
 }
 
 // autoDisableHook adapts the relay's fatal-condition reports to the
-// routing switch: a fatally broken upstream leaves rotation with the
-// reason recorded, counted, and logged — once per transition.
-func autoDisableHook(routingSwitch *router.Switch, metrics *obs.Metrics, logger *slog.Logger) func(upstreamID, reason string) {
-	return func(upstreamID, reason string) {
+// credential rings and the routing switch. A fatal exchange convicts
+// the credential that served it first: the ring retires it, counted
+// and logged once per transition, and the remaining credentials keep
+// the upstream in rotation. Only the last living credential's death
+// takes the upstream out of rotation — with the reason recorded, the
+// metric counted, and the log line emitted, once per transition. A
+// report without a usable credential index (an upstream that holds no
+// ring, or an exchange that carried none) goes straight to the
+// upstream-level disable, exactly as before rings existed.
+func autoDisableHook(routingSwitch *router.Switch, rings map[string]upstream.CredentialPool, metrics *obs.Metrics, logger *slog.Logger) func(upstreamID string, credentialIndex int, reason string) {
+	return func(upstreamID string, credentialIndex int, reason string) {
+		if ring, ok := rings[upstreamID]; ok && credentialIndex >= 0 {
+			if newly := ring.RetireCredential(credentialIndex); newly {
+				metrics.CredentialRetired(upstreamID, reason)
+				logger.Warn("credential retired, the ring keeps the upstream serving",
+					"upstream", upstreamID, "credential_index", credentialIndex,
+					"reason", reason, "credentials_alive", ring.AliveCredentials())
+				if ring.AliveCredentials() > 0 {
+					return
+				}
+			} else if ring.AliveCredentials() > 0 {
+				// Already retired by a concurrent report; nothing changed.
+				return
+			}
+		}
 		newly, err := routingSwitch.AutoDisableUpstream(upstreamID, reason)
 		if err != nil {
 			logger.Warn("upstream auto-disable rejected", "upstream", upstreamID, "reason", reason, "error", err)
@@ -477,6 +503,19 @@ func autoDisableHook(routingSwitch *router.Switch, metrics *obs.Metrics, logger 
 		metrics.UpstreamAutoDisabled(upstreamID, reason)
 		logger.Warn("upstream auto-disabled, dropping from rotation",
 			"upstream", upstreamID, "reason", reason)
+	}
+}
+
+// reviveRing returns the enable callback for the routing switch: an
+// upstream coming back to rotation restores its full credential ring.
+func reviveRing(rings map[string]upstream.CredentialPool, logger *slog.Logger) func(id string) {
+	return func(id string) {
+		ring, ok := rings[id]
+		if !ok {
+			return
+		}
+		ring.ReviveCredentials()
+		logger.Info("credential ring restored with the upstream back in rotation", "upstream", id)
 	}
 }
 
@@ -528,23 +567,28 @@ func servesModel(cfgs []config.Upstream, model string) bool {
 }
 
 // buildBindings turns configured upstreams into ordered router bindings,
-// passing each adapter its "client=real" model rewrites.
-func buildBindings(cfgs []config.Upstream) ([]router.Binding, error) {
+// passing each adapter its "client=real" model rewrites and its merged
+// credential ring. The ring map keys the adapters by id for the fatal
+// hook and the enable callback; every OpenAI adapter carries one, so a
+// missing key means an unknown upstream, never a ring-less adapter.
+func buildBindings(cfgs []config.Upstream) ([]router.Binding, map[string]upstream.CredentialPool, error) {
 	bindings := make([]router.Binding, 0, len(cfgs))
+	rings := make(map[string]upstream.CredentialPool, len(cfgs))
 	for _, c := range cfgs {
 		adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
 			ID:       c.ID,
 			BaseURL:  c.BaseURL,
-			APIKey:   c.APIKey,
+			APIKeys:  c.Credentials(),
 			ProbeURL: c.ProbeURL,
 			ModelMap: upstream.ParseModelMap(c.Models),
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		bindings = append(bindings, router.Binding{Models: clientModels(c.Models), Upstream: adapter})
+		rings[c.ID] = adapter
 	}
-	return bindings, nil
+	return bindings, rings, nil
 }
 
 // clientModels strips the "client=real" rewrites down to the

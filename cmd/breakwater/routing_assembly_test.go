@@ -39,7 +39,7 @@ func TestKnownModelsDeduplicatesAcrossUpstreams(t *testing.T) {
 
 func TestBuildBindingsResolvesClientNames(t *testing.T) {
 	t.Parallel()
-	bindings, err := buildBindings([]config.Upstream{{
+	bindings, rings, err := buildBindings([]config.Upstream{{
 		ID: "up", BaseURL: "http://x", Models: []string{"gpt-4o=deepseek-chat"},
 	}})
 	if err != nil || len(bindings) != 1 {
@@ -47,6 +47,9 @@ func TestBuildBindingsResolvesClientNames(t *testing.T) {
 	}
 	if len(bindings[0].Models) != 1 || bindings[0].Models[0] != "gpt-4o" {
 		t.Fatalf("binding models = %v, want the client-facing name only", bindings[0].Models)
+	}
+	if rings["up"] == nil {
+		t.Fatal("rings = nil entry for a configured upstream, want the adapter registered")
 	}
 }
 

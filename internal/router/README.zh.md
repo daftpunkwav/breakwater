@@ -17,7 +17,7 @@ handler（[inference.go](../server/inference.go)）在 relay 启动前对每个
 | --- | --- |
 | `router.go` | `Router` port：`Candidates(ctx, model)` |
 | `priority.go` | `Priority`：按配置顺序的绑定、`"*"` 通配、经 `StateOf` 的 breaker 预过滤、static/latency 排序与近平局首领抽取 |
-| `control.go` | `Switch`：操作员对 model/upstream 的禁用、系统自动禁用（含原因与时刻）、`View` 快照 |
+| `control.go` | `Switch`：操作员对 model/upstream 的禁用、系统自动禁用（含原因与时刻）、`View` 快照；upstream 回到轮转时触发 `OnUpstreamEnable`，assembly 借此恢复 fatal 条件在其内部退役的东西 |
 | `tracker.go` | `Strategy` 与 `ParseStrategy`；`Tracker`：每上游的 exchange-latency EWMA（alpha 0.25），每个连续失败附加 1000 ms 惩罚 |
 
 ## Invariants

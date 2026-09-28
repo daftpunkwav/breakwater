@@ -13,11 +13,11 @@ upstream 上的 attempt loop、跨候选与 fallback 模型的 failover 顺序�
 | File | 职责 |
 | --- | --- |
 | `executor.go` | `Executor`、`Job`、`Result`：attempt loop 驱动器；`finish` 渲染三者之一——已交付的回复、最后一个上游错误的逐字节 passthrough、或网关信封；breaker 的许可与结果上报按 attempt 进行 |
-| `exchange.go` | 一次上游 attempt：buffered 模式（响应体受 `maxResponseBytes`（32 MiB）约束）与 streaming 模式（提交点是写向客户端的第一个字节；此后失败经错误事件契约终结） |
+| `exchange.go` | 一次上游 attempt：buffered 模式（响应体受 `maxResponseBytes`（32 MiB）约束）与 streaming 模式（提交点是写向客户端的第一个字节；此后失败经错误事件契约终结）；credential 类失败会把该凭据排除出本次请求的剩余尝试——只要还有存活凭据，请求继续向下走而不是终止 |
 | `fallback.go` | fallback 计划：attempt loop 耗尽当前模型后经 `CandidateResolver` 惰性解析下一批；链是偏好列表而非契约——无法服务的模型直接跳过 |
 | `streamlease.go` | 流式 exchange 的每 attempt 计时器组：attempt timeout 约束 time-to-first-byte，可选的 stream ceiling 约束整个响应体 |
 | `stream.go` | SSE passthrough 泵：逐 chunk 转发、每事件 flush、被动刮取 usage、复用单个输出缓冲；`[DONE]` 哨兵区分正常完成与被截断的流 |
-| `fatal.go` | `fatalUpstreamReason`：刻意收窄的 fatal 分类（`insufficient_quota`、401、credential 类 403），经 fatal hook 上报给路由开关的 auto-disable |
+| `fatal.go` | `fatalUpstreamReason`：刻意收窄的 fatal 分类（`insufficient_quota`、401、credential 类 403），经 fatal hook 连同服务本次交换的凭据一并上报——assembly 先退役该凭据，环全部失效才 auto-disable 上游 |
 
 ## Tests
 
@@ -36,8 +36,8 @@ transcoder、时间预算与 fatal 分类各有独立文件；`stream_bench_test
   的 chunk 保持已发送，loop 看到的是 `retry.ErrCommitted`。
 - 客户端断连不是任何人的过错：breaker 记账与路由观察者在断连出现的任何位置
   应用同一个 `clientFault` 裁决——客户端离场永不降低某个 upstream 的评价。
-- `Retry-After` 提示只推迟同一 upstream 的下一次重试；向其他候选的 failover
-  绝不等待失败者的提示。
+- `Retry-After` 提示只推迟同一凭据、同一 upstream 的下一次重试；换候选、
+  或换同一 upstream 的另一把凭据，绝不等待失败者的提示。
 - fatal 分类刻意收窄：auto-disable 会连带砍掉真实流量，因此只有确定性失败
   （预算耗尽、凭据被拒）够格——请求级的 403 绝不把 upstream 从所有人面前
-  逐出。
+  逐出。有凭据环时，定罪先落在凭据上，环全部失效才轮到 upstream。

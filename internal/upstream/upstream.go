@@ -48,6 +48,12 @@ type Request struct {
 	// RequestID, when set, is forwarded as X-Request-Id so providers can
 	// correlate their logs with the gateway's.
 	RequestID string
+	// ExcludedCredentials lists the credential indices this request must
+	// not reuse on this upstream — the credentials a previous attempt of
+	// the same request proved limited or broken. The adapter skips them
+	// when picking, reusing a credential only when every alive one is
+	// excluded. Ignored by adapters that hold no credential ring.
+	ExcludedCredentials []int
 }
 
 // Response is an upstream reply. Body is streamed and must be closed by
@@ -58,6 +64,12 @@ type Response struct {
 	StatusCode int
 	Header     http.Header
 	Body       io.ReadCloser
+	// CredentialIndex identifies the credential the exchange used,
+	// 0-based within the upstream's credential ring; -1 when the
+	// exchange carried no credential. Callers correlate fatal
+	// conditions with it; adapters without a ring leave the zero
+	// value, which is exact for a single-credential upstream.
+	CredentialIndex int
 }
 
 // Upstream is the provider port.

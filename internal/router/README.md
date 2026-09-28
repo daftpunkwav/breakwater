@@ -20,7 +20,7 @@ request before the relay starts.
 | --- | --- |
 | `router.go` | The `Router` port: `Candidates(ctx, model)` |
 | `priority.go` | `Priority`: bindings in configured order, `"*"` wildcard, breaker pre-filter via `StateOf`, static/latency ordering with the near-tie leader draw |
-| `control.go` | `Switch`: operator model/upstream disables, system auto-disables with reason and moment, `View` snapshot |
+| `control.go` | `Switch`: operator model/upstream disables, system auto-disables with reason and moment, `View` snapshot; `OnUpstreamEnable` fires when an upstream returns to rotation so the assembly can restore what fatal conditions retired inside it |
 | `tracker.go` | `Strategy` and `ParseStrategy`; `Tracker`: per-upstream exchange-latency EWMA (alpha 0.25) plus a 1000 ms penalty per consecutive failure |
 
 ## Invariants

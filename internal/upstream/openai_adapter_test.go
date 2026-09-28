@@ -105,6 +105,15 @@ func TestForwardPostsToCompletionPath(t *testing.T) {
 	}
 }
 
+// credentials wraps one optional credential into the ring form the
+// adapter constructor takes.
+func credentials(key string) []string {
+	if key == "" {
+		return nil
+	}
+	return []string{key}
+}
+
 // TestForwardRequestHeaders: streaming sets the SSE accept header,
 // an API key becomes the bearer token, and neither leaks when absent.
 func TestForwardRequestHeaders(t *testing.T) {
@@ -131,7 +140,7 @@ func TestForwardRequestHeaders(t *testing.T) {
 			}))
 			defer server.Close()
 
-			adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL, APIKey: tc.apiKey})
+			adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL, APIKeys: credentials(tc.apiKey)})
 			if err != nil {
 				t.Fatalf("NewOpenAI: %v", err)
 			}
@@ -460,5 +469,114 @@ func TestProbeRejectsUnparsableURL(t *testing.T) {
 	}
 	if err := adapter.Probe(context.Background()); err == nil {
 		t.Fatal("Probe accepted an unparsable probe url")
+	}
+}
+
+// TestForwardRotatesCredentialRing: consecutive exchanges walk the
+// ring in order, each response names the credential that served it,
+// and the exclusion list moves the exchange to a fresh credential.
+func TestForwardRotatesCredentialRing(t *testing.T) {
+	t.Parallel()
+	var gotAuth []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter, err := NewOpenAI(OpenAIConfig{ID: "up", BaseURL: server.URL,
+		APIKeys: []string{"sk-one", "sk-two", "sk-three"}})
+	if err != nil {
+		t.Fatalf("NewOpenAI: %v", err)
+	}
+	wantAuth := []string{"Bearer sk-one", "Bearer sk-two", "Bearer sk-three"}
+	for i := range wantAuth {
+		resp, err := adapter.Forward(context.Background(), Request{})
+		if err != nil {
+			t.Fatalf("exchange %d: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.CredentialIndex != i {
+			t.Fatalf("exchange %d: credential index = %d, want %d", i, resp.CredentialIndex, i)
+		}
+	}
+	for i := range wantAuth {
+		if gotAuth[i] != wantAuth[i] {
+			t.Fatalf("exchange %d: Authorization = %q, want %q", i, gotAuth[i], wantAuth[i])
+		}
+	}
+
+	// The exclusion list moves the exchange off the burned credential.
+	resp, err := adapter.Forward(context.Background(), Request{ExcludedCredentials: []int{0}})
+	if err != nil {
+		t.Fatalf("excluded exchange: %v", err)
+	}
+	_ = resp.Body.Close()
+	if gotAuth[3] != "Bearer sk-two" {
+		t.Fatalf("excluded exchange: Authorization = %q, want the second credential", gotAuth[3])
+	}
+	if resp.CredentialIndex != 1 {
+		t.Fatalf("excluded exchange: credential index = %d, want 1", resp.CredentialIndex)
+	}
+}
+
+// TestForwardFailsWhenEveryCredentialRetired: a fully retired ring
+// refuses to forward — the exchange does not complete, which the
+// caller classifies as a retryable transport failure.
+func TestForwardFailsWhenEveryCredentialRetired(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter, err := NewOpenAI(OpenAIConfig{ID: "up", BaseURL: server.URL,
+		APIKeys: []string{"sk-one", "sk-two"}})
+	if err != nil {
+		t.Fatalf("NewOpenAI: %v", err)
+	}
+	if !adapter.RetireCredential(0) || !adapter.RetireCredential(1) {
+		t.Fatal("setup: retire did not take")
+	}
+	if adapter.AliveCredentials() != 0 {
+		t.Fatalf("alive = %d, want 0", adapter.AliveCredentials())
+	}
+	if _, err := adapter.Forward(context.Background(), Request{}); err == nil {
+		t.Fatal("Forward served with an empty ring")
+	}
+
+	// The upstream's re-enable story: revive restores the ring.
+	adapter.ReviveCredentials()
+	resp, err := adapter.Forward(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Forward after revive: %v", err)
+	}
+	_ = resp.Body.Close()
+}
+
+// TestForwardKeylessUpstreamSkipsCredential: a ringless upstream (the
+// mock) forwards without an Authorization header and reports no
+// credential.
+func TestForwardKeylessUpstreamSkipsCredential(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want none", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter, err := NewOpenAI(OpenAIConfig{ID: "mock", BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewOpenAI: %v", err)
+	}
+	resp, err := adapter.Forward(context.Background(), Request{ExcludedCredentials: []int{0, 1}})
+	if err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.CredentialIndex != -1 {
+		t.Fatalf("credential index = %d, want -1 for a ringless upstream", resp.CredentialIndex)
 	}
 }

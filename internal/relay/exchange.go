@@ -42,6 +42,9 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 		Stream:    r.job.Stream,
 		Body:      r.job.Body,
 		RequestID: r.job.RequestID,
+		// Credentials this request already burned on this upstream: the
+		// adapter serves the exchange with a different one.
+		ExcludedCredentials: r.excluded[cand.ID()],
 	}
 	if !r.job.Stream {
 		resp, err := cand.Forward(attemptCtx, req)
@@ -216,26 +219,74 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 // client faults become the terminal passthrough immediately. The
 // serving upstream is recorded: error passthroughs must still carry
 // their upstream dimension for observation and negative caching.
+//
+// A credential-class failure (rate limit, dead credential, exhausted
+// quota) convicts the credential that served the exchange, not the
+// upstream: it is excluded for the rest of this request, and while
+// another credential remains alive the exchange hands the request to
+// it instead of ending the request. When none is left — or the
+// upstream holds no ring — the verdict falls to the retryability
+// table exactly as before.
 func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response, body []byte) (circuit.Outcome, error) {
 	r.servedBy = cand.ID()
 	statusErr := retry.NewStatusError(resp.StatusCode)
 	// The upstream's own wait request rides the error for the attempt
-	// loop; the loop decides where it applies (same-upstream retries).
+	// loop; the loop decides where it applies (same-credential
+	// retries).
 	statusErr.RetryAfter = retry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	// A fatal condition is reported once per observation, whether or
 	// not the exchange counts as retryable: quota exhaustion arrives
 	// as a 429 and is retryable by the table, but it is still proof
-	// the upstream's budget is gone.
-	if reason := fatalUpstreamReason(resp.StatusCode, body); reason != "" && r.exec.fatalHook != nil {
-		r.exec.fatalHook(cand.ID(), reason)
+	// the credential's budget is gone.
+	reason := fatalUpstreamReason(resp.StatusCode, body)
+	if reason != "" && r.exec.fatalHook != nil {
+		r.exec.fatalHook(cand.ID(), resp.CredentialIndex, reason)
 	}
-	if r.exec.classifier.Retryable(statusErr) {
+	if resp.CredentialIndex >= 0 && (reason != "" || resp.StatusCode == http.StatusTooManyRequests) {
+		r.excludeCredential(cand.ID(), resp.CredentialIndex)
+	}
+	retryable := r.exec.classifier.Retryable(statusErr)
+	if reason != "" && credentialAlive(cand) > 0 {
+		// The verdict is per-credential: while another credential
+		// remains, the loop must run its next attempt on this upstream.
+		// The static table calls 401-class statuses terminal, so the
+		// request's own classifier layer carries the override.
+		retryable = true
+		r.rotated = statusErr
+	}
+	if retryable {
 		r.lastFailed = snapshot(resp.StatusCode, resp.Header, body)
 		r.lastFailedErr = statusErr
 		return circuit.OutcomeServerFault, statusErr
 	}
 	r.terminal = snapshot(resp.StatusCode, resp.Header, body)
 	return circuit.OutcomeClientFault, statusErr
+}
+
+// excludeCredential burns the credential a failed exchange used, so
+// this request's next attempt on the same upstream picks a different
+// one. The list is the request's own verdict; a concurrent request
+// keeps using the credential until its own evidence convicts it.
+func (r *run) excludeCredential(upstreamID string, index int) {
+	if r.excluded == nil {
+		r.excluded = map[string][]int{}
+	}
+	for _, got := range r.excluded[upstreamID] {
+		if got == index {
+			return
+		}
+	}
+	r.excluded[upstreamID] = append(r.excluded[upstreamID], index)
+}
+
+// credentialAlive reports how many credentials the upstream can still
+// serve with; zero for adapters without a credential ring, so a fatal
+// exchange keeps its terminal verdict there.
+func credentialAlive(cand upstream.Upstream) int {
+	if pool, ok := cand.(upstream.CredentialPool); ok {
+		return pool.AliveCredentials()
+	}
+	return 0
 }
 
 // clientFault reports whether a failed exchange was the client's own

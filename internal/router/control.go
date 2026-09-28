@@ -71,6 +71,12 @@ type Switch struct {
 	// switch cannot know the wildcard's full model vocabulary up front,
 	// so the typo protection only applies when no wildcard exists.
 	wildcardModels bool
+	// OnUpstreamEnable, when set, fires after an upstream returns to
+	// rotation — an operator enable or a lifted auto disable. The
+	// assembly binds it to restore what fatal conditions retired
+	// inside the upstream (its credential ring). It runs outside the
+	// switch lock and must not call back into the Switch.
+	OnUpstreamEnable func(id string)
 }
 
 // SwitchOption customizes a Switch.
@@ -130,8 +136,8 @@ func (s *Switch) SetModel(model string, enabled bool) error {
 // upstream is an operator error, not a toggle.
 func (s *Switch) SetUpstream(id string, enabled bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.knownUpstreams[id]; !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("%w: %q", ErrUnknownUpstream, id)
 	}
 	if enabled {
@@ -140,6 +146,12 @@ func (s *Switch) SetUpstream(id string, enabled bool) error {
 	} else {
 		delete(s.autoDisabled, id)
 		s.disabledUpstreams[id] = true
+	}
+	s.mu.Unlock()
+	// Fired outside the lock: the callback restores upstream-side
+	// state and must never run while holding the switch.
+	if enabled && s.OnUpstreamEnable != nil {
+		s.OnUpstreamEnable(id)
 	}
 	return nil
 }
@@ -173,11 +185,15 @@ func (s *Switch) AutoDisableUpstream(id, reason string) (bool, error) {
 // own decision.
 func (s *Switch) AutoEnableUpstream(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.knownUpstreams[id]; !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("%w: %q", ErrUnknownUpstream, id)
 	}
 	delete(s.autoDisabled, id)
+	s.mu.Unlock()
+	if s.OnUpstreamEnable != nil {
+		s.OnUpstreamEnable(id)
+	}
 	return nil
 }
 

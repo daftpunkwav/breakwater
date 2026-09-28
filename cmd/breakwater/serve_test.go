@@ -326,10 +326,10 @@ func TestMetricsHandlerRenders(t *testing.T) {
 
 func TestBuildBindingsValidates(t *testing.T) {
 	t.Parallel()
-	if _, err := buildBindings([]config.Upstream{{ID: "broken"}}); err == nil {
+	if _, _, err := buildBindings([]config.Upstream{{ID: "broken"}}); err == nil {
 		t.Fatal("upstream without base_url must fail binding")
 	}
-	bindings, err := buildBindings([]config.Upstream{{ID: "ok", BaseURL: "http://x", Models: []string{"*"}}})
+	bindings, _, err := buildBindings([]config.Upstream{{ID: "ok", BaseURL: "http://x", Models: []string{"*"}}})
 	if err != nil || len(bindings) != 1 {
 		t.Fatalf("bindings = %v err = %v", bindings, err)
 	}

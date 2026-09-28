@@ -147,7 +147,7 @@ All configuration is environment-based; core knobs:
 | Variable                              | Default        | Effect                                                     |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
 | `BREAKWATER_ADDR`                     | `:8080`        | Listen address                                             |
-| `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `models`; list order = failover priority; `"client=real"` entries alias model names) |
+| `BREAKWATER_UPSTREAMS`                | _(none)_       | JSON list of upstreams (`id`, `base_url`, `probe_url`, `api_key`, `api_keys`, `models`; list order = failover priority; `"client=real"` entries alias model names; `api_keys` rotates several credentials behind one upstream) |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | Candidate order: `static` (configured order) or `latency` (measured exchange latency first; near-tied candidates trade the lead per request, configured order breaks remaining ties; untried upstreams are explored first) |
 | `BREAKWATER_FALLBACKS`                | _(none)_       | JSON map of model → ordered fallback models, tried when every candidate of the primary model is exhausted (`{"gpt-4o":["gpt-4o-mini"]}`); keys and targets must name configured client-facing models |
 | `BREAKWATER_CONTEXT_LIMITS`           | _(none)_       | JSON map of model → maximum input token estimate; a prompt above the ceiling refuses that model's candidates up front with `413 context_window_exceeded` instead of a doomed upstream exchange |
@@ -216,6 +216,30 @@ its own:
   /admin/upstreams/{id}/probe` runs one health exchange on demand
   (200 healthy, 409 when the upstream declares no `probe_url`, 502
   when the probe fails).
+
+### Credential rings
+
+An upstream may serve several provider credentials at once — `api_keys`
+lists further bearer tokens that rotate behind the same `base_url`
+(`api_key`, when set, leads the ring). Provider rate limits are per
+credential, so the ring spreads the upstream's traffic across all of
+them: each exchange takes the next alive credential, concurrent
+requests land on different ones, and a credential this request saw
+fail with a rate limit or a fatal condition is not reused within that
+request.
+
+A fatal condition (rejected credentials, exhausted budget) convicts the
+credential, not the upstream: the ring retires it — counted in
+`breakwater_credential_retired_total` — and the rest keep serving. Only
+the last living credential's death takes the upstream out of rotation
+through the same auto-disable as before, and whatever lifts that
+disable (an operator enable or a healthy recovery probe) restores the
+full ring. A retired credential itself comes back only with the
+upstream's re-entry; there is no per-credential probe.
+
+The attempt budget still bounds the walk: a request tries at most
+`BREAKWATER_RETRY_MAX_ATTEMPTS` exchanges, so size it to cover the ring
+when you want a fatal walk to reach every credential.
 
 ### Identity administration (PostgreSQL deployments)
 
