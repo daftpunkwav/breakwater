@@ -56,6 +56,8 @@ func TestLoadDefaults(t *testing.T) {
 			BackoffInitial:    100 * time.Millisecond,
 			BackoffMax:        2 * time.Second,
 			BudgetMaxInFlight: 64,
+			BudgetPercent:     0,
+			BudgetMinInFlight: 3,
 			StreamTimeout:     10 * time.Minute,
 		},
 		ReconcileInterval: time.Minute,
@@ -162,6 +164,8 @@ func TestLoadOverrides(t *testing.T) {
 		BackoffInitial:    50 * time.Millisecond,
 		BackoffMax:        4 * time.Second,
 		BudgetMaxInFlight: 128,
+		BudgetPercent:     0,
+		BudgetMinInFlight: 3,
 		StreamTimeout:     0,
 	}) {
 		t.Fatalf("retry = %+v", cfg.Retry)

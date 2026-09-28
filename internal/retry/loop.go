@@ -99,12 +99,15 @@ func Execute(ctx context.Context, policy Policy, budget *Budget, classifier Clas
 		delay := backoffDelay(policy, attempt)
 		// A Retry-After hint from the upstream replaces the computed
 		// backoff: the upstream knows its own recovery schedule better
-		// than our jitter does. Only hint-carrying errors are affected.
+		// than our jitter does. The wait still gets a small upward
+		// jitter — never below what the upstream asked for, at most half
+		// again as long — so requests that failed together do not all
+		// return at the same instant and repeat the collision.
 		if dh, ok := classifier.(interface {
 			DelayHint(error) time.Duration
 		}); ok {
 			if hint := dh.DelayHint(err); hint > 0 {
-				delay = hint
+				delay = jitteredHint(hint)
 			}
 		}
 		if onRetry != nil {
@@ -189,4 +192,15 @@ func sleep(ctx context.Context, d time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// jitteredHint spreads one upstream's Retry-After wait uniformly over
+// [hint, 1.5·hint): the requested floor is always honored, and a
+// timeout shared by many requests stops being a synchronized wake-up.
+func jitteredHint(hint time.Duration) time.Duration {
+	spread := int64(hint) / 2
+	if spread <= 0 {
+		return hint
+	}
+	return hint + time.Duration(rand.Int64N(spread))
 }

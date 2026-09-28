@@ -89,7 +89,8 @@ func TestDelayHintReadsStatusError(t *testing.T) {
 
 // TestExecutePrefersUpstreamHint: with no backoff shaped, the only
 // delay the loop can wait is the upstream's hint, surfaced through
-// OnRetry.
+// OnRetry — never below what the upstream asked for, at most half
+// again as long.
 func TestExecutePrefersUpstreamHint(t *testing.T) {
 	t.Parallel()
 	const hint = 60 * time.Millisecond
@@ -112,8 +113,9 @@ func TestExecutePrefersUpstreamHint(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("attempts = %d, want 2", attempts)
 	}
-	if observed != hint {
-		t.Fatalf("OnRetry delay = %v, want the upstream hint %v", observed, hint)
+	if observed < hint || observed > 3*hint/2 {
+		t.Fatalf("OnRetry delay = %v, want the upstream hint %v jittered into [%v, %v]",
+			observed, hint, hint, 3*hint/2)
 	}
 	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
 		t.Fatalf("loop returned after %v, want it to wait out the hint", elapsed)
@@ -161,5 +163,28 @@ func TestExecuteHintBoundByOverallDeadline(t *testing.T) {
 	err := Execute(context.Background(), policy, nil, DefaultClassifier{}, nil, fn)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+}
+
+// TestJitteredHintKeepsTheUpstreamFloor: the hint's wait lands in
+// [hint, 1.5·hint) — the requested floor is never shortened, and the
+// spread stays bounded so a shared timeout is desynchronized without
+// being stretched.
+func TestJitteredHintKeepsTheUpstreamFloor(t *testing.T) {
+	t.Parallel()
+	cases := []time.Duration{
+		time.Millisecond, 150 * time.Millisecond, time.Second, 45 * time.Second,
+	}
+	for _, hint := range cases {
+		for i := 0; i < 500; i++ {
+			got := jitteredHint(hint)
+			if got < hint || got >= 3*hint/2 {
+				t.Fatalf("jitteredHint(%v) = %v, want within [%v, %v)", hint, got, hint, 3*hint/2)
+			}
+		}
+	}
+	// A hint so small it has no room to spread comes back untouched.
+	if got := jitteredHint(time.Nanosecond); got != time.Nanosecond {
+		t.Fatalf("jitteredHint(1ns) = %v, want 1ns", got)
 	}
 }

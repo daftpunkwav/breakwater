@@ -139,7 +139,17 @@ type Retry struct {
 	BackoffInitial time.Duration
 	BackoffMax     time.Duration
 	// BudgetMaxInFlight caps concurrent retry attempts process-wide.
+	// When BudgetPercent is zero this is the whole cap; with a share
+	// budget configured it is unused.
 	BudgetMaxInFlight int
+	// BudgetPercent, when non-zero, replaces the fixed retry cap with
+	// a share budget: retries may occupy at most this percentage of
+	// the requests currently in flight, floored at BudgetMinInFlight.
+	// Zero keeps the fixed cap.
+	BudgetPercent int
+	// BudgetMinInFlight is the share budget's floor: the retry cap
+	// never drops below it however quiet the gateway is.
+	BudgetMinInFlight int
 	// StreamTimeout bounds a committed stream's whole body once the
 	// reply headers arrived; zero lets the client own the stream's
 	// lifetime. It exists because the per-attempt timeout would

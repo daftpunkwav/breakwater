@@ -18,8 +18,8 @@ and folds each attempt's outcome into a `circuit.Outcome`.
 
 | File | Role |
 | --- | --- |
-| `retry.go` | Contracts: `Policy` (the three caps plus backoff shape), `Classifier`, `Budget` |
-| `loop.go` | `Execute`: the attempt loop — budget gating beyond the first attempt, full-jitter exponential backoff, `ErrBudgetExhausted` wrapping the triggering error |
+| `retry.go` | Contracts: `Policy` (the three caps plus backoff shape), `Classifier`, `Budget` — a fixed in-flight cap, or a share budget scaling the cap with the requests currently in flight (percentage floored at a minimum) |
+| `loop.go` | `Execute`: the attempt loop — budget gating beyond the first attempt, full-jitter exponential backoff, an upstream `Retry-After` hint waited out with a small upward spread (never below the hint, at most half again as long), `ErrBudgetExhausted` wrapping the triggering error |
 | `classifier.go` | `DefaultClassifier` retryability table; `StatusError`; `ErrCommitted`; `ParseRetryAfter` (integer, fractional or HTTP-date form, capped at 60s); `StripRetryAfter` |
 
 ## Tests

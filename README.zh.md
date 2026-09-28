@@ -142,7 +142,9 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | `BREAKWATER_REDIS_NAMESPACE`          | _(无)_         | 给每个 limiter 与 quota key 加前缀。两个部署共享一个 Redis 实例时必须设置——否则它们共享 tenant 余额，一个环境的 sweeper 会退另一个环境的在用 lease。留空表示本网关独占其 Redis。**在已有余额的部署上设置它会让所有既有 key 被弃用（不做任何迁移），静态 identity seeder 随后按全月预算重新给每个 tenant 入账**——把它当作重置而非改名。PostgreSQL-identity 部署没有 seeder，那里改 namespace 会让所有 tenant 没有台账，直到有人入账。 |
 | `BREAKWATER_QUOTA_LEASE_TTL`          | _派生_         | 预留的 quota lease 在 sweeper 回收退款前可存活的时长。由 `OverallDeadline + StreamTimeout` 加余量派生，因为短于最长请求的视野会静默退还一个真实花了 token 的请求；低于该值的配置在启动时被拒。无界流或 deadline 没有可派生的东西，所以那些情况默认 24h。 |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | 每请求的 upstream attempt 数                                 |
-| `BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT` | `64`         | 进程级并发重试上限                                           |
+| `BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT` | `64`         | 进程级并发重试上限；配置了份额预算时被取代                    |
+| `BREAKWATER_RETRY_BUDGET_PERCENT`     | _(关)_         | 份额预算：并发重试至多占当前在途请求的这个百分比——上限随实时流量伸缩，而不是一个静态数字。`0` 保持固定上限。 |
+| `BREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT` | `3`          | 份额预算的下限：无论网关多空闲，重试上限不低于它              |
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | 已提交流的响应体（header 之后）的天花板；`0` 让客户端拥有流的生命周期。保持比 attempt timeout（约束 time-to-first-byte）更宽松：否则慢 header 会被这个天花板切断，请求转而 failover 而不是等待。 |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | 精确匹配响应缓存           |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | breaker 阈值、cooldown、probe 超时        |

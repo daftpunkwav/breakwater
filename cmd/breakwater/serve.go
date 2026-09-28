@@ -209,13 +209,25 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		return err
 	}
 
+	// The retry budget: a fixed cap by default, or a share of live
+	// traffic when a percentage is configured — retries then scale
+	// with the requests that justify them instead of one static number.
+	budget := retry.NewBudget(cfg.Retry.BudgetMaxInFlight)
+	if cfg.Retry.BudgetPercent > 0 {
+		share, err := retry.NewShareBudget(cfg.Retry.BudgetPercent, cfg.Retry.BudgetMinInFlight, metrics.Inflight)
+		if err != nil {
+			return err
+		}
+		budget = share
+	}
+
 	relayer := relay.New(retry.Policy{
 		MaxAttempts:     cfg.Retry.MaxAttempts,
 		AttemptTimeout:  cfg.Retry.AttemptTimeout,
 		OverallDeadline: cfg.Retry.OverallDeadline,
 		BackoffInitial:  cfg.Retry.BackoffInitial,
 		BackoffMax:      cfg.Retry.BackoffMax,
-	}, retry.NewBudget(cfg.Retry.BudgetMaxInFlight),
+	}, budget,
 		relay.WithBreaker(breaker),
 		relay.WithMetrics(metrics),
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),

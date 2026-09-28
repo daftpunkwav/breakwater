@@ -197,3 +197,24 @@ func TestRequestCeiling(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsBrokenRetryBudgetShare(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"percent above 100", "BREAKWATER_RETRY_BUDGET_PERCENT=150", "percentage in [0, 100]"},
+		{"negative percent", "BREAKWATER_RETRY_BUDGET_PERCENT=-5", "percentage in [0, 100]"},
+		{"floor without percent", "BREAKWATER_RETRY_BUDGET_PERCENT=20\nBREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT=0", "must be at least 1"},
+	}
+	for _, tc := range cases {
+		for _, line := range strings.Split(tc.env, "\n") {
+			key, value, _ := strings.Cut(line, "=")
+			t.Setenv(key, value)
+		}
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}

@@ -17,8 +17,8 @@ relay 的 executor（[executor.go](../relay/executor.go)）对每个请求
 
 | File | Role |
 | --- | --- |
-| `retry.go` | 契约：`Policy`（三个上限加上 backoff 形状）、`Classifier`、`Budget` |
-| `loop.go` | `Execute`：attempt loop——首个 attempt 之后受预算门控、full-jitter 指数 backoff、`ErrBudgetExhausted` 包装触发错误 |
+| `retry.go` | 契约：`Policy`（三个上限加上 backoff 形状）、`Classifier`、`Budget`——固定在途上限，或随当前在途请求伸缩的份额预算（百分比加下限） |
+| `loop.go` | `Execute`：attempt loop——首个 attempt 之后受预算门控、full-jitter 指数 backoff、上游 `Retry-After` 提示带小幅上偏抖动地等待（绝不低于提示、至多一半再多）、`ErrBudgetExhausted` 包装触发错误 |
 | `classifier.go` | `DefaultClassifier` 可重试性表；`StatusError`；`ErrCommitted`；`ParseRetryAfter`（整数、小数或 HTTP-date 形式，上限 60s）；`StripRetryAfter` |
 
 ## Tests

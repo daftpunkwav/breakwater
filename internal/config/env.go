@@ -34,6 +34,7 @@ const (
 	defaultBackoffInitial   = 100 * time.Millisecond
 	defaultBackoffMax       = 2 * time.Second
 	defaultRetryBudgetCap   = 64
+	defaultRetryBudgetMin   = 3
 	defaultCacheTTL         = 60 * time.Second
 	defaultCacheCapacity    = 1024
 	defaultCircuitThreshold = 5
@@ -67,6 +68,8 @@ const (
 	envRetryBackoffInitial = "BREAKWATER_RETRY_BACKOFF_INITIAL"
 	envRetryBackoffMax     = "BREAKWATER_RETRY_BACKOFF_MAX"
 	envRetryBudget         = "BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT"
+	envRetryBudgetPercent  = "BREAKWATER_RETRY_BUDGET_PERCENT"
+	envRetryBudgetMin      = "BREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT"
 	envStreamTimeout       = "BREAKWATER_STREAM_TIMEOUT"
 	envReconcileInterval   = "BREAKWATER_RECONCILE_INTERVAL"
 	envIdentity            = "BREAKWATER_IDENTITY"
@@ -123,6 +126,8 @@ func Load() (Config, error) {
 			BackoffInitial:    defaultBackoffInitial,
 			BackoffMax:        defaultBackoffMax,
 			BudgetMaxInFlight: defaultRetryBudgetCap,
+			BudgetPercent:     0,
+			BudgetMinInFlight: defaultRetryBudgetMin,
 			StreamTimeout:     defaultStreamTimeout,
 		},
 		ReconcileInterval: defaultReconcileEvery,
@@ -179,6 +184,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Retry.BudgetMaxInFlight, err = envInt(envRetryBudget, cfg.Retry.BudgetMaxInFlight); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.BudgetPercent, err = envInt(envRetryBudgetPercent, cfg.Retry.BudgetPercent); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.BudgetMinInFlight, err = envInt(envRetryBudgetMin, cfg.Retry.BudgetMinInFlight); err != nil {
 		return Config{}, err
 	}
 	if cfg.Retry.StreamTimeout, err = envDuration(envStreamTimeout, cfg.Retry.StreamTimeout); err != nil {
@@ -254,6 +265,15 @@ func Load() (Config, error) {
 	}
 	if cfg.Retry.BudgetMaxInFlight < 0 {
 		return Config{}, fmt.Errorf("config: %s must not be negative", envRetryBudget)
+	}
+	// Zero selects the fixed cap; anything else is a percentage of live
+	// traffic, so a value above 100 would allow retries to outnumber
+	// the requests serving them.
+	if cfg.Retry.BudgetPercent < 0 || cfg.Retry.BudgetPercent > 100 {
+		return Config{}, fmt.Errorf("config: %s must be a percentage in [0, 100]", envRetryBudgetPercent)
+	}
+	if cfg.Retry.BudgetPercent > 0 && cfg.Retry.BudgetMinInFlight < 1 {
+		return Config{}, fmt.Errorf("config: %s must be at least 1 when %s is set", envRetryBudgetMin, envRetryBudgetPercent)
 	}
 	if cfg.Cache.Enabled {
 		if cfg.Cache.TTL <= 0 {

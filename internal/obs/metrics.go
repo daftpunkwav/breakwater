@@ -259,6 +259,15 @@ func (m *Metrics) InflightAdd(delta int64) {
 	m.inflight.Add(delta)
 }
 
+// Inflight reports the requests currently in flight — the live traffic
+// figure share-mode budgets scale their caps against.
+func (m *Metrics) Inflight() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.inflight.Load()
+}
+
 // RateLimited records a rate limit rejection.
 func (m *Metrics) RateLimited(tenant string) {
 	if m == nil {
