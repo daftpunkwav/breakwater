@@ -185,20 +185,50 @@ func Load() (Config, error) {
 	if cfg.Upstreams, err = envJSON[Upstream](envUpstreams); err != nil {
 		return Config{}, err
 	}
-	if cfg.Retry.MaxAttempts, err = envInt(envRetryMaxAttempts, cfg.Retry.MaxAttempts); err != nil {
+	// Each subsystem owns its parse-and-check rules in one place, in
+	// load order; validate enforces the bounds checked after parsing.
+	if err := loadRetry(&cfg); err != nil {
 		return Config{}, err
+	}
+	if err := loadQuota(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadCache(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadCircuit(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadProbe(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validate(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := guardDeploymentPosture(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// loadRetry parses the attempt-loop settings and enforces their
+// per-setting bounds in load order.
+func loadRetry(cfg *Config) error {
+	var err error
+	if cfg.Retry.MaxAttempts, err = envInt(envRetryMaxAttempts, cfg.Retry.MaxAttempts); err != nil {
+		return err
 	}
 	if cfg.Retry.AttemptTimeout, err = envDuration(envRetryAttemptTimeout, cfg.Retry.AttemptTimeout); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.OverallDeadline, err = envDuration(envRetryOverall, cfg.Retry.OverallDeadline); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.BackoffInitial, err = envDuration(envRetryBackoffInitial, cfg.Retry.BackoffInitial); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.BackoffMax, err = envDuration(envRetryBackoffMax, cfg.Retry.BackoffMax); err != nil {
-		return Config{}, err
+		return err
 	}
 	// Zero is the documented "no cap" for each of these in the attempt
 	// loop; a negative value is a typo that would expire every attempt
@@ -213,160 +243,203 @@ func Load() (Config, error) {
 		{envRetryBackoffMax, cfg.Retry.BackoffMax},
 	} {
 		if d.val < 0 {
-			return Config{}, fmt.Errorf("config: %s must not be negative", d.key)
+			return fmt.Errorf("config: %s must not be negative", d.key)
 		}
 	}
 	if cfg.Retry.BudgetMaxInFlight, err = envInt(envRetryBudget, cfg.Retry.BudgetMaxInFlight); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.BudgetPercent, err = envInt(envRetryBudgetPercent, cfg.Retry.BudgetPercent); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.BudgetMinInFlight, err = envInt(envRetryBudgetMin, cfg.Retry.BudgetMinInFlight); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.StreamTimeout, err = envDuration(envStreamTimeout, cfg.Retry.StreamTimeout); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.StreamTimeout < 0 {
-		return Config{}, fmt.Errorf("config: %s must not be negative", envStreamTimeout)
+		return fmt.Errorf("config: %s must not be negative", envStreamTimeout)
 	}
 	if cfg.Retry.StreamIdleTimeout, err = envDuration(envStreamIdleTimeout, cfg.Retry.StreamIdleTimeout); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Retry.StreamIdleTimeout < 0 {
-		return Config{}, fmt.Errorf("config: %s must not be negative", envStreamIdleTimeout)
+		return fmt.Errorf("config: %s must not be negative", envStreamIdleTimeout)
 	}
+	return nil
+}
+
+// loadQuota parses the reconcile protocol settings and the lease
+// horizon; the horizon's lower bound needs the retry settings parsed
+// just before it.
+func loadQuota(cfg *Config) error {
+	var err error
 	if cfg.ReconcileInterval, err = envDuration(envReconcileInterval, cfg.ReconcileInterval); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.ReconcileInterval < 0 {
-		return Config{}, fmt.Errorf("config: %s must not be negative", envReconcileInterval)
+		return fmt.Errorf("config: %s must not be negative", envReconcileInterval)
 	}
 	if cfg.Quota.LeaseTTL, err = envDuration(envQuotaLeaseTTL, cfg.Quota.LeaseTTL); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Quota.LeaseTTL < 0 {
-		return Config{}, fmt.Errorf("config: %s must not be negative", envQuotaLeaseTTL)
+		return fmt.Errorf("config: %s must not be negative", envQuotaLeaseTTL)
 	}
 	// A lease may only be reclaimed once the request holding it can no
 	// longer spend tokens. That is only decidable here, where both the
 	// request budget and the reclaim horizon are known: a horizon below
 	// the budget silently refunds a request that really consumed tokens.
 	if budget, bounded := cfg.requestBudget(); bounded && cfg.Quota.LeaseTTL > 0 && cfg.Quota.LeaseTTL <= budget {
-		return Config{}, fmt.Errorf("config: %s=%s must exceed the longest request the gateway will run (%s = %s + %s)",
+		return fmt.Errorf("config: %s=%s must exceed the longest request the gateway will run (%s = %s + %s)",
 			envQuotaLeaseTTL, cfg.Quota.LeaseTTL, budget, envRetryOverall, envStreamTimeout)
 	}
+	return nil
+}
+
+// loadCache parses the cache knobs; their bounds are enforced in
+// validate only while the cache is enabled.
+func loadCache(cfg *Config) error {
+	var err error
 	if cfg.Cache.Enabled, err = envBool(envCacheEnabled, cfg.Cache.Enabled); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Cache.TTL, err = envDuration(envCacheTTL, cfg.Cache.TTL); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Cache.Capacity, err = envInt(envCacheCapacity, cfg.Cache.Capacity); err != nil {
-		return Config{}, err
+		return err
 	}
+	return nil
+}
+
+// loadCircuit parses the breaker knobs; their bounds are enforced in
+// validate only while the breaker is enabled.
+func loadCircuit(cfg *Config) error {
+	var err error
 	if cfg.Circuit.Enabled, err = envBool(envCircuitEnabled, cfg.Circuit.Enabled); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Circuit.FailThreshold, err = envInt(envCircuitThreshold, cfg.Circuit.FailThreshold); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Circuit.Cooldown, err = envDuration(envCircuitCooldown, cfg.Circuit.Cooldown); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Circuit.ProbeTimeout, err = envDuration(envCircuitProbe, cfg.Circuit.ProbeTimeout); err != nil {
-		return Config{}, err
+		return err
 	}
+	return nil
+}
+
+// loadProbe parses the recovery-loop knobs; the timeout and threshold
+// bounds apply only while the loop is enabled.
+func loadProbe(cfg *Config) error {
+	var err error
 	if cfg.Probe.Interval, err = envDuration(envProbeInterval, cfg.Probe.Interval); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Probe.Timeout, err = envDuration(envProbeTimeout, cfg.Probe.Timeout); err != nil {
-		return Config{}, err
+		return err
 	}
 	if cfg.Probe.Threshold, err = envInt(envProbePasses, cfg.Probe.Threshold); err != nil {
-		return Config{}, err
+		return err
 	}
+	return nil
+}
 
+// validate enforces the bounds one setting's parsed value must satisfy
+// (some conditioned on its subsystem being enabled) and the shape of
+// the model tables, after every setting is parsed.
+func validate(cfg *Config) error {
 	if cfg.Server.ShutdownGrace <= 0 {
-		return Config{}, fmt.Errorf("config: %s must be positive", envShutdownGrace)
+		return fmt.Errorf("config: %s must be positive", envShutdownGrace)
 	}
 	switch cfg.Routing.Strategy {
 	case "", "static", "latency":
 	default:
-		return Config{}, fmt.Errorf("config: %s must be \"static\" or \"latency\"", envRouting)
+		return fmt.Errorf("config: %s must be \"static\" or \"latency\"", envRouting)
 	}
 	if cfg.Obs.AccessLogQueueSize <= 0 {
-		return Config{}, fmt.Errorf("config: %s must be positive", envAccessLogQueue)
+		return fmt.Errorf("config: %s must be positive", envAccessLogQueue)
 	}
 	if cfg.Retry.MaxAttempts <= 0 {
-		return Config{}, fmt.Errorf("config: %s must be positive", envRetryMaxAttempts)
+		return fmt.Errorf("config: %s must be positive", envRetryMaxAttempts)
 	}
 	if cfg.Retry.BudgetMaxInFlight < 0 {
-		return Config{}, fmt.Errorf("config: %s must not be negative", envRetryBudget)
+		return fmt.Errorf("config: %s must not be negative", envRetryBudget)
 	}
 	// Zero selects the fixed cap; anything else is a percentage of live
 	// traffic, so a value above 100 would allow retries to outnumber
 	// the requests serving them.
 	if cfg.Retry.BudgetPercent < 0 || cfg.Retry.BudgetPercent > 100 {
-		return Config{}, fmt.Errorf("config: %s must be a percentage in [0, 100]", envRetryBudgetPercent)
+		return fmt.Errorf("config: %s must be a percentage in [0, 100]", envRetryBudgetPercent)
 	}
 	if cfg.Retry.BudgetPercent > 0 && cfg.Retry.BudgetMinInFlight < 1 {
-		return Config{}, fmt.Errorf("config: %s must be at least 1 when %s is set", envRetryBudgetMin, envRetryBudgetPercent)
+		return fmt.Errorf("config: %s must be at least 1 when %s is set", envRetryBudgetMin, envRetryBudgetPercent)
 	}
 	if cfg.Cache.Enabled {
 		if cfg.Cache.TTL <= 0 {
-			return Config{}, fmt.Errorf("config: %s must be positive", envCacheTTL)
+			return fmt.Errorf("config: %s must be positive", envCacheTTL)
 		}
 		if cfg.Cache.Capacity <= 0 {
-			return Config{}, fmt.Errorf("config: %s must be positive", envCacheCapacity)
+			return fmt.Errorf("config: %s must be positive", envCacheCapacity)
 		}
 	}
 	if cfg.Circuit.Enabled {
 		if cfg.Circuit.FailThreshold <= 0 {
-			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitThreshold)
+			return fmt.Errorf("config: %s must be positive", envCircuitThreshold)
 		}
 		if cfg.Circuit.Cooldown <= 0 {
-			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitCooldown)
+			return fmt.Errorf("config: %s must be positive", envCircuitCooldown)
 		}
 		if cfg.Circuit.ProbeTimeout <= 0 {
-			return Config{}, fmt.Errorf("config: %s must be positive", envCircuitProbe)
+			return fmt.Errorf("config: %s must be positive", envCircuitProbe)
 		}
 	}
 	if cfg.Probe.Interval < 0 {
-		return Config{}, fmt.Errorf("config: %s must not be negative", envProbeInterval)
+		return fmt.Errorf("config: %s must not be negative", envProbeInterval)
 	}
 	if cfg.Probe.Interval > 0 && cfg.Probe.Timeout <= 0 {
-		return Config{}, fmt.Errorf("config: %s must be positive when %s is enabled", envProbeTimeout, envProbeInterval)
+		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbeTimeout, envProbeInterval)
 	}
 	if cfg.Probe.Interval > 0 && cfg.Probe.Threshold < 1 {
-		return Config{}, fmt.Errorf("config: %s must be positive when %s is enabled", envProbePasses, envProbeInterval)
+		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbePasses, envProbeInterval)
 	}
 	for model, limit := range cfg.ContextLimits {
 		if model == "" {
-			return Config{}, fmt.Errorf("config: %s has an empty model name", envContextLimits)
+			return fmt.Errorf("config: %s has an empty model name", envContextLimits)
 		}
 		if limit <= 0 {
-			return Config{}, fmt.Errorf("config: %s limits model %q must be positive", envContextLimits, model)
+			return fmt.Errorf("config: %s limits model %q must be positive", envContextLimits, model)
 		}
 	}
 	for model, chain := range cfg.Fallbacks {
 		if model == "" {
-			return Config{}, fmt.Errorf("config: %s has an empty model name", envFallbacks)
+			return fmt.Errorf("config: %s has an empty model name", envFallbacks)
 		}
 		if len(chain) == 0 {
-			return Config{}, fmt.Errorf("config: %s lists no fallbacks for model %q", envFallbacks, model)
+			return fmt.Errorf("config: %s lists no fallbacks for model %q", envFallbacks, model)
 		}
 		for _, f := range chain {
 			if f == "" {
-				return Config{}, fmt.Errorf("config: %s has an empty fallback for model %q", envFallbacks, model)
+				return fmt.Errorf("config: %s has an empty fallback for model %q", envFallbacks, model)
 			}
 		}
 	}
+	return validateUpstreams(cfg)
+}
+
+// validateUpstreams refuses an upstream table that cannot serve
+// reliably: an unusable id, a colliding identity, an unparsable or
+// scheme-less base_url, an empty model list, a malformed model
+// binding, or a dirty credential ring.
+func validateUpstreams(cfg *Config) error {
 	seenUpstreamIDs := make(map[string]struct{}, len(cfg.Upstreams))
 	for i, u := range cfg.Upstreams {
 		if u.ID == "" || u.BaseURL == "" {
-			return Config{}, fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
+			return fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
 		}
 		// An id is a routing key, a metrics label, an access-log field
 		// and an admin URL segment at once; a character outside the
@@ -374,14 +447,14 @@ func Load() (Config, error) {
 		// an ambiguous key. Refuse at load, like every other identity
 		// collision.
 		if !validID(u.ID) {
-			return Config{}, fmt.Errorf("config: upstreams[%d] has an invalid id %q: ids are 1-128 characters of [A-Za-z0-9._-]", i, u.ID)
+			return fmt.Errorf("config: upstreams[%d] has an invalid id %q: ids are 1-128 characters of [A-Za-z0-9._-]", i, u.ID)
 		}
 		// A duplicated id would alias two distinct providers into one
 		// circuit-breaker state and one admin target — the second copy
 		// silently shadowing the first. Refuse at load, like every other
 		// identity collision.
 		if _, dup := seenUpstreamIDs[u.ID]; dup {
-			return Config{}, fmt.Errorf("config: upstreams[%d] repeats id %q", i, u.ID)
+			return fmt.Errorf("config: upstreams[%d] repeats id %q", i, u.ID)
 		}
 		seenUpstreamIDs[u.ID] = struct{}{}
 		// Scheme and host must parse now, not per request: a missing
@@ -390,17 +463,17 @@ func Load() (Config, error) {
 		// signal at all.
 		parsed, err := url.Parse(u.BaseURL)
 		if err != nil {
-			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has an unparsable base_url %q: %w", i, u.ID, u.BaseURL, err)
+			return fmt.Errorf("config: upstreams[%d] (%s) has an unparsable base_url %q: %w", i, u.ID, u.BaseURL, err)
 		}
 		if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) base_url %q needs an http(s) scheme and a host", i, u.ID, u.BaseURL)
+			return fmt.Errorf("config: upstreams[%d] (%s) base_url %q needs an http(s) scheme and a host", i, u.ID, u.BaseURL)
 		}
 		if len(u.Models) == 0 {
-			return Config{}, fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
+			return fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
 		}
 		for _, m := range u.Models {
 			if client, real, ok := strings.Cut(m, "="); ok && (client == "" || real == "" || client == "*") {
-				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
+				return fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
 			}
 		}
 		// The credential ring indexes retirement and log trails by list
@@ -411,18 +484,15 @@ func Load() (Config, error) {
 		seenCredentials := make(map[string]struct{}, len(u.APIKeys)+1)
 		for j, key := range u.Credentials() {
 			if key == "" {
-				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) has an empty credential at ring position %d", i, u.ID, j)
+				return fmt.Errorf("config: upstreams[%d] (%s) has an empty credential at ring position %d", i, u.ID, j)
 			}
 			if _, dup := seenCredentials[key]; dup {
-				return Config{}, fmt.Errorf("config: upstreams[%d] (%s) repeats a credential", i, u.ID)
+				return fmt.Errorf("config: upstreams[%d] (%s) repeats a credential", i, u.ID)
 			}
 			seenCredentials[key] = struct{}{}
 		}
 	}
-	if err := guardDeploymentPosture(cfg); err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
+	return nil
 }
 
 // loadIdentitySource resolves the static identity set: inline JSON, or a

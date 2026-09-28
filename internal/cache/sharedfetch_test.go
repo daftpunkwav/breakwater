@@ -84,11 +84,12 @@ func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T
 	}
 }
 
-// abortingUpstream delivers a partial stream terminated through the
-// error event contract, reporting it through the carrier the way the
-// inference handler does, and counts how often it was entered.
-
-// status 0 panics in net/http).
+// TestCacheMiddlewareWaiterSurvivesOwnerDisconnect pins the waiter's
+// fate on a shared fetch whose owner's client walks away mid-flight:
+// the owner writes nothing at all, the parked waiter never starts a
+// fetch of its own, and when the flight ends without any response it
+// fails with the 502 envelope instead of replaying a header-less
+// capture.
 func TestCacheMiddlewareWaiterSurvivesOwnerDisconnect(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{})
