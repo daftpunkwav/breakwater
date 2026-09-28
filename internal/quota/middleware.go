@@ -61,15 +61,15 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 				// not a spending decision and not a backend outage.
 				// Saying "insufficient quota" would bill the client's
 				// retry logic for a fault it cannot fix.
-				carrier.RejectCode = "quota_not_provisioned"
-				wire.RenderError(w, http.StatusServiceUnavailable, "quota_not_provisioned",
+				carrier.RejectCode = string(protocol.CodeQuotaNotProvisioned)
+				wire.RenderError(w, http.StatusServiceUnavailable, string(protocol.CodeQuotaNotProvisioned),
 					"this tenant has no quota ledger entry")
 				return
 			case err != nil:
 				// Fail-closed: a gateway that cannot meter must not give
 				// away upstream traffic.
-				carrier.RejectCode = "governance_unavailable"
-				wire.RenderError(w, http.StatusServiceUnavailable, "governance_unavailable",
+				carrier.RejectCode = string(protocol.CodeGovernanceUnavailable)
+				wire.RenderError(w, http.StatusServiceUnavailable, string(protocol.CodeGovernanceUnavailable),
 					"quota ledger unavailable")
 				return
 			}

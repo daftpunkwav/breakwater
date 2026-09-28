@@ -49,8 +49,8 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 			decision, err := l.Allow(r.Context(), carrier.Tenant.ID, limits, tokens)
 			if err != nil {
 				// Fail-closed: governance unavailable means reject.
-				carrier.RejectCode = "governance_unavailable"
-				wire.RenderError(w, http.StatusServiceUnavailable, "governance_unavailable",
+				carrier.RejectCode = string(protocol.CodeGovernanceUnavailable)
+				wire.RenderError(w, http.StatusServiceUnavailable, string(protocol.CodeGovernanceUnavailable),
 					"rate limiter unavailable")
 				return
 			}

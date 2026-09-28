@@ -98,7 +98,11 @@ type ErrorBody struct {
 
 // Rejection codes the gateway carries in the HTTP error envelope. They
 // share the Code vocabulary with the in-stream contract (sse.go): the
-// Messages wire maps them onto its error-type vocabulary.
+// Messages wire maps them onto its error-type vocabulary. This block is
+// the closed vocabulary of governance rejections: every stage stamps
+// the same constant into the carrier's RejectCode and the envelope it
+// renders, so the failure taxonomy cannot drift between the two. The
+// values are pinned by TestRejectionCodeValues.
 const (
 	// CodeRateLimited marks a 429 rejection of the rate limiter.
 	CodeRateLimited Code = "rate_limit_exceeded"
@@ -107,6 +111,22 @@ const (
 	// CodeModelNotAllowed marks a 403 rejection by tier model
 	// authorization.
 	CodeModelNotAllowed Code = "model_not_allowed"
+	// CodeMissingAPIKey marks a 401 rejection: no key was presented.
+	CodeMissingAPIKey Code = "missing_api_key"
+	// CodeInvalidAPIKey marks a 401 rejection: unknown or revoked key.
+	CodeInvalidAPIKey Code = "invalid_api_key"
+	// CodeIdentityUnavailable marks a 503 fail-closed rejection: the
+	// identity store is unreachable.
+	CodeIdentityUnavailable Code = "identity_unavailable"
+	// CodeConcurrencyLimited marks a 429 rejection: the tenant's
+	// in-flight ceiling is reached.
+	CodeConcurrencyLimited Code = "concurrency_limit_exceeded"
+	// CodeQuotaNotProvisioned marks a 503 rejection: the tenant has no
+	// ledger entry — a provisioning gap, not a spending decision.
+	CodeQuotaNotProvisioned Code = "quota_not_provisioned"
+	// CodeGovernanceUnavailable marks a 503 fail-closed rejection: the
+	// limiter or ledger backend is unreachable.
+	CodeGovernanceUnavailable Code = "governance_unavailable"
 )
 
 // WriteError renders an error envelope with the given HTTP status.

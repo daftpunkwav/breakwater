@@ -72,8 +72,8 @@ func AuthStage(store auth.Store) Middleware {
 			}
 			key, ok := apiKeyOf(r)
 			if !ok {
-				reject("missing_api_key")
-				renderFor(r, w, http.StatusUnauthorized, "missing_api_key",
+				reject(string(protocol.CodeMissingAPIKey))
+				renderFor(r, w, http.StatusUnauthorized, string(protocol.CodeMissingAPIKey),
 					"expected an Authorization: Bearer <key> or x-api-key header")
 				return
 			}
@@ -81,13 +81,13 @@ func AuthStage(store auth.Store) Middleware {
 			tenant, err := store.Resolve(r.Context(), key)
 			switch {
 			case errors.Is(err, auth.ErrUnauthorized):
-				reject("invalid_api_key")
-				renderFor(r, w, http.StatusUnauthorized, "invalid_api_key",
+				reject(string(protocol.CodeInvalidAPIKey))
+				renderFor(r, w, http.StatusUnauthorized, string(protocol.CodeInvalidAPIKey),
 					"unknown or revoked api key")
 				return
 			case err != nil:
-				reject("identity_unavailable")
-				renderFor(r, w, http.StatusServiceUnavailable, "identity_unavailable",
+				reject(string(protocol.CodeIdentityUnavailable))
+				renderFor(r, w, http.StatusServiceUnavailable, string(protocol.CodeIdentityUnavailable),
 					"identity store unavailable")
 				return
 			}

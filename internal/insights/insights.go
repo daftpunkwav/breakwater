@@ -90,13 +90,6 @@ type Dimension struct {
 	P95MS    float64 `json:"p95_ms"`
 }
 
-// Breakdown is one per-dimension slice of the window, most traffic
-// first.
-type Breakdown struct {
-	Dimension string      `json:"dimension"`
-	Rows      []Dimension `json:"rows"`
-}
-
 // Report is the full assessment the admin surface renders: the window
 // summary, the stability timeline and the per-dimension breakdowns.
 // Every list field renders as a JSON array even when the window is

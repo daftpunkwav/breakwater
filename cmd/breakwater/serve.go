@@ -241,18 +241,10 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// model-level decisions, and the relay applies them per request.
 	inference := make(map[protocol.Format]http.Handler, len(formats))
 	for _, format := range formats {
-		stages := append([]pipeline.Middleware{
-			pipeline.CarrierStage(),
-			pipeline.RequestIDStage(),
-			pipeline.FormatStage(format),
-		}, governance...)
-		// Innermost: a handler panic renders as a counted 500 instead of
-		// a killed connection the observation stage would misread as a
-		// client disconnect.
-		stages = append(stages, pipeline.RecoveryStage())
-		inference[format] = pipeline.Chain(stages...)(server.NewInference(format, rt, relayer,
-			server.WithFallbacks(cfg.Fallbacks),
-			server.WithContextLimits(cfg.ContextLimits)))
+		inference[format] = inferenceChain(format, governance,
+			server.NewInference(format, rt, relayer,
+				server.WithFallbacks(cfg.Fallbacks),
+				server.WithContextLimits(cfg.ContextLimits)))
 	}
 
 	adminOpts := []server.AdminOption{
@@ -336,6 +328,24 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	}
 	logger.Info("gateway stopped")
 	return nil
+}
+
+// inferenceChain wraps one client format's endpoint in the full request
+// chain: the per-request stages first, then the shared governance
+// stages, with recovery innermost — inside the observation stage the
+// governance list opens with, so a handler panic renders as a counted
+// 500 gateway fault instead of the client-disconnect reading a
+// header-less end would otherwise get. The mux-level recovery in the
+// server's route table covers the routes that carry no observation
+// stage; this inner one is the inference chains' own.
+func inferenceChain(format protocol.Format, governance []pipeline.Middleware, endpoint http.Handler) http.Handler {
+	stages := append([]pipeline.Middleware{
+		pipeline.CarrierStage(),
+		pipeline.RequestIDStage(),
+		pipeline.FormatStage(format),
+	}, governance...)
+	stages = append(stages, pipeline.RecoveryStage())
+	return pipeline.Chain(stages...)(endpoint)
 }
 
 // adminAuthState names the admin surface's credential posture for the

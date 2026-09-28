@@ -50,9 +50,9 @@ func ConcurrencyMiddleware(g *Concurrency, metrics *obs.Metrics) pipeline.Middle
 				// second is the honest minimum: retrying sooner cannot
 				// succeed, and the value advises, not promises.
 				w.Header().Set("Retry-After", strconv.Itoa(concurrencyRetryAfterSeconds))
-				carrier.RejectCode = "concurrency_limit_exceeded"
+				carrier.RejectCode = string(protocol.CodeConcurrencyLimited)
 				wire := protocol.WireFor(carrier.Format)
-				wire.RenderError(w, http.StatusTooManyRequests, "concurrency_limit_exceeded",
+				wire.RenderError(w, http.StatusTooManyRequests, string(protocol.CodeConcurrencyLimited),
 					"tenant concurrency limit exceeded; wait for an in-flight request to finish")
 				return
 			}

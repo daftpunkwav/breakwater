@@ -238,22 +238,32 @@ func (a *Admin) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(presented), []byte(a.token)) == 1
 }
 
+// renderQuotaError maps the balance port's errors onto the quota
+// endpoints' status codes — one mapping shared by the read and the
+// top-up path, so the two cannot drift: an unknown tenant is a 404 (an
+// upsert writer never reports it, but a stricter one maps like the read
+// path), and any other failure is a 503 — a ledger outage must never
+// masquerade as an unknown tenant.
+func renderQuotaError(w http.ResponseWriter, tenantID string, err error) {
+	if errors.Is(err, quota.ErrUnknownTenant) {
+		protocol.WriteError(w, http.StatusNotFound, "tenant_unknown", "no balance for tenant "+tenantID)
+		return
+	}
+	protocol.WriteError(w, http.StatusServiceUnavailable, "balance_unavailable",
+		"quota ledger unavailable")
+}
+
 func (a *Admin) serveQuota(w http.ResponseWriter, r *http.Request, tenantID string) {
 	if a.balances == nil {
 		http.NotFound(w, r)
 		return
 	}
 	balance, err := a.balances(r, tenantID)
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": balance})
-	case errors.Is(err, quota.ErrUnknownTenant):
-		protocol.WriteError(w, http.StatusNotFound, "tenant_unknown", "no balance for tenant "+tenantID)
-	default:
-		// A ledger outage must not masquerade as an unknown tenant.
-		protocol.WriteError(w, http.StatusServiceUnavailable, "balance_unavailable",
-			"quota ledger unavailable")
+	if err != nil {
+		renderQuotaError(w, tenantID, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": balance})
 }
 
 // serveQuotaTopUp handles PUT /admin/tenants/{id}/quota: the body is
@@ -281,17 +291,11 @@ func (a *Admin) serveQuotaTopUp(w http.ResponseWriter, r *http.Request, tenantID
 	}
 
 	err := a.setter(r, tenantID, *body.Balance)
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": *body.Balance})
-	case errors.Is(err, quota.ErrUnknownTenant):
-		// Defensive: an upsert writer never reports this, but a stricter
-		// one maps to the same 404 the read path renders.
-		protocol.WriteError(w, http.StatusNotFound, "tenant_unknown", "no balance for tenant "+tenantID)
-	default:
-		protocol.WriteError(w, http.StatusServiceUnavailable, "balance_unavailable",
-			"quota ledger unavailable")
+	if err != nil {
+		renderQuotaError(w, tenantID, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": *body.Balance})
 }
 
 func (a *Admin) serveBreakers(w http.ResponseWriter, r *http.Request) {
