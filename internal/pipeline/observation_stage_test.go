@@ -165,6 +165,33 @@ func TestObservationStageWithoutRelay(t *testing.T) {
 	}
 }
 
+// TestObservationStagePrefersServedByForUpstream: a response origin
+// that is not an upstream (a cache replay, a shared fetch) owns the
+// upstream dimension; the relay outcome's upstream id is consulted only
+// when no such origin is recorded.
+func TestObservationStagePrefersServedByForUpstream(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ servedBy, want string }{
+		{SourceCache, "cache"},
+		{SourceSharedFetch, "shared-fetch"},
+	} {
+		metrics := obs.NewMetrics()
+		sink := &recordingSink{}
+		carrier := &Carrier{CacheHit: true, ServedBy: tc.servedBy}
+
+		serveThroughObservation(t, metrics, sink, carrier, http.StatusOK)
+
+		if !strings.Contains(renderMetrics(t, metrics), `upstream="`+tc.want+`"`) {
+			t.Fatalf("%s: origin missing from the upstream dimension: %s", tc.servedBy, renderMetrics(t, metrics))
+		}
+		entries := sink.snapshot()
+		if len(entries) != 1 || entries[0].Upstream != tc.want || !entries[0].CacheHit {
+			t.Fatalf("%s: entry = %+v, want the origin as the upstream dimension", tc.servedBy, entries)
+		}
+	}
+}
+
 // TestObservationStageWithoutCarrier: rejected-before-carrier requests
 // are still observed with empty dimensions.
 func TestObservationStageWithoutCarrier(t *testing.T) {

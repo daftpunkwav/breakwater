@@ -58,8 +58,18 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 			errorCode := rejectCode
 			if carrier != nil {
 				cacheHit = carrier.CacheHit
+				// The upstream dimension: a response origin that is
+				// not an upstream (a cache replay, a shared fetch)
+				// owns it, so the pseudo origins never read as real
+				// upstreams; a relay outcome then names the upstream
+				// that actually served.
+				if carrier.ServedBy != "" {
+					upstream = carrier.ServedBy
+				}
 				if carrier.Relay != nil {
-					upstream = carrier.Relay.UpstreamID
+					if upstream == "-" {
+						upstream = carrier.Relay.UpstreamID
+					}
 					aborted = carrier.Relay.Aborted
 					streamed = carrier.Relay.Streamed
 					tokens = carrier.Consumed

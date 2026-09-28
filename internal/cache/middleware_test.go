@@ -314,23 +314,24 @@ func TestNegativelyCacheableRules(t *testing.T) {
 	t.Parallel()
 	upstream := &pipeline.Carrier{Relay: &relay.Result{UpstreamID: "u1"}}
 	cases := []struct {
-		name  string
-		entry Entry
-		relay *relay.Result
-		want  bool
+		name     string
+		entry    Entry
+		relay    *relay.Result
+		servedBy string
+		want     bool
 	}{
-		{"upstream 4xx is a fact", Entry{Status: 404, Body: []byte(`{"error":"no"}`)}, &relay.Result{UpstreamID: "u1"}, true},
-		{"upstream 5xx is a fact", Entry{Status: 503, Body: []byte(`{"error":"down"}`)}, &relay.Result{UpstreamID: "u1"}, true},
-		{"empty 200 is a fact", Entry{Status: 200}, &relay.Result{UpstreamID: "u1"}, true},
-		{"non-empty 200 is not", Entry{Status: 200, Body: []byte(`{"a":1}`)}, &relay.Result{UpstreamID: "u1"}, false},
-		{"3xx is neither", Entry{Status: 302, Body: []byte("x")}, &relay.Result{UpstreamID: "u1"}, false},
-		{"no relay result", Entry{Status: 404}, nil, false},
-		{"cache replay is not a fact", Entry{Status: 404}, &relay.Result{UpstreamID: observedUpstreamCache}, false},
-		{"shared fetch is not a fact", Entry{Status: 404}, &relay.Result{UpstreamID: observedUpstreamSharedFetch}, false},
-		{"upstream unknown is not a fact", Entry{Status: 404}, &relay.Result{}, false},
+		{"upstream 4xx is a fact", Entry{Status: 404, Body: []byte(`{"error":"no"}`)}, &relay.Result{UpstreamID: "u1"}, "", true},
+		{"upstream 5xx is a fact", Entry{Status: 503, Body: []byte(`{"error":"down"}`)}, &relay.Result{UpstreamID: "u1"}, "", true},
+		{"empty 200 is a fact", Entry{Status: 200}, &relay.Result{UpstreamID: "u1"}, "", true},
+		{"non-empty 200 is not", Entry{Status: 200, Body: []byte(`{"a":1}`)}, &relay.Result{UpstreamID: "u1"}, "", false},
+		{"3xx is neither", Entry{Status: 302, Body: []byte("x")}, &relay.Result{UpstreamID: "u1"}, "", false},
+		{"no relay result", Entry{Status: 404}, nil, "", false},
+		{"cache replay is not a fact", Entry{Status: 404}, nil, pipeline.SourceCache, false},
+		{"shared fetch is not a fact", Entry{Status: 404}, nil, pipeline.SourceSharedFetch, false},
+		{"upstream unknown is not a fact", Entry{Status: 404}, &relay.Result{}, "", false},
 	}
 	for _, tc := range cases {
-		carrier := &pipeline.Carrier{Relay: tc.relay}
+		carrier := &pipeline.Carrier{Relay: tc.relay, ServedBy: tc.servedBy}
 		if got := negativelyCacheable(tc.entry, carrier); got != tc.want {
 			t.Errorf("%s: negativelyCacheable = %v, want %v", tc.name, got, tc.want)
 		}

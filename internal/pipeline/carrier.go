@@ -24,6 +24,18 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
+// Response origins a request can be served from without an upstream
+// touching it. They ride Carrier.ServedBy, never Relay.UpstreamID: the
+// relay result's upstream field keeps naming real upstreams only, and
+// the observation stage prefers ServedBy when it is set.
+const (
+	// SourceCache marks a response replayed from the cache store.
+	SourceCache = "cache"
+	// SourceSharedFetch marks a response a singleflight waiter replayed
+	// from an in-flight fetch it did not start.
+	SourceSharedFetch = "shared-fetch"
+)
+
 // Carrier is the per-request pipeline state.
 type Carrier struct {
 	// Tenant is the authenticated identity; zero until the auth stage
@@ -60,6 +72,12 @@ type Carrier struct {
 	// CacheHit reports a response served from the cache (a hit replay
 	// or a shared singleflight fetch), for observation and refund.
 	CacheHit bool
+	// ServedBy names a response origin that is not an upstream: a
+	// cache replay (SourceCache) or a shared fetch the request waited
+	// on (SourceSharedFetch). Empty when the reply came from — or
+	// failed at — a real upstream; that upstream's identity then rides
+	// Relay.UpstreamID alone.
+	ServedBy string
 	// RejectCode records the governance rejection code of the stage
 	// that refused the request, for the failure taxonomy:
 	// missing_api_key, invalid_api_key, identity_unavailable,
@@ -68,7 +86,12 @@ type Carrier struct {
 	// Empty unless the request was rejected before the forward stage.
 	RejectCode string
 	// Relay captures the forward stage's outcome for the stages after
-	// it (settlement details, observation dimensions).
+	// it (settlement details, observation dimensions). Holding the
+	// relay engine's concrete result type is deliberate: the pipeline
+	// orchestrates the forward call and hands its outcome to the
+	// settlement and observation stages, and relay never imports
+	// pipeline — the dependency runs one way, from the governance
+	// chain to the execution engine it invokes.
 	Relay *relay.Result
 }
 

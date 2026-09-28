@@ -32,22 +32,11 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
-	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // maxCacheableBytes bounds the response size retained for caching; a
 // bigger reply still reaches the client but is never stored.
 const maxCacheableBytes = 8 << 20
-
-// observedUpstream names the pseudo upstream ids recorded for responses
-// no upstream served, so observation can tell the three origins apart.
-const (
-	// observedUpstreamCache marks a replay from the store.
-	observedUpstreamCache = "cache"
-	// observedUpstreamSharedFetch marks a singleflight waiter that rode
-	// an existing fetch.
-	observedUpstreamSharedFetch = "shared-fetch"
-)
 
 // Middleware returns the cache stage over a store, a flight group and
 // the base TTL applied by the store (with its jitter). fetchBudget
@@ -80,7 +69,10 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				replay(w, entry)
 				carrier.CacheHit = true
 				carrier.Consumed = 0
-				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: observedUpstreamCache}
+				// The replay origin rides ServedBy, not the relay
+				// result: no upstream served this response, and the
+				// forward stage's outcome must not say otherwise.
+				carrier.ServedBy = pipeline.SourceCache
 				return
 			}
 			metrics.CacheMiss()
@@ -146,7 +138,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				replay(w, entry)
 				carrier.CacheHit = true
 				carrier.Consumed = 0
-				carrier.Relay = &relay.Result{Status: entry.Status, UpstreamID: observedUpstreamSharedFetch}
+				carrier.ServedBy = pipeline.SourceSharedFetch
 				return
 			}
 			// Starter: the response already went to its own connection
@@ -220,12 +212,12 @@ func relayAborted(carrier *pipeline.Carrier) bool {
 // the request worth remembering briefly:
 // an error the upstream itself produced, or an empty success. Gateway
 // envelopes (circuit open, budget exhausted, unreachable) are transient
-// gateway states, never facts, and never qualify.
+// gateway states, never facts, and never qualify. A response origin
+// that is not an upstream (a cache replay, a shared fetch), and a
+// forward that never named an upstream, are equally not facts.
 func negativelyCacheable(entry Entry, carrier *pipeline.Carrier) bool {
 	relayResult := carrier.Relay
-	if relayResult == nil || relayResult.UpstreamID == "" ||
-		relayResult.UpstreamID == observedUpstreamCache ||
-		relayResult.UpstreamID == observedUpstreamSharedFetch {
+	if carrier.ServedBy != "" || relayResult == nil || relayResult.UpstreamID == "" {
 		return false
 	}
 	switch {
