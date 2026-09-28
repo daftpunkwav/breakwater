@@ -57,7 +57,7 @@ func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
 	}
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
 		cache.Middleware(cache.NewMemory(), cache.NewFlight(), time.Minute, obs.NewMetrics(), time.Minute),
-	)(NewInference(protocol.FormatOpenAIChat, rt, relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))))
+	)(NewInference(protocol.FormatOpenAIChat, priority, relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))))
 
 	// Cache-eligible body: explicitly deterministic parameters.
 	const body = `{"model":"m2","temperature":0,"messages":[{"role":"user","content":"hello"}]}`

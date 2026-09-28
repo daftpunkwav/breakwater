@@ -43,7 +43,7 @@ func TestPGSnapshotStoreIntegration(t *testing.T) {
 		t.Fatalf("apply snapshot table: %v", err)
 	}
 
-	store, err := NewPGSnapshots(ctx, dsn)
+	store, err := NewPGSnapshotStore(ctx, dsn)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}

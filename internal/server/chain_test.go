@@ -60,7 +60,7 @@ func buildChainWithIdentity(t *testing.T, backendURL string, ledger quota.Ledger
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
 	}
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -75,7 +75,7 @@ func buildChainWithIdentity(t *testing.T, backendURL string, ledger quota.Ledger
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
 	}
-	return pipeline.Chain(stages...)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
+	return pipeline.Chain(stages...)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
 }
 
 // completionRequest fires one POST through the chain and returns the
@@ -304,7 +304,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
 	}
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 		pipeline.AuthStage(identity),
 		limiter.Middleware(limiter.NewMemory(), nil),
 		quota.Middleware(ledger, nil),
-	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
+	)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

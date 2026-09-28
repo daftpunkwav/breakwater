@@ -20,9 +20,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PGSnapshots stores reconcile snapshots in PostgreSQL. It is safe for
+// PGSnapshotStore stores reconcile snapshots in PostgreSQL. It is safe for
 // concurrent use.
-type PGSnapshots struct {
+type PGSnapshotStore struct {
 	pool *pgxpool.Pool
 }
 
@@ -33,9 +33,9 @@ type PGSnapshots struct {
 // host's CPU count, which pgx's default of max(4, NumCPU) is not.
 const poolMaxConns = 2
 
-// NewPGSnapshots connects the snapshot store; failures surface at
+// NewPGSnapshotStore connects the snapshot store; failures surface at
 // assembly.
-func NewPGSnapshots(ctx context.Context, dsn string) (*PGSnapshots, error) {
+func NewPGSnapshotStore(ctx context.Context, dsn string) (*PGSnapshotStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("quota: connect snapshot database: %w", err)
@@ -45,18 +45,18 @@ func NewPGSnapshots(ctx context.Context, dsn string) (*PGSnapshots, error) {
 	if err != nil {
 		return nil, fmt.Errorf("quota: connect snapshot database: %w", err)
 	}
-	return &PGSnapshots{pool: pool}, nil
+	return &PGSnapshotStore{pool: pool}, nil
 }
 
 // Close releases the pool; shutdown path only.
-func (s *PGSnapshots) Close() {
+func (s *PGSnapshotStore) Close() {
 	s.pool.Close()
 }
 
 // Latest implements SnapshotStore. The append sequence (id), not the
 // wall-clock taken_at, defines snapshot order: a backward clock step
 // must never make a stale snapshot masquerade as the latest.
-func (s *PGSnapshots) Latest(ctx context.Context, tenantID string) (*Snapshot, error) {
+func (s *PGSnapshotStore) Latest(ctx context.Context, tenantID string) (*Snapshot, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT balance, consumed, refunded, debited, epoch, taken_at
 		FROM quota_snapshots
@@ -79,7 +79,7 @@ func (s *PGSnapshots) Latest(ctx context.Context, tenantID string) (*Snapshot, e
 }
 
 // Append implements SnapshotStore.
-func (s *PGSnapshots) Append(ctx context.Context, snap Snapshot) error {
+func (s *PGSnapshotStore) Append(ctx context.Context, snap Snapshot) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO quota_snapshots (tenant_id, balance, consumed, refunded, debited, epoch, taken_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,

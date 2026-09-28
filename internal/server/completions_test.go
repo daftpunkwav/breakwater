@@ -86,7 +86,7 @@ func buildEndpoint(t *testing.T, backendURL string) http.Handler {
 	if err != nil {
 		t.Fatalf("build adapter: %v", err)
 	}
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}})
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}})
 	if err != nil {
 		t.Fatalf("build router: %v", err)
 	}
@@ -94,7 +94,7 @@ func buildEndpoint(t *testing.T, backendURL string) http.Handler {
 	return pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
-	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
+	)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
 }
 
 func TestCompletionsBufferedRoundTrip(t *testing.T) {
@@ -191,7 +191,7 @@ func TestCompletionsAllUpstreamsCircuitOpenIsUnavailable(t *testing.T) {
 	}
 	perm.Report(circuit.OutcomeServerFault)
 
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}},
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}},
 		router.WithBreaker(breaker))
 	if err != nil {
 		t.Fatalf("build router: %v", err)
@@ -200,7 +200,7 @@ func TestCompletionsAllUpstreamsCircuitOpenIsUnavailable(t *testing.T) {
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
-	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
+	)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
 
 	srv := httptest.NewServer(newRootHandler(inferenceMap(handler), nil, nil, "test", nil, nil))
 	defer srv.Close()

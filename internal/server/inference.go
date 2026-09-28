@@ -79,8 +79,8 @@ func WithContextLimits(m map[string]int64) InferenceOption {
 }
 
 // NewInference builds the endpoint handler for one client format.
-func NewInference(format protocol.Format, rt router.Router, relayer *relay.Executor, opts ...InferenceOption) *Inference {
-	s := &Inference{format: format, router: rt, relayer: relayer}
+func NewInference(format protocol.Format, priority router.Router, relayer *relay.Executor, opts ...InferenceOption) *Inference {
+	s := &Inference{format: format, router: priority, relayer: relayer}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -157,7 +157,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var resolve relay.CandidateResolver
 	if len(chain) > 0 {
-		limits, rt, tenant := s.contextLimits, s.router, carrier.Tenant
+		limits, priority, tenant := s.contextLimits, s.router, carrier.Tenant
 		resolve = func(ctx context.Context, model string) ([]upstream.Upstream, error) {
 			if tenant.ID != "" && !tenant.Tier.AllowsModel(model) {
 				return nil, router.ErrUnavailable
@@ -165,7 +165,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if overContext(limits, model, inputTokens) {
 				return nil, router.ErrUnavailable
 			}
-			return rt.Candidates(ctx, model)
+			return priority.Candidates(ctx, model)
 		}
 	}
 

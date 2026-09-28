@@ -9,9 +9,9 @@ key 解析（`Store`）与身份管理（`AdminStore`）；不负责执行——
 authorization → concurrency → limiter → quota → cache。
 
 `Store` 有两个实现：`Static`（`BREAKWATER_IDENTITY` JSON，用于本地开发与
-证据运行）和 `PG`（PostgreSQL，`BREAKWATER_POSTGRES_DSN` 部署的 system of
+证据运行）和 `PGStore`（PostgreSQL，`BREAKWATER_POSTGRES_DSN` 部署的 system of
 record）。组合根会将其中任一包进进程内 `CachedStore` LRU，使稳态解析不落
-分布式 I/O。只有 `PG` 实现 `AdminStore`（即 `/admin/users` 与 `/admin/keys`
+分布式 I/O。只有 `PGStore` 实现 `AdminStore`（即 `/admin/users` 与 `/admin/keys`
 管理面）；static 模式是配置，不是管理面。
 
 ## Files
@@ -21,7 +21,7 @@ record）。组合根会将其中任一包进进程内 `CachedStore` LRU，使�
 | `auth.go` | 契约：`Tenant`、`Tier`、`Store`、`ErrUnauthorized`、`AllowsModel`（deny 优先于 allow；空 allow 列表一律拒绝） |
 | `limits.go` | `LimitOverride` 与 `MergeTier`：用户层、key 层覆盖合并为生效 tier |
 | `static.go` | 基于配置 JSON 的 `Static` store；构建时即哈希 key；`Tenants()`/`TenantByID()` 供余额播种使用 |
-| `pg.go` | `PG` store：按 `key_hash` 一次 join `api_keys`/`tenants`/`tiers`，仅 `status = 'active'` |
+| `pg.go` | `PGStore`：按 `key_hash` 一次 join `api_keys`/`tenants`/`tiers`，仅 `status = 'active'` |
 | `lru.go` | `CachedStore`：LRU + TTL 装饰；缓存正向结果与确定性 `ErrUnauthorized` 负结果，绝不缓存瞬时故障 |
 | `admin.go` | `AdminStore` 端口、`MaxKeysPerUser`（5）、`GenerateKey`（`bw-` 前缀，明文只在签发时出现一次） |
 | `pgadmin.go` | PostgreSQL 版 `AdminStore`：用户/key 生命周期、覆盖写入、事务化签发 key |

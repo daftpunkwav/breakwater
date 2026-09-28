@@ -30,7 +30,7 @@ func buildAllRoutes(t *testing.T, backendURL string) http.Handler {
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
 	}
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -43,7 +43,7 @@ func buildAllRoutes(t *testing.T, backendURL string) http.Handler {
 		handler := pipeline.Chain(
 			pipeline.CarrierStage(),
 			pipeline.FormatStage(format),
-		)(NewInference(format, rt, relayer))
+		)(NewInference(format, priority, relayer))
 		inference[format] = handler
 	}
 	return newRootHandler(inference, nil, nil, "test", nil, nil)
@@ -152,7 +152,7 @@ func TestMessagesRouteHonorsXAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
 	}
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestMessagesRouteHonorsXAPIKey(t *testing.T) {
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatAnthropicMessages),
 		pipeline.AuthStage(identity),
-	)(NewInference(protocol.FormatAnthropicMessages, rt, relayer))
+	)(NewInference(protocol.FormatAnthropicMessages, priority, relayer))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
 		strings.NewReader(`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`))

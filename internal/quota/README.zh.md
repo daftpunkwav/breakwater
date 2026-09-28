@@ -25,7 +25,7 @@ lease。对账协议（需要 Redis + PostgreSQL，由 `BREAKWATER_RECONCILE_INT
 | `release.lua` | 原子 cancel/expire：状态检查 + 全额退还一步完成，且只发生一次 |
 | `sweeper.go` | `StartSweeper`：周期回收循环（首次回收在第一个 tick 之后，单趟上限 1000，组合根为 30s） |
 | `reconcile.go` | `Reconciler`/`Snapshot`：drift = Δdebited − Δrefunded − Δbalance；epoch 变更则跳过该区间 |
-| `pgsnapshot.go` | `PGSnapshots`：PostgreSQL `quota_snapshots` 存储，按 append id 序列排序 |
+| `pgsnapshot.go` | `PGSnapshotStore`：PostgreSQL `quota_snapshots` 存储，按 append id 序列排序 |
 | `middleware.go` | 402 阶段：先预留，后经 `context.WithoutCancel` 的 defer 结算或取消 |
 
 ## Tests

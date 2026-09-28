@@ -171,7 +171,7 @@ func TestResolveTenantRowMappings(t *testing.T) {
 func TestPGConnectRejectsInvalidDSN(t *testing.T) {
 	t.Parallel()
 
-	if _, err := NewPG(context.Background(), "not a valid dsn"); err == nil {
-		t.Fatal("NewPG accepted an invalid dsn")
+	if _, err := NewPGStore(context.Background(), "not a valid dsn"); err == nil {
+		t.Fatal("NewPGStore accepted an invalid dsn")
 	}
 }

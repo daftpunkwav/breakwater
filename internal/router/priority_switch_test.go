@@ -15,7 +15,7 @@ import (
 func TestCandidatesDisabledModelIsErrDisabled(t *testing.T) {
 	t.Parallel()
 	sw := NewSwitch([]string{"m1"}, []string{"u1"})
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 	}, WithSwitch(sw))
 	if err != nil {
@@ -25,14 +25,14 @@ func TestCandidatesDisabledModelIsErrDisabled(t *testing.T) {
 	if err := sw.SetModel("m1", false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := rt.Candidates(context.Background(), "m1"); !errors.Is(err, ErrDisabled) {
+	if _, err := priority.Candidates(context.Background(), "m1"); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("err = %v, want ErrDisabled", err)
 	}
 
 	if err := sw.SetModel("m1", true); err != nil {
 		t.Fatalf("re-enable: %v", err)
 	}
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("candidates = %v err = %v, want the upstream back", candidateIDs(candidates), err)
 	}
@@ -41,7 +41,7 @@ func TestCandidatesDisabledModelIsErrDisabled(t *testing.T) {
 func TestCandidatesSkipDisabledUpstreams(t *testing.T) {
 	t.Parallel()
 	sw := NewSwitch([]string{"m1"}, []string{"u1", "u2"})
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u2"}},
 	}, WithSwitch(sw))
@@ -52,7 +52,7 @@ func TestCandidatesSkipDisabledUpstreams(t *testing.T) {
 	if err := sw.SetUpstream("u1", false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestCandidatesSkipDisabledUpstreams(t *testing.T) {
 	if err := sw.SetUpstream("u2", false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := rt.Candidates(context.Background(), "m1"); !errors.Is(err, ErrUnavailable) {
+	if _, err := priority.Candidates(context.Background(), "m1"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestCandidatesSkipDisabledUpstreams(t *testing.T) {
 func TestCandidatesDisabledWildcardModel(t *testing.T) {
 	t.Parallel()
 	sw := NewSwitch([]string{"any"}, []string{"u1"})
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"*"}, Upstream: stubUp{id: "u1"}},
 	}, WithSwitch(sw))
 	if err != nil {
@@ -85,7 +85,7 @@ func TestCandidatesDisabledWildcardModel(t *testing.T) {
 	if err := sw.SetModel("any", false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := rt.Candidates(context.Background(), "any"); !errors.Is(err, ErrDisabled) {
+	if _, err := priority.Candidates(context.Background(), "any"); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("err = %v, want ErrDisabled", err)
 	}
 }

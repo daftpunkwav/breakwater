@@ -54,10 +54,10 @@ func TestPGResolveFailsInsteadOfHangingOnAHalfOpenDatabase(t *testing.T) {
 	resolveTimeout = 150 * time.Millisecond
 	defer func() { resolveTimeout = saved }()
 
-	store, err := NewPG(context.Background(),
+	store, err := NewPGStore(context.Background(),
 		"postgres://breakwater:secret@"+ln.Addr().String()+"/breakwater")
 	if err != nil {
-		t.Fatalf("NewPG with a syntactically valid dsn: %v", err)
+		t.Fatalf("NewPGStore with a syntactically valid dsn: %v", err)
 	}
 	defer store.Close()
 

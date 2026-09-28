@@ -163,7 +163,7 @@ func TestDisabledModelRequestIs403(t *testing.T) {
 		t.Fatalf("build adapter: %v", err)
 	}
 	sw := router.NewSwitch([]string{"m1"}, []string{"test"})
-	rt, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}}, router.WithSwitch(sw))
+	priority, err := router.NewPriority([]router.Binding{{Models: []string{"m1"}, Upstream: adapter}}, router.WithSwitch(sw))
 	if err != nil {
 		t.Fatalf("build router: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestDisabledModelRequestIs403(t *testing.T) {
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
-	)(NewInference(protocol.FormatOpenAIChat, rt, relayer))
+	)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
 
 	if err := sw.SetModel("m1", false); err != nil {
 		t.Fatalf("disable model: %v", err)

@@ -40,7 +40,7 @@ func TestPGResolveIntegration(t *testing.T) {
 		}
 	}
 
-	store, err := NewPG(ctx, dsn)
+	store, err := NewPGStore(ctx, dsn)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}

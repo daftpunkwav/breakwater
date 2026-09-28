@@ -11,10 +11,10 @@ inference chain: auth → model authorization → concurrency → limiter → qu
 cache.
 
 Two stores implement `Store`: `Static` (the `BREAKWATER_IDENTITY` JSON, for
-local development and evidence runs) and `PG` (PostgreSQL, the system of
+local development and evidence runs) and `PGStore` (PostgreSQL, the system of
 record behind `BREAKWATER_POSTGRES_DSN`). The composition root wraps either
 in the process-local `CachedStore` LRU, so steady-state resolution stays off
-distributed I/O. Only `PG` implements `AdminStore` (the `/admin/users` and
+distributed I/O. Only `PGStore` implements `AdminStore` (the `/admin/users` and
 `/admin/keys` surface); the static mode is configuration, not an
 administration surface.
 
@@ -25,7 +25,7 @@ administration surface.
 | `auth.go` | Contracts: `Tenant`, `Tier`, `Store`, `ErrUnauthorized`, `AllowsModel` (deny wins over allow; an empty allow list admits nothing) |
 | `limits.go` | `LimitOverride` and `MergeTier`: user-level and key-level override layers folded into the effective tier |
 | `static.go` | `Static` store over the config JSON; keys hashed at build; `Tenants()`/`TenantByID()` feed balance seeding |
-| `pg.go` | `PG` store: one join over `api_keys`/`tenants`/`tiers` resolved by `key_hash`, `status = 'active'` only |
+| `pg.go` | `PGStore`: one join over `api_keys`/`tenants`/`tiers` resolved by `key_hash`, `status = 'active'` only |
 | `lru.go` | `CachedStore`: LRU + TTL decoration; caches positives and definitive `ErrUnauthorized` negatives, never transient failures |
 | `admin.go` | `AdminStore` port, `MaxKeysPerUser` (5), `GenerateKey` (`bw-` prefix, raw secret shown once) |
 | `pgadmin.go` | PostgreSQL `AdminStore`: user/key lifecycle, override writes, transactional key issuance |

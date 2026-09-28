@@ -50,7 +50,7 @@ func hexEncode(b []byte) string {
 }
 
 // CreateUser implements AdminStore.
-func (s *PG) CreateUser(ctx context.Context, name string, role Role, tierID string) (string, error) {
+func (s *PGStore) CreateUser(ctx context.Context, name string, role Role, tierID string) (string, error) {
 	if role != RoleUser && role != RoleAdmin {
 		return "", fmt.Errorf("auth: unknown role %q", role)
 	}
@@ -72,7 +72,7 @@ func (s *PG) CreateUser(ctx context.Context, name string, role Role, tierID stri
 }
 
 // Users implements AdminStore.
-func (s *PG) Users(ctx context.Context) ([]UserView, error) {
+func (s *PGStore) Users(ctx context.Context) ([]UserView, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.name, t.role, t.tier_id, t.overrides, t.created_at
 		FROM tenants t ORDER BY t.created_at, t.id`)
@@ -113,7 +113,7 @@ func scanUsers(rows rowsScanner) ([]UserView, error) {
 }
 
 // SetUserLimits implements AdminStore.
-func (s *PG) SetUserLimits(ctx context.Context, userID string, o LimitOverride) error {
+func (s *PGStore) SetUserLimits(ctx context.Context, userID string, o LimitOverride) error {
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return fmt.Errorf("auth: encode overrides: %w", err)
@@ -133,7 +133,7 @@ func (s *PG) SetUserLimits(ctx context.Context, userID string, o LimitOverride) 
 // one transaction holding the tenant row lock: two concurrent CreateKey
 // calls for one user serialize, so the MaxKeysPerUser ceiling cannot be
 // raced past the way a plain check-then-insert allows.
-func (s *PG) CreateKey(ctx context.Context, userID, name string) (IssuedKey, error) {
+func (s *PGStore) CreateKey(ctx context.Context, userID, name string) (IssuedKey, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return IssuedKey{}, fmt.Errorf("auth: begin create key: %w", err)
@@ -194,7 +194,7 @@ func createKeyTx(ctx context.Context, tx pgx.Tx, userID, name string) (IssuedKey
 }
 
 // Keys implements AdminStore.
-func (s *PG) Keys(ctx context.Context, userID string) ([]KeyView, error) {
+func (s *PGStore) Keys(ctx context.Context, userID string) ([]KeyView, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, status, overrides, created_at
 		FROM api_keys WHERE tenant_id = $1 ORDER BY created_at, id`, userID)
@@ -229,7 +229,7 @@ func scanKeys(rows rowsScanner) ([]KeyView, error) {
 }
 
 // SetKeyLimits implements AdminStore.
-func (s *PG) SetKeyLimits(ctx context.Context, keyID string, o LimitOverride) error {
+func (s *PGStore) SetKeyLimits(ctx context.Context, keyID string, o LimitOverride) error {
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return fmt.Errorf("auth: encode overrides: %w", err)
@@ -246,7 +246,7 @@ func (s *PG) SetKeyLimits(ctx context.Context, keyID string, o LimitOverride) er
 }
 
 // SetKeyStatus implements AdminStore.
-func (s *PG) SetKeyStatus(ctx context.Context, keyID string, active bool) error {
+func (s *PGStore) SetKeyStatus(ctx context.Context, keyID string, active bool) error {
 	status := "disabled"
 	if active {
 		status = "active"
@@ -262,4 +262,4 @@ func (s *PG) SetKeyStatus(ctx context.Context, keyID string, active bool) error 
 	return nil
 }
 
-var _ AdminStore = (*PG)(nil)
+var _ AdminStore = (*PGStore)(nil)

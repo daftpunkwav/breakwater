@@ -33,7 +33,7 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 	defer func() { _ = conn.Close(ctx) }()
 	applyIdentitySchema(t, ctx, conn)
 
-	store, err := NewPG(ctx, dsn)
+	store, err := NewPGStore(ctx, dsn)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestPGAdminCreateKeyCapIsConcurrencySafe(t *testing.T) {
 	defer func() { _ = conn.Close(ctx) }()
 	applyIdentitySchema(t, ctx, conn)
 
-	store, err := NewPG(ctx, dsn)
+	store, err := NewPGStore(ctx, dsn)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}

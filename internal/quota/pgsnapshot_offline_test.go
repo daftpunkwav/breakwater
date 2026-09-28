@@ -14,25 +14,25 @@ import (
 	"time"
 )
 
-func TestPGSnapshotsRejectsUnparseableDSN(t *testing.T) {
+func TestPGSnapshotStoreRejectsUnparseableDSN(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if _, err := NewPGSnapshots(ctx, "not a parseable dsn"); err == nil ||
+	if _, err := NewPGSnapshotStore(ctx, "not a parseable dsn"); err == nil ||
 		!strings.Contains(err.Error(), "connect snapshot database") {
 		t.Fatalf("err = %v, want the wrapped connection error", err)
 	}
 }
 
-func TestPGSnapshotsSurfacesUnreachableDatabase(t *testing.T) {
+func TestPGSnapshotStoreSurfacesUnreachableDatabase(t *testing.T) {
 	t.Parallel()
 	// Port 1 on loopback refuses connections immediately; pgx pools are
 	// lazy, so assembly succeeds and the first query fails.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	store, err := NewPGSnapshots(ctx, "postgres://quota:secret@127.0.0.1:1/quota?connect_timeout=2")
+	store, err := NewPGSnapshotStore(ctx, "postgres://quota:secret@127.0.0.1:1/quota?connect_timeout=2")
 	if err != nil {
 		t.Fatalf("lazy pool assembly: %v", err)
 	}

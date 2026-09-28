@@ -43,7 +43,7 @@ func TestNewPriorityRejectsEmptyModels(t *testing.T) {
 // breaker.
 func TestWithBreakerNilDisablesPrefilter(t *testing.T) {
 	t.Parallel()
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 		{Models: []string{"*"}, Upstream: stubUp{id: "u2"}},
 	}, WithBreaker(nil))
@@ -51,7 +51,7 @@ func TestWithBreakerNilDisablesPrefilter(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestCandidatesCombinesExactAndWildcard(t *testing.T) {
 	primary := stubUp{id: "exact-primary"}
 	generalist := stubUp{id: "wildcard"}
 	exactFallback := stubUp{id: "exact-fallback"}
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: primary},
 		{Models: []string{"*"}, Upstream: generalist},
 		{Models: []string{"m1", "m2"}, Upstream: exactFallback},
@@ -78,7 +78,7 @@ func TestCandidatesCombinesExactAndWildcard(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates(m1): %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCandidatesCombinesExactAndWildcard(t *testing.T) {
 	}
 
 	// A model without an exact binding still reaches the wildcard.
-	candidates, err = rt.Candidates(context.Background(), "m9")
+	candidates, err = priority.Candidates(context.Background(), "m9")
 	if err != nil {
 		t.Fatalf("candidates(m9): %v", err)
 	}
@@ -107,12 +107,12 @@ func TestCandidatesCombinesExactAndWildcard(t *testing.T) {
 // the error carries the requested model, and it is not ErrUnavailable.
 func TestCandidatesErrorNamesTheModel(t *testing.T) {
 	t.Parallel()
-	rt, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}}})
+	priority, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
 
-	_, err = rt.Candidates(context.Background(), "m2")
+	_, err = priority.Candidates(context.Background(), "m2")
 	if err == nil {
 		t.Fatal("unbound model resolved")
 	}

@@ -31,7 +31,7 @@ func TestCandidatesExcludesBreakerOpen(t *testing.T) {
 	t.Parallel()
 	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour})
 	primary, fallback := stubUp{id: "primary"}, stubUp{id: "fallback"}
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: primary},
 		{Models: []string{"m1"}, Upstream: fallback},
 	}, WithBreaker(breaker))
@@ -46,7 +46,7 @@ func TestCandidatesExcludesBreakerOpen(t *testing.T) {
 	}
 	perm.Report(circuit.OutcomeServerFault)
 
-	candidates, err := rt.Candidates(ctx, "m1")
+	candidates, err := priority.Candidates(ctx, "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestCandidatesAllOpenIsErrUnavailable(t *testing.T) {
 	t.Parallel()
 	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour})
 	bound := stubUp{id: "u1"}
-	rt, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: bound}}, WithBreaker(breaker))
+	priority, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: bound}}, WithBreaker(breaker))
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -68,18 +68,18 @@ func TestCandidatesAllOpenIsErrUnavailable(t *testing.T) {
 	perm, _ := breaker.Allow(ctx, "u1")
 	perm.Report(circuit.OutcomeServerFault)
 
-	if _, err := rt.Candidates(ctx, "m1"); !errors.Is(err, ErrUnavailable) {
+	if _, err := priority.Candidates(ctx, "m1"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 }
 
 func TestCandidatesUnknownModelIsNotErrUnavailable(t *testing.T) {
 	t.Parallel()
-	rt, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}}})
+	priority, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}}})
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
-	_, err = rt.Candidates(context.Background(), "other")
+	_, err = priority.Candidates(context.Background(), "other")
 	if err == nil || errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want a plain no-binding failure", err)
 	}

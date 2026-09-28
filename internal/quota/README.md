@@ -28,7 +28,7 @@ The reconciliation protocol (needs Redis + PostgreSQL, paced by
 | `release.lua` | Atomic cancel/expire: state check + full refund in one step, exactly once |
 | `sweeper.go` | `StartSweeper`: periodic reclaim loop (first sweep after the first tick, pass limit 1000, 30s at the composition root) |
 | `reconcile.go` | `Reconciler`/`Snapshot`: drift = Δdebited − Δrefunded − Δbalance; an epoch change skips the interval |
-| `pgsnapshot.go` | `PGSnapshots`: the PostgreSQL `quota_snapshots` store, ordered by the append id sequence |
+| `pgsnapshot.go` | `PGSnapshotStore`: the PostgreSQL `quota_snapshots` store, ordered by the append id sequence |
 | `middleware.go` | The 402 stage: reserve before, settle-or-cancel after via a `context.WithoutCancel` defer |
 
 ## Tests

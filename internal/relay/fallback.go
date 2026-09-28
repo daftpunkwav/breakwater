@@ -35,14 +35,14 @@ type batch struct {
 // the standing rule for attempts beyond the candidate list.
 func (r *run) target(attempt int) (upstream.Upstream, string) {
 	offset := attempt - r.batchStart
-	for offset >= len(r.batches[r.bi].candidates) {
+	for offset >= len(r.batches[r.batchIndex].candidates) {
 		if !r.advance(attempt) {
-			offset = len(r.batches[r.bi].candidates) - 1
+			offset = len(r.batches[r.batchIndex].candidates) - 1
 			break
 		}
 		offset = attempt - r.batchStart
 	}
-	b := r.batches[r.bi]
+	b := r.batches[r.batchIndex]
 	return b.candidates[offset], b.model
 }
 
@@ -55,9 +55,9 @@ func (r *run) advance(attempt int) bool {
 	if r.job.Resolve == nil {
 		return false
 	}
-	for r.fi < len(r.job.Fallbacks) {
-		model := r.job.Fallbacks[r.fi]
-		r.fi++
+	for r.fallbackIndex < len(r.job.Fallbacks) {
+		model := r.job.Fallbacks[r.fallbackIndex]
+		r.fallbackIndex++
 		if r.attempted[model] {
 			continue
 		}
@@ -67,7 +67,7 @@ func (r *run) advance(attempt int) bool {
 			continue
 		}
 		r.batches = append(r.batches, batch{model: model, candidates: cands})
-		r.bi = len(r.batches) - 1
+		r.batchIndex = len(r.batches) - 1
 		r.batchStart = attempt
 		return true
 	}

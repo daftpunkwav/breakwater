@@ -261,17 +261,18 @@ type run struct {
 	gatewayCode string
 
 	// batches is the fallback plan: the primary model's candidates
-	// plus every fallback batch resolved so far, append-only. bi is
-	// the current batch, batchStart the attempt index where it began,
-	// fi the next unread position of the Job's chain, and attempted
-	// the cycle guard over resolved models. lastCand is the previous
-	// attempt's candidate, for the failover metric.
-	batches    []batch
-	bi         int
-	batchStart int
-	fi         int
-	attempted  map[string]bool
-	lastCand   upstream.Upstream
+	// plus every fallback batch resolved so far, append-only.
+	// batchIndex is the current batch, batchStart the attempt index
+	// where it began, fallbackIndex the next unread position of the
+	// Job's chain, and attempted the cycle guard over resolved models.
+	// lastCand is the previous attempt's candidate, for the failover
+	// metric.
+	batches       []batch
+	batchIndex    int
+	batchStart    int
+	fallbackIndex int
+	attempted     map[string]bool
+	lastCand      upstream.Upstream
 	// excluded holds the credentials this request burned per upstream
 	// id: the ones a completed exchange proved limited or broken. The
 	// next exchange on the same upstream hands the list to the adapter,

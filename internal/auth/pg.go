@@ -24,9 +24,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PG resolves identities from the tenants database. It is safe for
+// PGStore resolves identities from the tenants database. It is safe for
 // concurrent use.
-type PG struct {
+type PGStore struct {
 	pool *pgxpool.Pool
 }
 
@@ -39,8 +39,8 @@ type PG struct {
 // cold-cache burst.
 const poolMaxConns = 8
 
-// NewPG connects the pool; connection failures surface at assembly.
-func NewPG(ctx context.Context, dsn string) (*PG, error) {
+// NewPGStore connects the pool; connection failures surface at assembly.
+func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("auth: connect identity database: %w", err)
@@ -50,16 +50,16 @@ func NewPG(ctx context.Context, dsn string) (*PG, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: connect identity database: %w", err)
 	}
-	return &PG{pool: pool}, nil
+	return &PGStore{pool: pool}, nil
 }
 
 // Ping reports database health for readiness probes.
-func (s *PG) Ping(ctx context.Context) error {
+func (s *PGStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
 // Close releases the pool; shutdown path only.
-func (s *PG) Close() {
+func (s *PGStore) Close() {
 	s.pool.Close()
 }
 
@@ -76,7 +76,7 @@ var resolveTimeout = 3 * time.Second
 // Resolve implements Store: the tier template folded with the
 // tenant's and then the key's overrides into the one effective
 // snapshot the governance layers enforce.
-func (s *PG) Resolve(ctx context.Context, apiKey string) (Tenant, error) {
+func (s *PGStore) Resolve(ctx context.Context, apiKey string) (Tenant, error) {
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
 	rows := s.pool.QueryRow(ctx, `

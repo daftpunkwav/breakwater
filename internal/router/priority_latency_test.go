@@ -20,7 +20,7 @@ func TestCandidatesStaticKeepsBindingOrder(t *testing.T) {
 	tr.Record("slow-primary", 5*time.Millisecond, false)
 	tr.Record("fast-fallback", 1*time.Millisecond, false)
 
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "slow-primary"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "fast-fallback"}},
 	}, WithStrategy(StrategyStatic), WithTracker(tr))
@@ -28,7 +28,7 @@ func TestCandidatesStaticKeepsBindingOrder(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestCandidatesLatencyPrefersFastest(t *testing.T) {
 	tr.Record("slow-primary", 50*time.Millisecond, false)
 	tr.Record("fast-fallback", 5*time.Millisecond, false)
 
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "slow-primary"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "fast-fallback"}},
 	}, WithStrategy(StrategyLatency), WithTracker(tr))
@@ -51,7 +51,7 @@ func TestCandidatesLatencyPrefersFastest(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestCandidatesLatencyUntriedFirst(t *testing.T) {
 	tr := NewTracker()
 	tr.Record("measured", 1*time.Millisecond, false)
 
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "measured"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "brand-new"}},
 	}, WithStrategy(StrategyLatency), WithTracker(tr))
@@ -75,7 +75,7 @@ func TestCandidatesLatencyUntriedFirst(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestCandidatesLatencyUntriedFirst(t *testing.T) {
 // an ordering preference only; missing data must not break routing.
 func TestCandidatesLatencyWithoutTrackerDegradesToStatic(t *testing.T) {
 	t.Parallel()
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u2"}},
 	}, WithStrategy(StrategyLatency))
@@ -96,7 +96,7 @@ func TestCandidatesLatencyWithoutTrackerDegradesToStatic(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 
-	candidates, err := rt.Candidates(context.Background(), "m1")
+	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestCandidatesLatencyJittersNearTies(t *testing.T) {
 	tr.Record("b", 10*time.Millisecond, false)
 
 	build := func(seed uint64) *Priority {
-		rt, err := NewPriority([]Binding{
+		priority, err := NewPriority([]Binding{
 			{Models: []string{"m1"}, Upstream: stubUp{id: "a"}},
 			{Models: []string{"m1"}, Upstream: stubUp{id: "b"}},
 		}, WithStrategy(StrategyLatency), WithTracker(tr),
@@ -123,7 +123,7 @@ func TestCandidatesLatencyJittersNearTies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("router: %v", err)
 		}
-		return rt
+		return priority
 	}
 
 	leaders := map[string]bool{}
@@ -152,7 +152,7 @@ func TestCandidatesLatencyTieCutHonorsBuffer(t *testing.T) {
 	tr.Record("fast", 10*time.Millisecond, false)
 	tr.Record("slow", 20*time.Millisecond, false)
 
-	rt, err := NewPriority([]Binding{
+	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "fast"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "slow"}},
 	}, WithStrategy(StrategyLatency), WithTracker(tr),
@@ -161,7 +161,7 @@ func TestCandidatesLatencyTieCutHonorsBuffer(t *testing.T) {
 		t.Fatalf("router: %v", err)
 	}
 	for i := 0; i < 20; i++ {
-		candidates, err := rt.Candidates(context.Background(), "m1")
+		candidates, err := priority.Candidates(context.Background(), "m1")
 		if err != nil {
 			t.Fatalf("candidates: %v", err)
 		}

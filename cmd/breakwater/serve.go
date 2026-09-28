@@ -408,7 +408,7 @@ func adminAuthState(token string) string {
 // the Redis hot ledger is snapshotted into PostgreSQL on an interval
 // and consecutive snapshots must satisfy the balance identity.
 func startReconciler(ctx context.Context, cfg config.Config, source quota.SnapshotSource, tenants []string, metrics *obs.Metrics, logger *slog.Logger) error {
-	store, err := quota.NewPGSnapshots(ctx, cfg.Postgres.DSN)
+	store, err := quota.NewPGSnapshotStore(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		return err
 	}

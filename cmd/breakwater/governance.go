@@ -159,7 +159,7 @@ type identityAssembly struct {
 func newAuthStore(ctx context.Context, cfg config.Config) (identityAssembly, error) {
 	switch {
 	case cfg.Postgres.DSN != "":
-		pg, err := auth.NewPG(ctx, cfg.Postgres.DSN)
+		pg, err := auth.NewPGStore(ctx, cfg.Postgres.DSN)
 		if err != nil {
 			return identityAssembly{}, err
 		}
