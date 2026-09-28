@@ -146,6 +146,7 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | `BREAKWATER_RETRY_BUDGET_PERCENT`     | _(关)_         | 份额预算：并发重试至多占当前在途请求的这个百分比——上限随实时流量伸缩，而不是一个静态数字。`0` 保持固定上限。 |
 | `BREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT` | `3`          | 份额预算的下限：无论网关多空闲，重试上限不低于它              |
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | 已提交流的响应体（header 之后）的天花板；`0` 让客户端拥有流的生命周期。保持比 attempt timeout（约束 time-to-first-byte）更宽松：否则慢 header 会被这个天花板切断，请求转而 failover 而不是等待。 |
+| `BREAKWATER_STREAM_IDLE_TIMEOUT`      | _(关)_         | 已提交流的空闲看门狗：上游停更超过整个窗口即失去这条流（同样的诚实错误帧），即使天花板仍有余量。`0` 关闭——思考型模型在 token 之间合法静默数分钟是常态。 |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | 精确匹配响应缓存           |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | breaker 阈值、cooldown、probe 超时        |
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | 退出轮换的 upstream 的主动恢复探测；interval `0` 禁用（恢复只能等真实流量）；auto-disable 的 upstream 需要 `threshold` 次连续健康探测才恢复 |

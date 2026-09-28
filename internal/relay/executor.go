@@ -61,6 +61,9 @@ type Executor struct {
 	// streamTimeout bounds a committed stream's whole body; zero means
 	// the client owns the stream's lifetime outright.
 	streamTimeout time.Duration
+	// streamIdleTimeout bounds upstream silence inside a committed
+	// stream; zero disables the idle watchdog.
+	streamIdleTimeout time.Duration
 }
 
 // Option customizes an Executor.
@@ -108,6 +111,14 @@ func WithUpstreamFatalHook(fn func(upstreamID string, credentialIndex int, reaso
 // the stream's lifetime.
 func WithStreamTimeout(d time.Duration) Option {
 	return func(e *Executor) { e.streamTimeout = d }
+}
+
+// WithStreamIdleTimeout sets the idle watchdog of a committed stream:
+// an upstream that goes silent for the whole window loses the stream
+// through the same honest error contract, however much total budget
+// remains. Zero, the default, disables the watchdog.
+func WithStreamIdleTimeout(d time.Duration) Option {
+	return func(e *Executor) { e.streamIdleTimeout = d }
 }
 
 // New builds an Executor. A nil budget disables the global in-flight

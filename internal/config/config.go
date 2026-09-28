@@ -155,6 +155,12 @@ type Retry struct {
 	// lifetime. It exists because the per-attempt timeout would
 	// otherwise kill legitimate long completions mid-stream.
 	StreamTimeout time.Duration
+	// StreamIdleTimeout bounds upstream silence inside a committed
+	// stream: an upstream that stops producing for the whole window
+	// loses the stream even while StreamTimeout would still allow it.
+	// Zero, the default, disables the watchdog — thinking models can
+	// legitimately stay silent for minutes between tokens.
+	StreamIdleTimeout time.Duration
 }
 
 // Server holds HTTP listener settings.

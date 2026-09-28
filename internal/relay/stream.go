@@ -174,6 +174,23 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 	}
 }
 
+// activityReader feeds a stream body through a progress callback:
+// every read that produced bytes counts as activity. The idle watchdog
+// reads it as "the upstream spoke" and holds off; silence lets the
+// watchdog run out.
+type activityReader struct {
+	reader   io.Reader
+	activity func()
+}
+
+func (r *activityReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 && r.activity != nil {
+		r.activity()
+	}
+	return n, err
+}
+
 // readLine returns the next '\n'-terminated line without copying for
 // lines that fit bufio's buffer. A line longer than the buffer is
 // accumulated by falling back to the allocating read. The returned

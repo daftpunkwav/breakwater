@@ -231,6 +231,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 		relay.WithBreaker(breaker),
 		relay.WithMetrics(metrics),
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
+		relay.WithStreamIdleTimeout(cfg.Retry.StreamIdleTimeout),
 		relay.WithUpstreamObserver(trackerObserver{tracker}),
 		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, rings, metrics, logger)),
 	)

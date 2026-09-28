@@ -71,6 +71,7 @@ const (
 	envRetryBudgetPercent  = "BREAKWATER_RETRY_BUDGET_PERCENT"
 	envRetryBudgetMin      = "BREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT"
 	envStreamTimeout       = "BREAKWATER_STREAM_TIMEOUT"
+	envStreamIdleTimeout   = "BREAKWATER_STREAM_IDLE_TIMEOUT"
 	envReconcileInterval   = "BREAKWATER_RECONCILE_INTERVAL"
 	envIdentity            = "BREAKWATER_IDENTITY"
 
@@ -197,6 +198,12 @@ func Load() (Config, error) {
 	}
 	if cfg.Retry.StreamTimeout < 0 {
 		return Config{}, fmt.Errorf("config: %s must not be negative", envStreamTimeout)
+	}
+	if cfg.Retry.StreamIdleTimeout, err = envDuration(envStreamIdleTimeout, cfg.Retry.StreamIdleTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.Retry.StreamIdleTimeout < 0 {
+		return Config{}, fmt.Errorf("config: %s must not be negative", envStreamIdleTimeout)
 	}
 	if cfg.ReconcileInterval, err = envDuration(envReconcileInterval, cfg.ReconcileInterval); err != nil {
 		return Config{}, err

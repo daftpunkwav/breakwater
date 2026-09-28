@@ -165,6 +165,11 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	// including its aborted tail.
 	r.servedBy = cand.ID()
 	r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
+	// From the commit on, upstream silence is bounded by the idle
+	// watchdog (when configured): every body read re-arms it, so a
+	// stream only dies when its upstream has stopped speaking.
+	lease.armIdle(r.exec.streamIdleTimeout)
+	body := &activityReader{reader: resp.Body, activity: lease.activity}
 
 	var usage protocol.Usage
 	var usageKnown bool
@@ -172,9 +177,9 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	var pumpErr error
 	transcoder := r.wire.Stream()
 	if transcoder != nil {
-		usage, usageKnown, streamBytes, pumpErr = pumpTranscoded(r.job.Out, resp.Body, transcoder, model)
+		usage, usageKnown, streamBytes, pumpErr = pumpTranscoded(r.job.Out, body, transcoder, model)
 	} else {
-		usage, usageKnown, streamBytes, pumpErr = pumpStream(r.job.Out, resp.Body)
+		usage, usageKnown, streamBytes, pumpErr = pumpStream(r.job.Out, body)
 	}
 	_ = resp.Body.Close()
 	if usageKnown {
@@ -195,8 +200,12 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	if r.clientGone() {
 		return circuit.OutcomeClientFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
+	// The gateway's own ceiling or idle watchdog cut this stream: a
+	// policy execution, not upstream evidence, and the same timeout the
+	// client sees in the error frame either way.
+	gatewayCut := lease.ceilingFired.Load() || lease.idleFired.Load()
 	code := abortCode(pumpErr)
-	if lease.ceilingFired.Load() {
+	if gatewayCut {
 		code = protocol.CodeUpstreamTimeout
 	}
 	// The failure taxonomy reads the same code the client saw in the
@@ -208,11 +217,10 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	} else {
 		_ = protocol.WriteAbort(r.job.Out, code, message)
 	}
-	if lease.ceilingFired.Load() {
-		// The gateway's own stream ceiling cut this stream: a policy
-		// execution, not upstream evidence. The breaker hears the
-		// neutral verdict — a healthy but slow upstream must not be
-		// voted out of rotation by its own configuration.
+	if gatewayCut {
+		// A healthy but slow upstream must not be voted out of rotation
+		// by its own configuration; the breaker hears the neutral
+		// verdict.
 		return circuit.OutcomeGatewayTerminated, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
 	}
 	return circuit.OutcomeServerFault, fmt.Errorf("%w: %w", retry.ErrCommitted, pumpErr)
