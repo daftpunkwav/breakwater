@@ -72,8 +72,9 @@ var formats = []protocol.Format{
 //
 // The body is the composition heart of the binary: every wire-up
 // decision (which backend, which stages) is made here and nowhere
-// else, in four sub-assemblies — observation, governance, the routing
-// plane — followed by the run lifecycle.
+// else, in five sub-assemblies — observation, governance backends,
+// identity, governance stages, the routing plane — followed by the
+// run lifecycle.
 func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version string, listener net.Listener) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
