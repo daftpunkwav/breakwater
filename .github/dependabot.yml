@@ -1,0 +1,14 @@
+# Dependency and action updates arrive as proposals, never as direct
+# pushes: every PR runs the full CI gate (race suite, coverage floor,
+# vulnerability scan), so an upgrade that breaks a bar cannot merge
+# silently.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
