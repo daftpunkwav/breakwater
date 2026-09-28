@@ -88,9 +88,9 @@ func NewBudget(maxInFlight int) *Budget {
 
 // NewShareBudget builds a budget whose cap is recomputed at every
 // admission as max(minInFlight, percent of the requests currently in
-// flight): retries may occupy at most that share of live traffic. A
-// nil inflightTotal makes every admission fail — a share of nothing
-// admits nothing beyond the floor, so the constructor refuses nil
+// flight): retries may occupy at most that share of live traffic. The
+// traffic source is mandatory: without it the share is uncomputable
+// and admissions could only panic, so the constructor refuses nil
 // outright instead of pretending.
 func NewShareBudget(percent, minInFlight int, inflightTotal func() int64) (*Budget, error) {
 	if inflightTotal == nil {
