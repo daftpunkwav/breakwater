@@ -12,9 +12,8 @@
  * - Nothing else: the ID is opaque plumbing, never parsed, never used
  *   for routing or authorization
  *
- * Why it exists (the Envoy/Kong practice, adapted to the evidence
- * story): "the client saw a 502" must be joinable with exactly one
- * access-log line and one upstream exchange when an incident is
+ * Why it exists: "the client saw a 502" must be joinable with exactly
+ * one access-log line and one upstream exchange when an incident is
  * reconstructed from the logs.
  */
 package pipeline
