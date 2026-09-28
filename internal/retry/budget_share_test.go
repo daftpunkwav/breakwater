@@ -79,6 +79,45 @@ func TestShareBudgetZeroTrafficAdmitsFloor(t *testing.T) {
 	}
 }
 
+// TestShareBudgetShrinkDoesNotRevokeAdmittedSlots: slots admitted
+// while traffic was high are never revoked when the cap shrinks — but
+// the shrunken cap still binds, and the counter does not drift:
+// admissions resume exactly when releases drain inFlight below it.
+func TestShareBudgetShrinkDoesNotRevokeAdmittedSlots(t *testing.T) {
+	t.Parallel()
+	var inflight atomic.Int64
+	b, err := NewShareBudget(50, 3, inflight.Load)
+	if err != nil {
+		t.Fatalf("NewShareBudget: %v", err)
+	}
+
+	// 50% of 100 in flight admits 50; take five.
+	inflight.Store(100)
+	for i := 0; i < 5; i++ {
+		if !b.Acquire() {
+			t.Fatalf("admission %d refused at 50%% of 100", i+1)
+		}
+	}
+
+	// Traffic collapses: the cap lands on the floor while five slots
+	// stay held. The over-cap holder is not revoked, and nothing
+	// further fits until releases drain the counter below the floor.
+	inflight.Store(1)
+	if b.Acquire() {
+		t.Fatal("admitted while over the shrunken cap: the cap must still bind admitted slots")
+	}
+	for i := 0; i < 3; i++ {
+		b.Release()
+	}
+	// inFlight is now 2 against a floor of 3: exactly one more fits.
+	if !b.Acquire() {
+		t.Fatal("admission refused after releases drained inFlight below the shrunken cap")
+	}
+	if b.Acquire() {
+		t.Fatal("admitted past the floor after the shrink")
+	}
+}
+
 // TestShareBudgetRefusesBrokenArguments: a nil traffic source, an
 // out-of-range percentage, and a zero floor all refuse to construct.
 func TestShareBudgetRefusesBrokenArguments(t *testing.T) {
