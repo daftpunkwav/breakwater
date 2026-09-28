@@ -23,7 +23,7 @@ middleware 或末端 handler 的身份接入。
 | `carrier.go` | `Carrier`：每请求的类型化结构（身份、已解析请求、token 估算、lease 与消耗句柄），在 chain 入口组装一次；`RequireCarrier`、`SetBody` |
 | `body.go` | `FormatStage` 钉住 client format；`EnsureBody` 把有上限的 body 恰好读一次（`protocol.MaxBodyBytes` 上限）并经该 format 的 wire ingest |
 | `requestid.go` | `RequestIDStage`：采纳格式良好的客户端 `X-Request-Id`（8–128 个可打印 ASCII）或铸造 `req-` 前缀新 id；回显在每一个响应上，拒绝响应也不例外 |
-| `obsmiddleware.go` | `ObservationStage`：in-flight gauge、时长 histogram、按结果计数的 request counter、异步 access log 条目；第一个看到业务请求最终结果的阶段，被拒请求也不例外 |
+| `obsmiddleware.go` | `ObservationStage`：in-flight gauge、时长 histogram、按结果计数的 request counter、异步 access log 条目（内含映射为日志 schema 的 relay 尝试轨迹）；第一个看到业务请求最终结果的阶段，被拒请求也不例外 |
 | `authstage.go` | `AuthStage`：Bearer / `x-api-key` → 经 `auth.Store` 解析 tenant；401/503 以 client format 渲染——store 故障表现为 503，绝不静默放行 |
 | `authzstage.go` | `ModelAuthzStage` 与 `AuthorizeModel`：tier 模型授权，置于 auth 之后、任何 governance 花费与 cache 之前；也是 inference handler 调用的同一个权威函数，两处裁决不会漂移 |
 | `estimate.go` | `EstimateTokens` / `EstimatePartialTokens` / `PromptTokens`：TPM 桶与 quota lease 共同预留的那一份 pre-call 估算；声明的 `max_tokens` 会被钳制到 tenant 的 per-request 上限（防自我 DoS） |

@@ -116,6 +116,36 @@ func TestObservationStageRecordsStreamAbort(t *testing.T) {
 	}
 }
 
+// TestObservationStageRecordsAttemptTrail: the relay's attempt trail
+// rides into the access entry as the failover walk the request took;
+// a request without a trail records none.
+func TestObservationStageRecordsAttemptTrail(t *testing.T) {
+	t.Parallel()
+
+	metrics := obs.NewMetrics()
+	sink := &recordingSink{}
+	carrier := &Carrier{Relay: &relay.Result{
+		UpstreamID: "up-2",
+		Trail: []relay.AttemptTrace{
+			{Upstream: "up-1", CredentialIndex: 0, Status: http.StatusTooManyRequests},
+			{Upstream: "up-2", CredentialIndex: 1, Status: http.StatusOK},
+		},
+	}}
+
+	serveThroughObservation(t, metrics, sink, carrier, http.StatusOK)
+
+	entries := sink.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("sink recorded %d entries, want 1", len(entries))
+	}
+	got := entries[0].Attempts
+	if len(got) != 2 ||
+		got[0].Upstream != "up-1" || got[0].Credential != 0 || got[0].Status != http.StatusTooManyRequests ||
+		got[1].Upstream != "up-2" || got[1].Credential != 1 || got[1].Status != http.StatusOK {
+		t.Fatalf("attempts = %+v, want the two-exchange walk in order", got)
+	}
+}
+
 // TestObservationStageWithoutRelay: a carrier with no relay outcome
 // observes the placeholder upstream.
 func TestObservationStageWithoutRelay(t *testing.T) {

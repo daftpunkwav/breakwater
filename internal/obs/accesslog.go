@@ -50,6 +50,25 @@ type Entry struct {
 	// concurrency_limit_exceeded, ...) or the relay's gateway/abort
 	// code. Empty on success.
 	ErrorCode string
+	// Attempts is the request's upstream attempt trail, in try order:
+	// which candidate served each attempt, with which credential and
+	// completed status. It is the failover walk a request took, not
+	// just its ending. Empty for requests that never reached an
+	// upstream (governance rejections, cache hits).
+	Attempts []AttemptTrace
+}
+
+// AttemptTrace is one upstream attempt's outcome in the access trail.
+type AttemptTrace struct {
+	// Upstream is the candidate the attempt targeted.
+	Upstream string
+	// Credential is the ring position of the credential the exchange
+	// used; -1 when the exchange carried none (a transport failure, a
+	// breaker denial, or a credential-less upstream).
+	Credential int
+	// Status is the completed exchange's status; zero when the attempt
+	// never completed.
+	Status int
 }
 
 // StatusClientClosedRequest marks a request that ended without an HTTP

@@ -8,7 +8,7 @@ The gateway's observation primitives: a bounded asynchronous access log and a ha
 
 | File | Role |
 |---|---|
-| `accesslog.go` | Contracts: the append-only `Entry` schema (tenant/key/model/upstream dimensions, status, duration, `CacheHit`, settled `Tokens`, `ErrorCode`), the async `Sink` port, and `StatusClientClosedRequest` (499) for a request that ended without a response |
+| `accesslog.go` | Contracts: the append-only `Entry` schema (tenant/key/model/upstream dimensions, status, duration, `CacheHit`, settled `Tokens`, `ErrorCode`, the `Attempts` trail), the async `Sink` port, and `StatusClientClosedRequest` (499) for a request that ended without a response |
 | `logger.go` | `Logger`, the JSONL sink: a mutex-guarded ring queue (not a channel — drop-oldest needs eviction) drained by one background goroutine; overflow drops the oldest and counts; `Dropped`/`Written`/`Buffered` expose the accounting; `Flush`/`Close` are shutdown-path only |
 | `metrics.go` | `Metrics`: every `breakwater_*` family with typed recorder methods, rendered at scrape time as Prometheus text format 0.0.4 — counters, gauges, two per-upstream histograms (`breakwater_request_duration_seconds`, `breakwater_upstream_ttft_seconds`; `defaultBuckets`, 1 ms–60 s) plus the scalar `breakwater_inflight_requests` gauge |
 

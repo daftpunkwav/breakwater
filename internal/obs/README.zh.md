@@ -8,7 +8,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `accesslog.go` | 契约：append-only 的 `Entry` schema（tenant/key/model/upstream 维度、status、duration、`CacheHit`、结算后的 `Tokens`、`ErrorCode`）、异步 `Sink` port，以及请求未产生响应就结束时的 `StatusClientClosedRequest`（499） |
+| `accesslog.go` | 契约：append-only 的 `Entry` schema（tenant/key/model/upstream 维度、status、duration、`CacheHit`、结算后的 `Tokens`、`ErrorCode`、`Attempts` 尝试轨迹）、异步 `Sink` port，以及请求未产生响应就结束时的 `StatusClientClosedRequest`（499） |
 | `logger.go` | `Logger`，JSONL sink：mutex 保护的 ring queue（不是 channel——drop-oldest 需要驱逐语义），由单个后台 goroutine 排空；溢出时丢最旧的并计数；`Dropped`/`Written`/`Buffered` 暴露账目；`Flush`/`Close` 仅用于 shutdown 路径 |
 | `metrics.go` | `Metrics`：所有 `breakwater_*` metric family 配带类型的 recorder 方法，scrape 时渲染为 Prometheus text format 0.0.4——counter、gauge、两个按 upstream 的 histogram（`breakwater_request_duration_seconds`、`breakwater_upstream_ttft_seconds`；`defaultBuckets`，1 ms–60 s），外加标量 gauge `breakwater_inflight_requests` |
 

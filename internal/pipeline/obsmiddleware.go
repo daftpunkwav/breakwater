@@ -25,6 +25,7 @@ import (
 
 	"github.com/daftpunkwav/breakwater/internal/httpserver"
 	"github.com/daftpunkwav/breakwater/internal/obs"
+	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // ObservationStage returns the metrics and access log stage. Both
@@ -53,6 +54,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 			upstream := "-"
 			aborted, cacheHit, streamed := false, false, false
 			var tokens int64
+			var trail []relay.AttemptTrace
 			errorCode := rejectCode
 			if carrier != nil {
 				cacheHit = carrier.CacheHit
@@ -61,6 +63,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					aborted = carrier.Relay.Aborted
 					streamed = carrier.Relay.Streamed
 					tokens = carrier.Consumed
+					trail = carrier.Relay.Trail
 					// A forward-stage failure refines the rejection code:
 					// upstream passthroughs classify by status, gateway
 					// envelopes and stream aborts by their code. An
@@ -105,8 +108,22 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					Tokens:    tokens,
 					Streamed:  streamed,
 					ErrorCode: errorCode,
+					Attempts:  attemptsToObs(trail),
 				})
 			}
 		})
 	}
+}
+
+// attemptsToObs converts the relay's attempt trail into the access
+// log's shape; the log schema stays independent of the relay's.
+func attemptsToObs(trail []relay.AttemptTrace) []obs.AttemptTrace {
+	if len(trail) == 0 {
+		return nil
+	}
+	out := make([]obs.AttemptTrace, len(trail))
+	for i, a := range trail {
+		out[i] = obs.AttemptTrace{Upstream: a.Upstream, Credential: a.CredentialIndex, Status: a.Status}
+	}
+	return out
 }

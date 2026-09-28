@@ -14,7 +14,7 @@ the honest termination of streaming replies. Candidate ordering belongs to
 
 | File | Role |
 | --- | --- |
-| `executor.go` | `Executor`, `Job`, `Result`: the attempt loop driver; `finish` renders exactly one of the delivered reply, the passthrough of the last upstream error, or a gateway envelope; breaker grants and outcome reports happen per attempt |
+| `executor.go` | `Executor`, `Job`, `Result`: the attempt loop driver; `finish` renders exactly one of the delivered reply, the passthrough of the last upstream error, or a gateway envelope; breaker grants and outcome reports happen per attempt; `Result.Trail` carries the per-attempt record for the access log |
 | `exchange.go` | One upstream attempt: buffered mode (bodies bounded by `maxResponseBytes`, 32 MiB) and streaming mode (the commit point is the first byte written to the client; after it, failures terminate through the error event contract); a credential-class failure excludes the credential for the rest of the request and, while another credential remains alive, keeps the request walking instead of ending it |
 | `fallback.go` | The fallback plan: model batches resolved lazily through `CandidateResolver` as the attempt loop exhausts them; the chain is a preference list, not a contract — an unresolvable model is skipped |
 | `streamlease.go` | The per-attempt timer set of a streaming exchange: the attempt timeout bounds time-to-first-byte, the optional stream ceiling bounds the whole body |
@@ -50,3 +50,6 @@ the pump; `testupstream_test.go` is the shared fake upstream.
   budget, rejected credentials) qualify — a request-scoped 403 never evicts
   an upstream for everyone. With a credential ring, the conviction lands on
   the credential first and the upstream only when its ring is empty.
+- The attempt trail records every try, completed or not: which upstream,
+  which credential, which status — a request's failover walk, not just its
+  ending.

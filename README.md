@@ -32,7 +32,7 @@ tests, metrics and fault-injection experiments.
 | `internal/router`     | Candidate selection: static priority or measured-latency order, breaker pre-filtering, runtime operator switches |
 | `internal/upstream`   | Provider port + OpenAI-compatible adapter                 |
 | `internal/config`     | Configuration schema and loading                          |
-| `internal/obs`        | Bounded async access log, hand-written metrics registry   |
+| `internal/obs`        | Bounded async access log (with the per-attempt trail), hand-written metrics registry |
 | `deploy`              | docker-compose stack, schema, seed, container build       |
 | `loadtest`            | k6 scenarios, each targeting one property of the system   |
 | `docs`                | Benchmarks, the fault-injection report, the local deployment guide and the testing conventions |

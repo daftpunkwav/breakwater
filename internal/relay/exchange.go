@@ -49,6 +49,7 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 	if !r.job.Stream {
 		resp, err := cand.Forward(attemptCtx, req)
 		if err != nil {
+			r.trace(cand.ID(), -1, 0)
 			return transportOutcome(r.ctx, err), err
 		}
 		return r.exchangeBuffered(cand, resp)
@@ -63,6 +64,7 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 	lease, fwdCtx := r.beginStream()
 	resp, err := cand.Forward(fwdCtx, req)
 	if err != nil {
+		r.trace(cand.ID(), -1, 0)
 		// end() is what stops the timers, so both flags are read after
 		// it: a timer that fires between the read and the stop would
 		// otherwise be read as not having fired, and the gateway's own
@@ -133,6 +135,7 @@ func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) 
 	if usage, ok := protocol.ParseUsage(body); ok {
 		r.usage, r.usageKnown = usage, true
 	}
+	r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
 	return circuit.OutcomeSuccess, nil
 }
 
@@ -161,6 +164,7 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	// The delivered reply belongs to this candidate from the commit on —
 	// including its aborted tail.
 	r.servedBy = cand.ID()
+	r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
 
 	var usage protocol.Usage
 	var usageKnown bool
@@ -229,6 +233,7 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 // table exactly as before.
 func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response, body []byte) (circuit.Outcome, error) {
 	r.servedBy = cand.ID()
+	r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
 	statusErr := retry.NewStatusError(resp.StatusCode)
 	// The upstream's own wait request rides the error for the attempt
 	// loop; the loop decides where it applies (same-credential

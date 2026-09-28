@@ -154,6 +154,18 @@ type Job struct {
 	Out http.ResponseWriter
 }
 
+// AttemptTrace records one upstream attempt in the access trail: the
+// candidate that served it, the credential it used, and the status the
+// exchange completed with — zero when it never completed (transport
+// failure, breaker denial, a time-to-first-byte cut).
+type AttemptTrace struct {
+	Upstream string
+	// CredentialIndex is the ring position of the credential the
+	// attempt used; -1 when the exchange carried none.
+	CredentialIndex int
+	Status          int
+}
+
 // Result reports what one execution did, for the stages that follow the
 // forward stage (settlement, cache write, observation).
 type Result struct {
@@ -164,6 +176,10 @@ type Result struct {
 	UpstreamID string
 	Attempts   int
 	Retries    int
+	// Trail is the per-attempt record of the forward stage: one entry
+	// per upstream attempt, in order. It is what the access log needs
+	// to show a request's failover walk, not just its ending.
+	Trail []AttemptTrace
 	// Usage carries the token usage extracted from the reply;
 	// UsageKnown is false when the reply carried none (settlement then
 	// falls back to estimation).
@@ -214,6 +230,9 @@ type run struct {
 	usage      protocol.Usage
 	usageKnown bool
 	streamed   bool
+	// trail is the per-attempt record of this request's forward walk,
+	// handed to the Result for the access log.
+	trail []AttemptTrace
 
 	success       *exchangeSnapshot
 	lastFailed    *exchangeSnapshot
@@ -328,6 +347,7 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	if r.exec.breaker != nil {
 		p, ok := r.exec.breaker.Allow(attemptCtx, cand.ID())
 		if !ok {
+			r.trace(cand.ID(), -1, 0)
 			return fmt.Errorf("relay: circuit open for upstream %s: %w", cand.ID(), errCircuitOpen)
 		}
 		perm = p
@@ -395,7 +415,7 @@ func (r *run) finish(err error) Result {
 	switch {
 	case err == nil && job.Stream:
 		return Result{
-			Status: http.StatusOK, UpstreamID: r.servedBy,
+			Status: http.StatusOK, UpstreamID: r.servedBy, Trail: r.trail,
 			Attempts: r.attempts, Retries: r.retries,
 			Usage: r.usage, UsageKnown: r.usageKnown,
 			Streamed: true, StreamBytes: r.streamBytes,
@@ -404,7 +424,7 @@ func (r *run) finish(err error) Result {
 		snap := r.success
 		r.wire.RenderSuccess(job.Out, snap.status, snap.header, snap.body)
 		return Result{
-			Status: snap.status, UpstreamID: r.servedBy,
+			Status: snap.status, UpstreamID: r.servedBy, Trail: r.trail,
 			Attempts: r.attempts, Retries: r.retries,
 			Usage: r.usage, UsageKnown: r.usageKnown,
 			StreamBytes: r.streamBytes,
@@ -413,7 +433,7 @@ func (r *run) finish(err error) Result {
 	case errors.Is(err, retry.ErrCommitted):
 		// The abort sequence was already written by the stream pump.
 		return Result{
-			Status: http.StatusOK, UpstreamID: r.servedBy,
+			Status: http.StatusOK, UpstreamID: r.servedBy, Trail: r.trail,
 			Attempts: r.attempts, Retries: r.retries,
 			Usage: r.usage, UsageKnown: r.usageKnown,
 			Streamed: true, StreamBytes: r.streamBytes,
@@ -424,30 +444,30 @@ func (r *run) finish(err error) Result {
 	case r.clientGone():
 		// The client is gone: writing anything would be noise. The
 		// intended status is still reported for observation.
-		return Result{Status: r.intendedStatus(err), ClientGone: true,
+		return Result{Status: r.intendedStatus(err), ClientGone: true, Trail: r.trail,
 			Attempts: r.attempts, Retries: r.retries, Usage: r.usage, UsageKnown: r.usageKnown, StreamBytes: r.streamBytes}
 
 	case r.terminal != nil:
 		r.wire.RenderUpstreamError(job.Out, r.terminal.status, r.terminal.header, r.terminal.body)
-		return Result{Status: r.terminal.status, UpstreamID: r.servedBy,
+		return Result{Status: r.terminal.status, UpstreamID: r.servedBy, Trail: r.trail,
 			Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, errCircuitOpen):
 		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "circuit_open",
 			"all upstream candidates are unavailable")
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			ErrorCode: "circuit_open"}
+			Trail: r.trail, ErrorCode: "circuit_open"}
 
 	case errors.Is(err, retry.ErrBudgetExhausted):
 		r.exec.metrics.RetryBudgetExhausted()
 		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
 			"retry budget exhausted before an upstream answered")
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			ErrorCode: "budget_exhausted"}
+			Trail: r.trail, ErrorCode: "budget_exhausted"}
 
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
 		r.wire.RenderUpstreamError(job.Out, r.lastFailed.status, r.lastFailed.header, r.lastFailed.body)
-		return Result{Status: r.lastFailed.status, UpstreamID: r.servedBy,
+		return Result{Status: r.lastFailed.status, UpstreamID: r.servedBy, Trail: r.trail,
 			Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	default:
@@ -457,7 +477,7 @@ func (r *run) finish(err error) Result {
 		r.wire.RenderError(job.Out, http.StatusBadGateway, "upstream_unreachable",
 			"upstream did not answer")
 		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			ErrorCode: "upstream_unreachable"}
+			Trail: r.trail, ErrorCode: "upstream_unreachable"}
 	}
 }
 
@@ -480,6 +500,12 @@ func (r *run) intendedStatus(err error) int {
 // the one failure that is nobody's fault but the network's own.
 func (r *run) clientGone() bool {
 	return r.ctx != nil && errors.Is(r.ctx.Err(), context.Canceled)
+}
+
+// trace records one attempt in the access trail. It is called from the
+// single goroutine running the attempt loop.
+func (r *run) trace(upstream string, credentialIndex, status int) {
+	r.trail = append(r.trail, AttemptTrace{Upstream: upstream, CredentialIndex: credentialIndex, Status: status})
 }
 
 // errCircuitOpen marks attempts denied by the breaker; the classifier

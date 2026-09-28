@@ -12,7 +12,7 @@ upstream 上的 attempt loop、跨候选与 fallback 模型的 failover 顺序�
 
 | File | 职责 |
 | --- | --- |
-| `executor.go` | `Executor`、`Job`、`Result`：attempt loop 驱动器；`finish` 渲染三者之一——已交付的回复、最后一个上游错误的逐字节 passthrough、或网关信封；breaker 的许可与结果上报按 attempt 进行 |
+| `executor.go` | `Executor`、`Job`、`Result`：attempt loop 驱动器；`finish` 渲染三者之一——已交付的回复、最后一个上游错误的逐字节 passthrough、或网关信封；breaker 的许可与结果上报按 attempt 进行；`Result.Trail` 携带供访问日志使用的逐 attempt 记录 |
 | `exchange.go` | 一次上游 attempt：buffered 模式（响应体受 `maxResponseBytes`（32 MiB）约束）与 streaming 模式（提交点是写向客户端的第一个字节；此后失败经错误事件契约终结）；credential 类失败会把该凭据排除出本次请求的剩余尝试——只要还有存活凭据，请求继续向下走而不是终止 |
 | `fallback.go` | fallback 计划：attempt loop 耗尽当前模型后经 `CandidateResolver` 惰性解析下一批；链是偏好列表而非契约——无法服务的模型直接跳过 |
 | `streamlease.go` | 流式 exchange 的每 attempt 计时器组：attempt timeout 约束 time-to-first-byte，可选的 stream ceiling 约束整个响应体 |
@@ -41,3 +41,5 @@ transcoder、时间预算与 fatal 分类各有独立文件；`stream_bench_test
 - fatal 分类刻意收窄：auto-disable 会连带砍掉真实流量，因此只有确定性失败
   （预算耗尽、凭据被拒）够格——请求级的 403 绝不把 upstream 从所有人面前
   逐出。有凭据环时，定罪先落在凭据上，环全部失效才轮到 upstream。
+- attempt 轨迹记录每一次尝试，无论是否完成：哪个 upstream、哪把凭据、什么
+  状态——这是一个请求走过的 failover 路径，而不只是它的结局。
