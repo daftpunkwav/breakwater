@@ -10,9 +10,12 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -365,6 +368,14 @@ func Load() (Config, error) {
 		if u.ID == "" || u.BaseURL == "" {
 			return Config{}, fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
 		}
+		// An id is a routing key, a metrics label, an access-log field
+		// and an admin URL segment at once; a character outside the
+		// documented set would only surface as a broken admin route or
+		// an ambiguous key. Refuse at load, like every other identity
+		// collision.
+		if !validID(u.ID) {
+			return Config{}, fmt.Errorf("config: upstreams[%d] has an invalid id %q: ids are 1-128 characters of [A-Za-z0-9._-]", i, u.ID)
+		}
 		// A duplicated id would alias two distinct providers into one
 		// circuit-breaker state and one admin target — the second copy
 		// silently shadowing the first. Refuse at load, like every other
@@ -460,6 +471,14 @@ func guardDeploymentPosture(cfg Config) error {
 	return nil
 }
 
+// validID reports whether a configured identifier (upstream ids today)
+// stays inside the character set every consumer assumes: Redis key
+// segments, metrics labels, access-log fields and admin URL path
+// segments. A "/" or a space in an id would make the admin surface
+// route it to the wrong endpoint and read ambiguously in a key or a
+// label. The same rule governs static tenant ids (internal/auth).
+var validID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`).MatchString
+
 func envString(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -494,21 +513,31 @@ func envInt(key string, fallback int) (int, error) {
 // envJSON decodes a JSON-valued environment variable into a slice; an
 // unset or empty variable yields nil without error. Structured config
 // (the upstream table) rides the same environment-only source as every
-// other setting.
+// other setting. The table's members are a fixed schema, so a typo'd
+// member name (say "base_ur") fails the load instead of silently
+// degrading the upstream it named; trailing data is rejected like any
+// other malformed document.
 func envJSON[T any](key string) ([]T, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
 		return nil, nil
 	}
 	var out []T
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&out); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", key, err)
+	}
+	if err := dec.Decode(&out); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("config: parse %s: trailing data after the JSON value", key)
 	}
 	return out, nil
 }
 
 // envJSONMap decodes a JSON-valued environment variable into a map; an
-// unset or empty variable yields nil without error.
+// unset or empty variable yields nil without error. There is no
+// unknown-member check here on purpose: a map's keys ARE the data
+// (model names), so every member is by definition known.
 func envJSONMap[T any](key string) (map[string]T, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

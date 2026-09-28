@@ -15,11 +15,15 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"regexp"
 	"sort"
 )
 
@@ -64,12 +68,26 @@ type Static struct {
 	byKey map[string]Tenant
 }
 
+// validTenantID reports whether a tenant id stays inside the character
+// set every consumer assumes: Redis key segments (the quota and limiter
+// keys), access-log fields and admin URL path segments. The same rule
+// governs upstream ids (internal/config); the PostgreSQL store generates
+// ids itself, so this guards the operator-supplied static set.
+var validTenantID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`).MatchString
+
 // ParseStaticConfig decodes the raw identity JSON (the config layer
-// keeps no knowledge of its shape).
+// keeps no knowledge of its shape). The set's members are a fixed
+// schema, so a typo'd member (say "kyes" for "keys") fails loudly
+// instead of silently yielding an identity nobody can resolve.
 func ParseStaticConfig(raw []byte) (StaticConfig, error) {
 	var cfg StaticConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		return StaticConfig{}, fmt.Errorf("auth: parse identity: %w", err)
+	}
+	if err := dec.Decode(&cfg); !errors.Is(err, io.EOF) {
+		return StaticConfig{}, fmt.Errorf("auth: parse identity: trailing data after the JSON value")
 	}
 	return cfg, nil
 }
@@ -92,6 +110,9 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 	for _, tn := range cfg.Tenants {
 		if tn.ID == "" {
 			return nil, fmt.Errorf("auth: static tenant without id")
+		}
+		if !validTenantID(tn.ID) {
+			return nil, fmt.Errorf("auth: static tenant has an invalid id %q: ids are 1-128 characters of [A-Za-z0-9._-]", tn.ID)
 		}
 		tier, ok := tiers[tn.Tier]
 		if !ok {

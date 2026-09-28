@@ -146,6 +146,36 @@ func TestParseStaticConfigRejectsGarbage(t *testing.T) {
 	}
 }
 
+// TestParseStaticConfigRejectsUnknownMember pins the strict-decode
+// contract: the identity set is a fixed schema, so a typo'd member
+// (say "kyes" for "keys") must fail loudly instead of silently yielding
+// an identity nobody can resolve.
+func TestParseStaticConfigRejectsUnknownMember(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"tiers":[{"id":"free"}],"tenants":[{"id":"t1","tier":"free","kyes":["sk-1"]}]}`
+	if _, err := ParseStaticConfig([]byte(raw)); err == nil {
+		t.Fatal("ParseStaticConfig accepted an unknown member")
+	} else if !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("err = %q, want an unknown-field rejection", err)
+	}
+}
+
+// TestNewStaticRejectsInvalidTenantID pins the identifier charset: a
+// tenant id is a Redis key segment, an access-log field and an admin
+// URL segment, so a "/" or a space must refuse assembly.
+func TestNewStaticRejectsInvalidTenantID(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{"a/b", "a b", "a:b", strings.Repeat("a", 129)} {
+		cfg := validStaticConfig()
+		cfg.Tenants[0].ID = id
+		if _, err := NewStatic(cfg); err == nil || !strings.Contains(err.Error(), "invalid id") {
+			t.Errorf("id %q: err = %v, want an invalid-id rejection", id, err)
+		}
+	}
+}
+
 // TestParseStaticConfigDecodesSchema: the decoded config keeps the
 // documented JSON field names.
 func TestParseStaticConfigDecodesSchema(t *testing.T) {

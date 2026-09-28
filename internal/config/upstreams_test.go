@@ -42,10 +42,38 @@ func TestLoadAcceptsValidUpstreams(t *testing.T) {
 	// A valid upstream table needs an identity source alongside it (the
 	// unauthenticated-deployment guard); this test is about the table
 	// itself, so it arms the static set minimally.
-	t.Setenv("BREAKWATER_IDENTITY", `{"tiers":[{"id":"free","models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
+	t.Setenv("BREAKWATER_IDENTITY", `{"tiers":[{"id":"free","allowed_models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
 	if err := loadWithUpstreams(t,
 		`[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"]}]`); err != nil {
 		t.Fatalf("valid upstreams rejected: %v", err)
+	}
+}
+
+// TestLoadRejectsUnknownUpstreamMember pins the strict-decode contract:
+// a typo'd member (say "api_keey") must fail the load instead of
+// silently yielding an upstream without credentials.
+func TestLoadRejectsUnknownUpstreamMember(t *testing.T) {
+	t.Setenv("BREAKWATER_IDENTITY", `{"tiers":[{"id":"free","allowed_models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
+	err := loadWithUpstreams(t,
+		`[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"],"api_keey":"k"}]`)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("err = %v, want an unknown-member rejection", err)
+	}
+}
+
+// TestLoadRejectsInvalidUpstreamID pins the identifier charset: an
+// upstream id is a Redis key segment, a metrics label and an admin URL
+// segment, so a "/" or a space must refuse to boot.
+func TestLoadRejectsInvalidUpstreamID(t *testing.T) {
+	for name, raw := range map[string]string{
+		"slash":     `[{"id":"a/b","base_url":"http://x","models":["*"]}]`,
+		"space":     `[{"id":"a b","base_url":"http://x","models":["*"]}]`,
+		"too long":  `[{"id":"` + strings.Repeat("a", 129) + `","base_url":"http://x","models":["*"]}]`,
+		"other set": `[{"id":"a:b","base_url":"http://x","models":["*"]}]`,
+	} {
+		if err := loadWithUpstreams(t, raw); err == nil || !strings.Contains(err.Error(), "invalid id") {
+			t.Errorf("%s: err = %v, want an invalid-id rejection", name, err)
+		}
 	}
 }
 

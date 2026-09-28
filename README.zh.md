@@ -132,11 +132,11 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | 变量                                  | 默认           | 作用                                                       |
 | ------------------------------------- | -------------- | ---------------------------------------------------------- |
 | `BREAKWATER_ADDR`                     | `:8080`        | 监听地址                                                    |
-| `BREAKWATER_UPSTREAMS`                | _(无)_         | upstream 的 JSON 列表（`id`、`base_url`、`probe_url`、`api_key`、`api_keys`、`models`；列表顺序 = failover 优先级；`"client=real"` 条目做模型别名；`api_keys` 在同一 upstream 后轮换多把凭据） |
+| `BREAKWATER_UPSTREAMS`                | _(无)_         | upstream 的 JSON 列表（`id`、`base_url`、`probe_url`、`api_key`、`api_keys`、`models`；列表顺序 = failover 优先级；`"client=real"` 条目做模型别名；`api_keys` 在同一 upstream 后轮换多把凭据）。未知成员与不在 `[A-Za-z0-9._-]{1,128}` 内的 id 拒绝启动 |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | 候选顺序：`static`（配置顺序）或 `latency`（实测交换延迟优先；近乎打平的候选按请求轮换领先权，其余并列由配置顺序裁决；未试过的 upstream 优先探索） |
 | `BREAKWATER_FALLBACKS`                | _(无)_         | 模型 → 有序 fallback 模型的 JSON 映射，在主模型每个候选耗尽后尝试（`{"gpt-4o":["gpt-4o-mini"]}`）；键与目标必须指向已配置的 client-facing 模型 |
 | `BREAKWATER_CONTEXT_LIMITS`           | _(无)_         | 模型 → 最大输入 token 估算的 JSON 映射；超出上限的 prompt 提前拒绝该模型的全部候选，返回 `413 context_window_exceeded`，而不是注定失败的 upstream 交换 |
-| `BREAKWATER_IDENTITY`                 | _(无)_         | JSON identity 集合（`tiers`、带 `role` 与用户级 `overrides` 的 `tenants`）；武装 governance pipeline。也接受 `file://<路径>`，从文件加载 JSON，避免明文 API key 进入进程环境 |
+| `BREAKWATER_IDENTITY`                 | _(无)_         | JSON identity 集合（`tiers`、带 `role` 与用户级 `overrides` 的 `tenants`；未知成员拒绝启动，tenant id 限 `[A-Za-z0-9._-]{1,128}`）；武装 governance pipeline。也接受 `file://<路径>`，从文件加载 JSON，避免明文 API key 进入进程环境 |
 | `BREAKWATER_POSTGRES_DSN`             | _(无)_         | 身份 system of record（覆盖静态集合）                        |
 | `BREAKWATER_REDIS_ADDR`               | _(无)_         | 启用 Redis backend；不设则 in-memory                         |
 | `BREAKWATER_REDIS_TLS`                | _(关)_         | 用 TLS 包裹 Redis 连接；证书须能通过系统根证书校验，server name 取自地址 host。否则余额与限流状态明文过网 |
