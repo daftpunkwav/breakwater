@@ -136,9 +136,11 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | 候选顺序：`static`（配置顺序）或 `latency`（实测交换延迟优先；近乎打平的候选按请求轮换领先权，其余并列由配置顺序裁决；未试过的 upstream 优先探索） |
 | `BREAKWATER_FALLBACKS`                | _(无)_         | 模型 → 有序 fallback 模型的 JSON 映射，在主模型每个候选耗尽后尝试（`{"gpt-4o":["gpt-4o-mini"]}`）；键与目标必须指向已配置的 client-facing 模型 |
 | `BREAKWATER_CONTEXT_LIMITS`           | _(无)_         | 模型 → 最大输入 token 估算的 JSON 映射；超出上限的 prompt 提前拒绝该模型的全部候选，返回 `413 context_window_exceeded`，而不是注定失败的 upstream 交换 |
-| `BREAKWATER_IDENTITY`                 | _(无)_         | JSON identity 集合（`tiers`、带 `role` 与用户级 `overrides` 的 `tenants`）；武装 governance pipeline |
+| `BREAKWATER_IDENTITY`                 | _(无)_         | JSON identity 集合（`tiers`、带 `role` 与用户级 `overrides` 的 `tenants`）；武装 governance pipeline。也接受 `file://<路径>`，从文件加载 JSON，避免明文 API key 进入进程环境 |
 | `BREAKWATER_POSTGRES_DSN`             | _(无)_         | 身份 system of record（覆盖静态集合）                        |
 | `BREAKWATER_REDIS_ADDR`               | _(无)_         | 启用 Redis backend；不设则 in-memory                         |
+| `BREAKWATER_REDIS_TLS`                | _(关)_         | 用 TLS 包裹 Redis 连接；证书须能通过系统根证书校验，server name 取自地址 host。否则余额与限流状态明文过网 |
+| `BREAKWATER_ALLOW_UNAUTHENTICATED`    | _(关)_         | 显式 dev opt-in，允许两种默认拒绝启动的姿态：配了 upstream 却无任何身份源（无认证开放代理），或配了 PostgreSQL 身份却无 `BREAKWATER_ADMIN_TOKEN`（开放的身份签发面）。缺省时这两者拒绝启动 |
 | `BREAKWATER_REDIS_NAMESPACE`          | _(无)_         | 给每个 limiter 与 quota key 加前缀。两个部署共享一个 Redis 实例时必须设置——否则它们共享 tenant 余额，一个环境的 sweeper 会退另一个环境的在用 lease。留空表示本网关独占其 Redis。**在已有余额的部署上设置它会让所有既有 key 被弃用（不做任何迁移），静态 identity seeder 随后按全月预算重新给每个 tenant 入账**——把它当作重置而非改名。PostgreSQL-identity 部署没有 seeder，那里改 namespace 会让所有 tenant 没有台账，直到有人入账。 |
 | `BREAKWATER_QUOTA_LEASE_TTL`          | _派生_         | 预留的 quota lease 在 sweeper 回收退款前可存活的时长。由 `OverallDeadline + StreamTimeout` 加余量派生，因为短于最长请求的视野会静默退还一个真实花了 token 的请求；低于该值的配置在启动时被拒。无界流或 deadline 没有可派生的东西，所以那些情况默认 24h。 |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | 每请求的 upstream attempt 数                                 |

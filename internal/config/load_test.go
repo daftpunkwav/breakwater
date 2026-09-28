@@ -14,7 +14,7 @@ import (
 // envVars is every BREAKWATER_* variable Load reads; the fixtures
 // neutralize all of them so the host environment cannot leak in.
 var envVars = []string{
-	envAddr, envShutdownGrace, envRedisAddr, envPostgresDSN,
+	envAddr, envShutdownGrace, envRedisAddr, envRedisTLS, envPostgresDSN,
 	envAccessLogQueue, envUpstreams,
 	envRetryMaxAttempts, envRetryAttemptTimeout, envRetryOverall,
 	envRetryBackoffInitial, envRetryBackoffMax, envRetryBudget,
@@ -24,6 +24,7 @@ var envVars = []string{
 	envAccessLogPath, envAdminToken, envRouting,
 	envProbeInterval, envProbeTimeout, envProbePasses,
 	envFallbacks, envContextLimits,
+	envAllowUnauthenticated,
 }
 
 // cleanEnv sets every BREAKWATER_* variable to the empty string, which

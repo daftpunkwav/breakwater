@@ -51,9 +51,16 @@ const (
 	envAddr           = "BREAKWATER_ADDR"
 	envShutdownGrace  = "BREAKWATER_SHUTDOWN_GRACE"
 	envRedisAddr      = "BREAKWATER_REDIS_ADDR"
+	envRedisTLS       = "BREAKWATER_REDIS_TLS"
 	envPostgresDSN    = "BREAKWATER_POSTGRES_DSN"
 	envAccessLogQueue = "BREAKWATER_ACCESS_LOG_QUEUE_SIZE"
 	envUpstreams      = "BREAKWATER_UPSTREAMS"
+
+	// envAllowUnauthenticated is the explicit dev opt-in that permits a
+	// deployment Load would otherwise refuse: upstreams without any
+	// identity source (an unauthenticated open proxy), or a PostgreSQL
+	// identity without an admin token (an open key-minting surface).
+	envAllowUnauthenticated = "BREAKWATER_ALLOW_UNAUTHENTICATED"
 
 	// EnvRedisNamespace is exported because the composition root points
 	// operators at it by name when the namespace is missing: the message
@@ -154,6 +161,12 @@ func Load() (Config, error) {
 	}
 
 	var err error
+	if cfg.Identity, err = loadIdentitySource(envIdentity, cfg.Identity); err != nil {
+		return Config{}, err
+	}
+	if cfg.Redis.TLS, err = envBool(envRedisTLS, false); err != nil {
+		return Config{}, err
+	}
 	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
 		return Config{}, err
 	}
@@ -395,7 +408,56 @@ func Load() (Config, error) {
 			seenCredentials[key] = struct{}{}
 		}
 	}
+	if err := guardDeploymentPosture(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// loadIdentitySource resolves the static identity set: inline JSON, or a
+// file:// URL naming a file whose content is the identity JSON. The file
+// form keeps raw API keys off the process environment, where they are
+// readable through /proc/<pid>/environ, `docker inspect` and CI logs.
+// The path itself is operator configuration, not untrusted input.
+func loadIdentitySource(key, raw string) (string, error) {
+	if !strings.HasPrefix(raw, "file://") {
+		return raw, nil
+	}
+	path := strings.TrimPrefix(raw, "file://")
+	if path == "" {
+		return "", fmt.Errorf("config: %s=%q names no file", key, raw)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("config: read %s: %w", key, err)
+	}
+	return string(data), nil
+}
+
+// guardDeploymentPosture refuses to boot a deployment that would serve
+// without authentication: upstreams without any identity source turn the
+// inference endpoints into an unauthenticated open proxy burning the
+// configured upstream credentials, and a PostgreSQL identity without an
+// admin token leaves the key-minting management surface open. Both are
+// legitimate local-development postures, so the refusal names every
+// remedy and the explicit opt-in that overrides it.
+func guardDeploymentPosture(cfg Config) error {
+	insecure, err := envBool(envAllowUnauthenticated, false)
+	if err != nil {
+		return err
+	}
+	if insecure {
+		return nil
+	}
+	if len(cfg.Upstreams) > 0 && cfg.Identity == "" && cfg.Postgres.DSN == "" {
+		return fmt.Errorf("config: %s is set but no identity source is: the inference endpoints would serve every caller without authenticating them, burning the upstream credentials; set %s or %s, or set %s=1 to accept an unauthenticated deployment explicitly",
+			envUpstreams, envIdentity, envPostgresDSN, envAllowUnauthenticated)
+	}
+	if cfg.Postgres.DSN != "" && cfg.Security.AdminToken == "" {
+		return fmt.Errorf("config: %s is set but %s is empty: the identity management surface (user and api-key issuance) would be open to unauthenticated callers; set %s, or set %s=1 to accept an unauthenticated deployment explicitly",
+			envPostgresDSN, envAdminToken, envAdminToken, envAllowUnauthenticated)
+	}
+	return nil
 }
 
 func envString(key, fallback string) string {

@@ -183,6 +183,13 @@ type Redis struct {
 	// other's money. Empty means the bare "bw:" prefix, which is correct
 	// only when this gateway owns its Redis instance.
 	Namespace string
+	// TLS wraps the Redis connection in TLS: balances and rate limit
+	// state cross the wire in plaintext otherwise, and a tampered
+	// balance is free upstream spend. Off by default because the
+	// in-process and localhost deployments Redis is usually paired with
+	// need none; the certificate must verify against the system roots
+	// with the server name taken from the address host.
+	TLS bool
 }
 
 // Quota holds lease ledger sizing.

@@ -15,7 +15,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -66,7 +68,7 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 		}, nil
 	}
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr})
+	rdb := redis.NewClient(redisOptions(cfg))
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := rdb.Ping(pingCtx).Err(); err != nil {
@@ -97,6 +99,23 @@ func newGovernance(ctx context.Context, cfg config.Config) (*governance, error) 
 // Redis instance outright.
 func redisNamespace(cfg config.Config) string {
 	return strings.TrimSpace(cfg.Redis.Namespace)
+}
+
+// redisOptions builds the client options for the configured Redis:
+// plaintext by default, TLS when the deployment opts in. The server
+// name comes from the address host so certificates verify against it
+// even when the address carries a port.
+func redisOptions(cfg config.Config) *redis.Options {
+	opts := &redis.Options{Addr: cfg.Redis.Addr}
+	if !cfg.Redis.TLS {
+		return opts
+	}
+	host, _, err := net.SplitHostPort(cfg.Redis.Addr)
+	if err != nil {
+		host = cfg.Redis.Addr
+	}
+	opts.TLSConfig = &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	return opts
 }
 
 // newAuthStore resolves the identity source. A nil store means no

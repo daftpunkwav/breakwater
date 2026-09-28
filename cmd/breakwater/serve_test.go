@@ -42,6 +42,7 @@ func setEnv(t *testing.T, entries []string) {
 	for _, key := range []string{
 		"BREAKWATER_REDIS_ADDR", "BREAKWATER_POSTGRES_DSN", "BREAKWATER_ACCESS_LOG_PATH",
 		"BREAKWATER_UPSTREAMS", "BREAKWATER_IDENTITY", "BREAKWATER_ADDR",
+		"BREAKWATER_ADMIN_TOKEN", "BREAKWATER_ALLOW_UNAUTHENTICATED",
 	} {
 		t.Setenv(key, "")
 	}
@@ -156,6 +157,9 @@ func TestServeReconcilerNeedsReachableIdentity(t *testing.T) {
 	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
 	t.Setenv("BREAKWATER_POSTGRES_DSN", "postgres://breakwater:breakwater@127.0.0.1:1/db")
 	t.Setenv("BREAKWATER_RECONCILE_INTERVAL", "1m")
+	// The admin-token guard is not this test's subject: arm the surface
+	// so Load passes and the failure comes from the unreachable database.
+	t.Setenv("BREAKWATER_ADMIN_TOKEN", "test")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -173,11 +177,15 @@ func TestServeReconcilerNeedsReachableIdentity(t *testing.T) {
 
 // TestServeWithoutIdentity covers the warn branch: a gateway with
 // upstreams but no identity serves business routes without governance.
+// config.Load refuses that posture (the unauthenticated-deployment
+// guard), so the opt-in arms it explicitly — the serve() warn branch
+// stays reachable for direct callers either way.
 func TestServeWithoutIdentity(t *testing.T) {
 	setEnv(t, []string{
 		"BREAKWATER_ADDR=127.0.0.1:0",
 		`BREAKWATER_UPSTREAMS=[{"id":"mock","base_url":"http://127.0.0.1:1","models":["*"]}]`,
 		"BREAKWATER_IDENTITY=",
+		"BREAKWATER_ALLOW_UNAUTHENTICATED=1",
 	})
 	cfg, err := config.Load()
 	if err != nil {
@@ -200,6 +208,9 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 	t.Run("identity store", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_POSTGRES_DSN", "not a valid dsn")
+		// The admin-token guard is not this test's subject: arm the
+		// surface so the failure comes from the identity store assembly.
+		t.Setenv("BREAKWATER_ADMIN_TOKEN", "test")
 		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 			t.Fatal("assembly failure must surface as a returned error")
 		}
@@ -283,6 +294,20 @@ func TestRunRejectsBadConfiguration(t *testing.T) {
 	t.Setenv("BREAKWATER_STREAM_TIMEOUT", "-5s")
 	if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
 		t.Fatal("run must reject an invalid configuration")
+	}
+}
+
+// TestRunRejectsUnauthenticatedDeployment: the binary path refuses the
+// open-proxy posture before anything listens — upstreams armed, no
+// identity source, no opt-in.
+func TestRunRejectsUnauthenticatedDeployment(t *testing.T) {
+	setEnv(t, []string{
+		"BREAKWATER_ADDR=127.0.0.1:0",
+		`BREAKWATER_UPSTREAMS=[{"id":"mock","base_url":"http://127.0.0.1:1","models":["*"]}]`,
+		"BREAKWATER_IDENTITY=",
+	})
+	if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
+		t.Fatal("run must refuse upstreams without an identity source")
 	}
 }
 
@@ -398,6 +423,7 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
 	t.Setenv("BREAKWATER_POSTGRES_DSN", dsn)
 	t.Setenv("BREAKWATER_RECONCILE_INTERVAL", "1m")
+	t.Setenv("BREAKWATER_ADMIN_TOKEN", "test")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)

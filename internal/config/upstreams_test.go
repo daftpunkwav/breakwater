@@ -39,6 +39,10 @@ func TestLoadRejectsBaseURLWithoutScheme(t *testing.T) {
 }
 
 func TestLoadAcceptsValidUpstreams(t *testing.T) {
+	// A valid upstream table needs an identity source alongside it (the
+	// unauthenticated-deployment guard); this test is about the table
+	// itself, so it arms the static set minimally.
+	t.Setenv("BREAKWATER_IDENTITY", `{"tiers":[{"id":"free","models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
 	if err := loadWithUpstreams(t,
 		`[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"]}]`); err != nil {
 		t.Fatalf("valid upstreams rejected: %v", err)
