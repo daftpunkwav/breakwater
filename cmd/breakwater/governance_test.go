@@ -87,3 +87,29 @@ func TestRedisNamespaceIsTrimmedAndEmptySafe(t *testing.T) {
 		t.Fatalf("namespace = %q, want the trimmed name", got)
 	}
 }
+
+// TestRedisOptionsPinClientTimeouts: the governance client's operation
+// timeouts are pinned at assembly, not left on the library defaults —
+// every request crosses this client serially, so a black-holed Redis
+// must stall a request well under a second per stage, and the same
+// bounds must hold on the TLS path.
+func TestRedisOptionsPinClientTimeouts(t *testing.T) {
+	t.Parallel()
+	opts := redisOptions(config.Config{Redis: config.Redis{Addr: "127.0.0.1:6379"}})
+	if opts.DialTimeout <= 0 || opts.ReadTimeout <= 0 || opts.WriteTimeout <= 0 {
+		t.Fatalf("client timeouts unset: dial=%s read=%s write=%s, want explicit bounds",
+			opts.DialTimeout, opts.ReadTimeout, opts.WriteTimeout)
+	}
+	if opts.TLSConfig != nil {
+		t.Fatal("plaintext address must not grow a TLS config")
+	}
+
+	tlsOpts := redisOptions(config.Config{Redis: config.Redis{Addr: "redis.example.com:6380", TLS: true}})
+	if tlsOpts.TLSConfig == nil || tlsOpts.TLSConfig.ServerName != "redis.example.com" {
+		t.Fatalf("tls config = %+v, want one verifying against redis.example.com", tlsOpts.TLSConfig)
+	}
+	if tlsOpts.DialTimeout <= 0 || tlsOpts.ReadTimeout <= 0 || tlsOpts.WriteTimeout <= 0 {
+		t.Fatalf("tls path client timeouts unset: dial=%s read=%s write=%s",
+			tlsOpts.DialTimeout, tlsOpts.ReadTimeout, tlsOpts.WriteTimeout)
+	}
+}

@@ -97,6 +97,15 @@ func (m *Memory) Set(_ context.Context, key string, entry Entry, baseTTL time.Du
 	if ttl < time.Millisecond {
 		ttl = time.Millisecond
 	}
+	// Clone before taking the write lock: the private copy is the
+	// store's ownership boundary, and holding the write lock across a
+	// copy of up to the capture cap would serialize every concurrent
+	// Set behind it.
+	stored := Entry{
+		Status: entry.Status,
+		Header: entry.Header.Clone(),
+		Body:   append([]byte(nil), entry.Body...),
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -104,11 +113,7 @@ func (m *Memory) Set(_ context.Context, key string, entry Entry, baseTTL time.Du
 		m.evictOne()
 	}
 	m.entries[key] = memoryEntry{
-		entry: Entry{
-			Status: entry.Status,
-			Header: entry.Header.Clone(),
-			Body:   append([]byte(nil), entry.Body...),
-		},
+		entry:   stored,
 		expires: m.now().Add(ttl),
 	}
 	return nil

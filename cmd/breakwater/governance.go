@@ -101,12 +101,29 @@ func redisNamespace(cfg config.Config) string {
 	return strings.TrimSpace(cfg.Redis.Namespace)
 }
 
+// The governance Redis client's operation timeouts, pinned here instead
+// of riding the library defaults (dial 5s, read/write 3s on top of the
+// client's own retries). Every request serially crosses this client in
+// the limiter and quota stages, so a black-holed Redis would otherwise
+// stall each one for seconds in every stage before the fail-closed
+// rejection. These bounds keep that stall well under a second per
+// stage; a timed-out backend call still fails closed.
+const (
+	redisDialTimeout   = time.Second
+	redisSocketTimeout = 500 * time.Millisecond
+)
+
 // redisOptions builds the client options for the configured Redis:
 // plaintext by default, TLS when the deployment opts in. The server
 // name comes from the address host so certificates verify against it
 // even when the address carries a port.
 func redisOptions(cfg config.Config) *redis.Options {
-	opts := &redis.Options{Addr: cfg.Redis.Addr}
+	opts := &redis.Options{
+		Addr:         cfg.Redis.Addr,
+		DialTimeout:  redisDialTimeout,
+		ReadTimeout:  redisSocketTimeout,
+		WriteTimeout: redisSocketTimeout,
+	}
 	if !cfg.Redis.TLS {
 		return opts
 	}

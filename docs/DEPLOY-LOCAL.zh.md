@@ -25,7 +25,9 @@ quota、缓存，然后把每个请求跨已配置的 upstream 路由并 failove
 - **In-memory（零配置）**——无需启动任何东西；状态是进程内的。单人工作
   站足够。
 - **Redis**（`BREAKWATER_REDIS_ADDR`）——limiter 桶与 quota 台账迁移到原子
-  Lua 脚本；余额跨重启存活。
+  Lua 脚本；余额跨重启存活。网关在组装期固定客户端自身的操作超时
+  （拨号 1s、读写 500ms）：黑洞化的 Redis 会在每个治理阶段一秒内
+  fail-closed 拒绝请求，而不是按库默认值把请求拖住数秒。
 - **PostgreSQL**（`BREAKWATER_POSTGRES_DSN`）——API key 从 system of record
   （`deploy/schema.sql`）解析，替代内联 identity JSON，且 quota 对账协议
   可以武装。

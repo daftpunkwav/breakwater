@@ -27,7 +27,11 @@ never sees a provider.
 - **In-memory (zero config)** — nothing to start; state is process-local.
   Fine for a single-user workstation.
 - **Redis** (`BREAKWATER_REDIS_ADDR`) — the limiter buckets and quota
-  ledger move to atomic Lua scripts; balances survive restarts.
+  ledger move to atomic Lua scripts; balances survive restarts. The
+  gateway pins the client's own operation timeouts (1s dial, 500ms
+  read/write) at assembly: a black-holed Redis fails a request closed
+  in well under a second per governance stage instead of stalling it
+  for seconds on the library defaults.
 - **PostgreSQL** (`BREAKWATER_POSTGRES_DSN`) — API keys resolve from the
   system of record (`deploy/schema.sql`) instead of the inline identity
   JSON, and the quota reconciliation protocol can arm.

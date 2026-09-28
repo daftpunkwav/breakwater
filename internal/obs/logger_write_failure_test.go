@@ -74,6 +74,37 @@ func TestLoggerFlushRespectsContextDeadline(t *testing.T) {
 	}
 }
 
+// TestLoggerCloseRespectsContextDeadline pins the shutdown bound of
+// Close itself: a sink that never accepts the write must not hold
+// Close past the caller's deadline — the drain goroutine's wait is
+// bounded like the flush, so the process exits instead of hanging in
+// it forever.
+func TestLoggerCloseRespectsContextDeadline(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	l := NewLogger(gatedWriter{gate: gate}, 8)
+	t.Cleanup(func() { close(gate) })
+
+	l.Record(Entry{Status: 200})
+	// Hold until the drain goroutine is at the blocked write, so the
+	// wait genuinely has a stuck drain to wait for.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !l.draining.Load() {
+		time.Sleep(time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := l.Close(ctx)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("close returned after %s, want a bounded wait", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close err = %v, want DeadlineExceeded", err)
+	}
+}
+
 // TestLoggerClampsCapacityToAtLeastOne pins the capacity floor: a
 // non-positive capacity degenerates to a one-slot queue, not a panic.
 func TestLoggerClampsCapacityToAtLeastOne(t *testing.T) {

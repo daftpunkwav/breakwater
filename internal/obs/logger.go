@@ -132,10 +132,21 @@ func (l *Logger) Flush(ctx context.Context) error {
 	}
 }
 
-// Close drains the queue and stops the drain goroutine.
+// Close drains the queue and stops the drain goroutine. The wait for
+// the drain goroutine is bounded by ctx, like the flush that follows:
+// a sink that never accepts the write must hold neither the drain nor
+// the process's shutdown past the caller's deadline.
 func (l *Logger) Close(ctx context.Context) error {
 	close(l.done)
-	l.wg.Wait()
+	waited := make(chan struct{})
+	go func() {
+		l.wg.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-ctx.Done():
+	}
 	return l.Flush(ctx)
 }
 
