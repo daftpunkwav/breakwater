@@ -180,6 +180,14 @@ func TestIdentityKeyIssuanceAndStatus(t *testing.T) {
 	if store2.createdKey {
 		t.Fatal("a payload with an unknown member reached the store")
 	}
+	// Trailing data after the optional document is rejected the same
+	// way: `{} {"name":"x"}` must never quietly issue an unnamed key.
+	if rec := doJSON(admin2, http.MethodPost, "/admin/users/u1/keys", `{} {"name":"x"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing data status = %d, want 400", rec.Code)
+	}
+	if store2.createdKey {
+		t.Fatal("a body with trailing data reached the store")
+	}
 	if rec := doJSON(admin2, http.MethodPost, "/admin/users/u1/keys", ""); rec.Code != http.StatusCreated {
 		t.Fatalf("empty key body status = %d, want 201", rec.Code)
 	}

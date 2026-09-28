@@ -88,7 +88,11 @@ func TestAdminQuotaTopUp(t *testing.T) {
 		t.Fatalf("unknown tenant top-up = %d, want 404", rec.Code)
 	}
 
-	for _, body := range []string{`{}`, `{"balance":-1}`, `not json`} {
+	// A typo'd extra member is rejected instead of silently ignored on
+	// a balance write, and so is a second JSON document after the first:
+	// `{"balance":1} {"balance":9}` must never quietly take either.
+	for _, body := range []string{`{}`, `{"balance":-1}`, `not json`,
+		`{"balance":1,"persist":false}`, `{"balance":1} {"balance":9}`} {
 		req = httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
 			strings.NewReader(body))
 		rec = httptest.NewRecorder()
@@ -96,16 +100,6 @@ func TestAdminQuotaTopUp(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %q status = %d, want 400", body, rec.Code)
 		}
-	}
-
-	// A typo'd extra member is rejected instead of silently ignored on
-	// a balance write.
-	req = httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
-		strings.NewReader(`{"balance":1,"persist":false}`))
-	rec = httptest.NewRecorder()
-	admin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("unknown member status = %d, want 400", rec.Code)
 	}
 	if received != 500 {
 		t.Fatalf("a rejected top-up reached the ledger: %d", received)

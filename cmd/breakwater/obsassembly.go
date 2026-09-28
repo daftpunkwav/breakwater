@@ -69,7 +69,9 @@ func newAccessLog(cfg config.Config, logger *slog.Logger) (*accessLog, error) {
 	if cfg.Obs.AccessLogPath == "" {
 		return &accessLog{}, nil
 	}
-	file, err := os.OpenFile(cfg.Obs.AccessLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// 0o600: the entries carry tenant and key identifiers, so the file
+	// stays private to the gateway's own user.
+	file, err := os.OpenFile(cfg.Obs.AccessLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}

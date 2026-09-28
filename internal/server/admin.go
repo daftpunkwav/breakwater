@@ -439,11 +439,18 @@ func decodeEnabled(w http.ResponseWriter, r *http.Request) (bool, bool) {
 // decodeAdminJSON parses one admin write body within the size cap.
 // Unknown fields are rejected: a typo'd member (say "rpms" for "rpm")
 // must fail the write loudly, never land as a silent no-op on a
-// governance surface.
+// governance surface. Trailing data after the first JSON value is
+// rejected the same way: `{"balance":5} {"balance":9}` must never
+// silently take the first document.
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"malformed or unexpected request body")
+		return false
+	}
+	if err := dec.Decode(v); !errors.Is(err, io.EOF) {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
 			"malformed or unexpected request body")
 		return false
@@ -454,11 +461,16 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // decodeAdminJSONOptional is decodeAdminJSON for the endpoints whose
 // payload is optional (the unnamed-key issuance): an absent body (EOF)
 // decodes as the zero value, every other malformed or unknown-member
-// document is rejected exactly the same way.
+// document — trailing data included — is rejected exactly the same way.
 func decodeAdminJSONOptional(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"malformed or unexpected request body")
+		return false
+	}
+	if err := dec.Decode(v); !errors.Is(err, io.EOF) {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
 			"malformed or unexpected request body")
 		return false
