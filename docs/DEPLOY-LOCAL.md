@@ -1,5 +1,7 @@
 # Local deployment: real providers, real clients
 
+> Language: **English** | [简体中文](DEPLOY-LOCAL.zh.md)
+
 This is the operational path from a fresh checkout to a gateway that
 serves your agent applications from your own providers. The mock
 upstream remains available for fault injection (see the README), but

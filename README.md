@@ -1,5 +1,7 @@
 # Breakwater
 
+> Language: **English** | [简体中文](README.zh.md)
+
 An LLM gateway written in Go that serves three client-facing API formats —
 **OpenAI Chat Completions** (`/v1/chat/completions`), **OpenAI Responses**
 (`/v1/responses`) and **Anthropic Messages** (`/v1/messages`) — over one
@@ -152,7 +154,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_IDENTITY`                 | _(none)_       | JSON identity set (`tiers`, `tenants` with `role` and user-level `overrides`); arms the governance pipeline |
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
-| `BREAKWATER_REDIS_NAMESPACE`          | _(none)_       | Prefixes every limiter and quota key. Set it whenever two deployments share one Redis instance — otherwise they share tenant balances, and one environment's sweeper refunds the other's live leases. Empty assumes this gateway owns its Redis outright. **Setting it on a deployment that already has balances moves every key, and the static-identity seeder then re-provisions each tenant at its full monthly budget** — treat it as a reset, not a rename. A PostgreSQL-identity deployment has no seeder, so there a namespace change leaves every tenant without a ledger until one is provisioned. |
+| `BREAKWATER_REDIS_NAMESPACE`          | _(none)_       | Prefixes every limiter and quota key. Set it whenever two deployments share one Redis instance — otherwise they share tenant balances, and one environment's sweeper refunds the other's live leases. Empty assumes this gateway owns its Redis outright. **Setting it on a deployment that already has balances abandons every existing key (nothing is migrated), and the static-identity seeder then re-provisions each tenant at its full monthly budget** — treat it as a reset, not a rename. A PostgreSQL-identity deployment has no seeder, so there a namespace change leaves every tenant without a ledger until one is provisioned. |
 | `BREAKWATER_QUOTA_LEASE_TTL`          | _derived_      | How long a reserved quota lease may live before the sweeper reclaims and refunds it. Derived from `OverallDeadline + StreamTimeout` plus headroom, because a horizon shorter than the longest request silently refunds a request that really spent tokens; a value below that is rejected at startup. An unbounded stream or deadline leaves nothing to derive from, so those default to 24h. |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | Upstream attempts per request                              |
 | `BREAKWATER_RETRY_BUDGET_MAX_IN_FLIGHT` | `64`         | Process-wide concurrent retry cap                          |
@@ -161,6 +163,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
+| `BREAKWATER_ACCESS_LOG_QUEUE_SIZE`    | `4096`         | Capacity of the access log's in-memory queue; overflow drops entries and counts the drops |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing; needs Redis + PostgreSQL; `0` disables |
 | `BREAKWATER_INSIGHTS_DSN`             | _(main DSN)_   | PostgreSQL the monitoring records persist to; defaults to `BREAKWATER_POSTGRES_DSN`; unset without any DSN |

@@ -1,5 +1,7 @@
 # Testing
 
+> Language: **English** | [简体中文](TESTING.zh.md)
+
 Every package ships with its tests colocated (`foo_test.go` next to
 `foo.go`, same or `_test` package) — Go's convention, kept deliberately:
 no separate test tree, no parallel hierarchy to drift.

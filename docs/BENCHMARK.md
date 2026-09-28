@@ -1,5 +1,7 @@
 # Benchmarks
 
+> Language: **English** | [简体中文](BENCHMARK.zh.md)
+
 > Status: methodology and scenario set are final; the numbers below are
 > filled in by running the loadtest scenarios on real hardware. No
 > figures on this page are estimates — an empty cell means "not yet

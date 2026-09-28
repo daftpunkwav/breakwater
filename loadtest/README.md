@@ -1,5 +1,7 @@
 # loadtest
 
+> Language: **English** | [简体中文](README.zh.md)
+
 k6 load test and chaos scenarios for the breakwater gateway. Each
 scenario targets a specific system invariant and produces the evidence
 published under `docs/`.
@@ -10,8 +12,11 @@ published under `docs/`.
 - The mock upstream: `go run ./cmd/mockllm -addr 127.0.0.1:8090`
 - [k6](https://k6.io) on PATH
 
-Common environment: `BASE_URL` (default `http://127.0.0.1:8080`),`API_KEY` (a seeded key; each script defaults to `bw-local-t1`,`quota-race.js` to `bw-local-t2`), `RATE`, `DURATION`.`quota-race.js` additionally reads `ADMIN_TOKEN` for its teardown
-query, which is required whenever the gateway runs with`BREAKWATER_ADMIN_TOKEN`.
+Common environment: `BASE_URL` (default `http://127.0.0.1:8080`), `API_KEY`
+(a seeded key; each script defaults to `bw-local-t1`, `quota-race.js` to
+`bw-local-t2`), `RATE`, `DURATION`. `quota-race.js` additionally reads
+`ADMIN_TOKEN` for its teardown query, which is required whenever the
+gateway runs with `BREAKWATER_ADMIN_TOKEN`.
 
 ## Scenarios
 

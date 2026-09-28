@@ -1,5 +1,7 @@
 # Chaos report
 
+> Language: **English** | [简体中文](CHAOS-REPORT.zh.md)
+
 > Status: the fault-injection procedures below are final and scripted;
 > the timelines are filled in by executing them. Nothing here is
 > simulated on paper — an empty section means "not yet executed on
