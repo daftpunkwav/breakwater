@@ -173,11 +173,17 @@ func (s *PGStore) writeLoop() {
 	}
 }
 
-// flush swaps the queue under the mutex and inserts the batch.
+// flush swaps the queue under the mutex and inserts the batch. The
+// queue is re-seeded with a fresh slice pre-sized to one batch instead
+// of reset to nil: a nil queue makes every flush cycle regrow the
+// backing array through the whole append-doubling chain, while a
+// pre-sized one costs a single allocation per cycle. The swapped-out
+// array cannot be reused as the queue — insert still holds the batch
+// while Record appends concurrently.
 func (s *PGStore) flush() {
 	s.mu.Lock()
 	batch := s.queue
-	s.queue = nil
+	s.queue = make([]Record, 0, batchSize)
 	s.mu.Unlock()
 	if len(batch) > 0 {
 		s.insert(context.Background(), batch)

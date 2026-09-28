@@ -6,6 +6,7 @@
 package obs
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -145,5 +146,40 @@ func TestLoggerCloseDrains(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"Status":4`) && !strings.Contains(out.String(), `"status":4`) {
 		t.Fatalf("last entry missing from %q", out.String())
+	}
+}
+
+// countingWriter counts sink writes; for the file sink each one is a
+// syscall.
+type countingWriter struct{ writes int }
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return len(p), nil
+}
+
+// TestLoggerBatchesSinkWrites pins the drain's batching: entries queued
+// between two drain passes leave in whole-buffer sink writes, not one
+// write per entry, with the written counter settled by the pass.
+func TestLoggerBatchesSinkWrites(t *testing.T) {
+	t.Parallel()
+	out := &countingWriter{}
+	// The drain loop is the drain method's only production caller; the
+	// benchmark and this test drive it directly for determinism.
+	l := &Logger{ring: make([]Entry, 64), out: out, buf: bufio.NewWriterSize(out, logWriteBufferSize)}
+
+	for i := 0; i < 10; i++ {
+		l.Record(Entry{Status: i})
+	}
+	l.drain()
+
+	if out.writes != 1 {
+		t.Fatalf("sink writes = %d, want 1 for one batched pass", out.writes)
+	}
+	if got := l.Written(); got != 10 {
+		t.Fatalf("written = %d, want 10 after the pass", got)
+	}
+	if got := l.Buffered(); got != 0 {
+		t.Fatalf("buffered = %d, want 0 after the pass", got)
 	}
 }
