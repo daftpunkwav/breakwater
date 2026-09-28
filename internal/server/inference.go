@@ -35,7 +35,9 @@ func overContext(limits map[string]int64, model string, inputTokens int64) bool 
 	return ok && limit > 0 && inputTokens > limit
 }
 
-// routeOfFormat maps a client format to its route path.
+// routeOfFormat maps a client format to its route path. Unknown
+// formats resolve to the canonical chat route — the same default
+// WireFor and Ingest hold over Format.
 func routeOfFormat(format protocol.Format) string {
 	switch format {
 	case protocol.FormatOpenAIResponses:

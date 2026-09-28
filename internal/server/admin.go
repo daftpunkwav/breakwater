@@ -56,8 +56,10 @@ const maxAdminBodyBytes = 1 << 12
 type BalanceLookup func(r *http.Request, tenantID string) (int64, error)
 
 // BalanceWriter provisions or resets a tenant balance (top-up,
-// correction). It returns quota.ErrUnknownTenant for a tenant with no
-// ledger.
+// correction). A tenant with no ledger gets one — the write is an
+// upsert, per the quota.Ledger SetBalance contract — so a PUT to an
+// unprovisioned id creates the balance instead of failing; any returned
+// error is a backend failure.
 type BalanceWriter func(r *http.Request, tenantID string, balance int64) error
 
 // BreakerStates lists the current breaker state of every configured
@@ -152,7 +154,12 @@ func NewAdmin(token string, balances BalanceLookup, setter BalanceWriter, breake
 // endpoints under method guards (GET reads, PUT tops up).
 func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !a.authorized(r) {
-		w.WriteHeader(http.StatusUnauthorized)
+		// The same JSON envelope every other admin rejection uses, plus
+		// the WWW-Authenticate challenge RFC 6750 expects on a 401 —
+		// script clients read the status, humans read the body.
+		w.Header().Set("WWW-Authenticate", `Bearer realm="breakwater-admin"`)
+		protocol.WriteError(w, http.StatusUnauthorized, "unauthorized",
+			"admin bearer token missing or invalid")
 		return
 	}
 	switch {
@@ -278,6 +285,8 @@ func (a *Admin) serveQuotaTopUp(w http.ResponseWriter, r *http.Request, tenantID
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"tenant": tenantID, "balance": *body.Balance})
 	case errors.Is(err, quota.ErrUnknownTenant):
+		// Defensive: an upsert writer never reports this, but a stricter
+		// one maps to the same 404 the read path renders.
 		protocol.WriteError(w, http.StatusNotFound, "tenant_unknown", "no balance for tenant "+tenantID)
 	default:
 		protocol.WriteError(w, http.StatusServiceUnavailable, "balance_unavailable",
@@ -452,7 +461,7 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	}
 	if err := dec.Decode(v); !errors.Is(err, io.EOF) {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-			"malformed or unexpected request body")
+			"unexpected data after the JSON body")
 		return false
 	}
 	return true
@@ -472,7 +481,7 @@ func decodeAdminJSONOptional(w http.ResponseWriter, r *http.Request, v any) bool
 	}
 	if err := dec.Decode(v); !errors.Is(err, io.EOF) {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-			"malformed or unexpected request body")
+			"unexpected data after the JSON body")
 		return false
 	}
 	return true

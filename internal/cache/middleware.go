@@ -166,16 +166,14 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 	}
 }
 
-// replayHeaderNames are the stored-entry headers a replay must carry:
-// the body's media type, and the Retry-After a negatively cached 429/5xx
-// owes its client — a hit that drops it invites the immediate retry the
-// upstream asked to wait out. Mirrors the relay's passthrough set.
-var replayHeaderNames = []string{"Content-Type", "Retry-After"}
-
-// replay writes a stored entry to a client.
+// replay forwards a stored entry's headers through the relay's single
+// passthrough set (protocol.PassthroughHeaderNames): the body's media
+// type, and the Retry-After a negatively cached 429/5xx owes its
+// client — a hit that drops it invites the immediate retry the upstream
+// asked to wait out. One list, two consumers: neither can drift.
 func replay(w http.ResponseWriter, entry Entry) {
 	header := w.Header()
-	for _, name := range replayHeaderNames {
+	for _, name := range protocol.PassthroughHeaderNames {
 		if v := entry.Header.Get(name); v != "" {
 			header.Set(name, v)
 		}

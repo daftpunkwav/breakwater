@@ -99,6 +99,9 @@ type Breakdown struct {
 
 // Report is the full assessment the admin surface renders: the window
 // summary, the stability timeline and the per-dimension breakdowns.
+// Every list field renders as a JSON array even when the window is
+// empty, and each breakdown carries at most the top 20 rows by traffic
+// — a busier window reports the busiest 20 without a truncation marker.
 type Report struct {
 	Summary    Summary       `json:"summary"`
 	Timeline   []SeriesPoint `json:"timeline"`

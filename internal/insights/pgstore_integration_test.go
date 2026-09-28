@@ -161,7 +161,8 @@ func TestPGInsightsReportEmptyWindow(t *testing.T) {
 	if rep.Summary.Requests != 0 || rep.Summary.SuccessRate != 0 || rep.Summary.P99MS != 0 {
 		t.Fatalf("summary = %+v, want the zero report", rep.Summary)
 	}
-	if rep.Summary.FailureMix != nil {
+	// An empty window renders empty lists, never null.
+	if len(rep.Summary.FailureMix) != 0 {
 		t.Fatalf("failure mix = %+v, want none", rep.Summary.FailureMix)
 	}
 }

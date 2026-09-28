@@ -28,6 +28,17 @@ func TestAdminRequiresBearerToken(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 without a token", rec.Code)
 	}
+	// The refusal uses the same JSON envelope as every other admin
+	// rejection, and carries the Bearer challenge for honest clients.
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("content type = %q, want the JSON envelope", ct)
+	}
+	if rec.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("missing WWW-Authenticate challenge on the 401")
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"unauthorized"`) {
+		t.Fatalf("body = %s, want the unauthorized envelope", rec.Body.String())
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/admin/breakers", nil)
 	req.Header.Set("Authorization", "Bearer wrong")

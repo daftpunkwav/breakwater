@@ -166,14 +166,14 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 - `GET /metrics` — Prometheus 文本暴露（手写 registry）
 - `GET /version` — 构建标识与 Go 版本
 - `GET /admin/tenants/{id}/quota` — 当前余额
-- `PUT /admin/tenants/{id}/quota` — 充值或修正余额（`{"balance": N}`）；对账
-  协议把修正间隔视为设计内跳过
+- `PUT /admin/tenants/{id}/quota` — 充值或修正余额（`{"balance": N}`）；对无余额
+  的 id 执行 PUT 会创建余额（upsert）；对账协议把修正间隔视为设计内跳过
 - `GET /admin/breakers` — 每 upstream 的 breaker 状态
 - `POST /admin/breakers/{id}/reset` — 强制打开的 breaker 关闭
 - `POST /admin/upstreams/{id}/probe` — 按需做一次健康探测
 - `GET /admin/insights?hours=N` — 尾随窗口（默认 24）的稳定性报告：成功率、
   按原因的失败构成、延迟分位数、5 分钟时间线与按 tenant/key/model/upstream
-  的拆分。需要监控存储（任意 PostgreSQL DSN）。
+  的拆分（每个维度最多流量最高的 20 行）。需要监控存储（任意 PostgreSQL DSN）。
 - `GET /admin/routing` — 每个已知模型与 upstream 的当前 eligibility，外加
   auto-disable 的 upstream 及每次决策的原因与时刻
 - `PUT /admin/models/{id}` — 启用或禁用模型（`{"enabled": false}`）；被禁模型

@@ -33,7 +33,10 @@ type Options struct {
 	// Listener, when set, is served instead of binding Addr. A caller
 	// that already holds a bound listener passes it here, which removes
 	// the reserve-release-rebind race a caller would otherwise have to
-	// accept when it needs a known address up front.
+	// accept when it needs a known address up front. Ownership transfers
+	// with it: Run closes the listener when serving ends (Serve closes
+	// it on every return path), so the caller must neither close nor
+	// reuse it afterwards.
 	Listener net.Listener
 }
 

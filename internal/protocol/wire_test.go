@@ -42,7 +42,7 @@ func TestRenderExchangeBodyClampsUnrenderableStatus(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{0, 42, 600, 999} {
 		rec := httptest.NewRecorder()
-		renderExchangeBody(rec, status, http.Header{}, []byte("boom"), passthroughHeaderNames)
+		renderExchangeBody(rec, status, http.Header{}, []byte("boom"), PassthroughHeaderNames)
 		if rec.Code != http.StatusBadGateway {
 			t.Fatalf("status %d rendered as %d, want clamped 502", status, rec.Code)
 		}

@@ -181,11 +181,11 @@ All configuration is environment-based; core knobs:
 - `GET /metrics` — Prometheus text exposition (hand-written registry)
 - `GET /version` — build identifier and Go version
 - `GET /admin/tenants/{id}/quota` — current balance
-- `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); the reconcile protocol treats the interval across a correction as skip-by-design
+- `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); a PUT to an id with no balance creates it (upsert); the reconcile protocol treats the interval across a correction as skip-by-design
 - `GET /admin/breakers` — per-upstream breaker states
 - `POST /admin/breakers/{id}/reset` — force an open breaker closed
 - `POST /admin/upstreams/{id}/probe` — one health probe on demand
-- `GET /admin/insights?hours=N` — the stability report for the trailing window (default 24): success rate, failure mix by cause, latency percentiles, a 5-minute timeline and per-tenant/key/model/upstream breakdowns. Requires the monitoring store (any PostgreSQL DSN).
+- `GET /admin/insights?hours=N` — the stability report for the trailing window (default 24): success rate, failure mix by cause, latency percentiles, a 5-minute timeline and per-tenant/key/model/upstream breakdowns (top 20 rows each, busiest first). Requires the monitoring store (any PostgreSQL DSN).
 - `GET /admin/routing` — every known model and upstream with its current eligibility, plus the auto-disabled upstreams with the reason and moment of each decision
 - `PUT /admin/models/{id}` — enable or disable a model (`{"enabled": false}`); disabled models refuse requests with `403 model_disabled`
 - `PUT /admin/upstreams/{id}` — enable or disable an upstream; disabled upstreams drop out of every candidate list. Switches are in-memory and reset on restart. An operator enable clears both disable channels (see below).

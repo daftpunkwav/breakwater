@@ -49,7 +49,10 @@ type IngestResult struct {
 }
 
 // Ingest parses a client request of the given format into the
-// canonical form plus the forwardable body.
+// canonical form plus the forwardable body. The empty or unknown
+// format parses as the canonical wire — the same contract WireFor
+// holds, so a new format enum member missed in this switch surfaces as
+// openai-chat behavior, never as a nil dereference.
 func Ingest(format Format, body []byte) (IngestResult, error) {
 	switch format {
 	case FormatOpenAIResponses:
@@ -114,7 +117,12 @@ type ioWriter = interface {
 }
 
 // WireFor returns the wire of a format; the empty or unknown format
-// resolves to the canonical wire so callers never nil-check.
+// resolves to the canonical wire so callers never nil-check. That
+// default is a contract, not an accident: adding a Format member means
+// extending every switch over it (Ingest, WireFor, and the route table
+// in internal/server) — until then the new format silently behaves as
+// openai-chat, which the single formats slice at the composition root
+// makes unlikely by registering every served surface in one place.
 func WireFor(format Format) Wire {
 	switch format {
 	case FormatOpenAIResponses:
@@ -134,12 +142,12 @@ func (chatWire) Format() Format { return FormatOpenAIChat }
 
 // RenderSuccess implements Wire: verbatim passthrough.
 func (chatWire) RenderSuccess(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
-	renderExchangeBody(w, status, header, upstreamBody, passthroughHeaderNames)
+	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
 }
 
 // RenderUpstreamError implements Wire: verbatim passthrough.
 func (chatWire) RenderUpstreamError(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
-	renderExchangeBody(w, status, header, upstreamBody, passthroughHeaderNames)
+	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
 }
 
 // RenderError implements Wire: the OpenAI error envelope.
@@ -150,9 +158,13 @@ func (chatWire) RenderError(w http.ResponseWriter, status int, code, message str
 // Stream implements Wire: the canonical wire streams bytes untouched.
 func (chatWire) Stream() StreamTranscoder { return nil }
 
-// passthroughHeaders are the upstream response headers a client may
-// act on and are therefore forwarded.
-var passthroughHeaderNames = []string{"Content-Type", "Retry-After"}
+// PassthroughHeaderNames are the upstream response headers a client may
+// act on and are therefore forwarded: the body's media type, and the
+// Retry-After a 429/5xx owes its client. This is the single source of
+// truth — the cache's replay of a stored entry forwards exactly this
+// set, so a header added here reaches replayed responses too. Treat it
+// as read-only.
+var PassthroughHeaderNames = []string{"Content-Type", "Retry-After"}
 
 // renderExchangeBody writes status, selected headers and body. A
 // broken upstream can report a status outside the renderable range;

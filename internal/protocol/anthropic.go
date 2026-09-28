@@ -162,7 +162,7 @@ func (anthropicWire) Format() Format { return FormatAnthropicMessages }
 func (anthropicWire) RenderSuccess(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
 	resp, ok := parseChatResponse(upstreamBody)
 	if !ok {
-		renderExchangeBody(w, status, header, upstreamBody, passthroughHeaderNames)
+		renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
 		return
 	}
 	usage := Usage{}

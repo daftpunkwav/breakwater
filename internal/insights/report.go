@@ -103,7 +103,24 @@ func report(ctx context.Context, q queryer, from, to time.Time) (Report, error) 
 	if rep.ByUpstream, err = dimension(ctx, q, from, to, "upstream"); err != nil {
 		return Report{}, err
 	}
+	// Empty windows render as empty lists, never null — the collection
+	// contract the rest of the admin surface holds.
+	rep.Summary.FailureMix = nonNil(rep.Summary.FailureMix)
+	rep.Timeline = nonNil(rep.Timeline)
+	rep.ByTenant = nonNil(rep.ByTenant)
+	rep.ByKey = nonNil(rep.ByKey)
+	rep.ByModel = nonNil(rep.ByModel)
+	rep.ByUpstream = nonNil(rep.ByUpstream)
 	return rep, nil
+}
+
+// nonNil renders a missing slice as the empty slice its JSON consumer
+// expects.
+func nonNil[S ~[]E, E any](s S) S {
+	if s == nil {
+		return S{}
+	}
+	return s
 }
 
 // failures breaks the window's failures down by cause, most frequent
@@ -156,6 +173,9 @@ func timeline(ctx context.Context, q queryer, from, to time.Time) ([]SeriesPoint
 
 // dimension is the shared per-slice breakdown query; column is one of
 // the fixed dimension names this file calls it with, never user input.
+// The LIMIT 20 is the published contract: each breakdown carries at
+// most the top 20 rows by traffic, and a window with more slices than
+// that reports the busiest 20 without a truncation marker.
 func dimension(ctx context.Context, q queryer, from, to time.Time, column string) ([]Dimension, error) {
 	rows, err := q.Query(ctx, `
 		SELECT COALESCE(NULLIF(`+column+`, ''), '-') AS name,

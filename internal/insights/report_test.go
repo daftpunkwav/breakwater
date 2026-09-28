@@ -187,8 +187,33 @@ func TestReportSkipsFailureMixWithoutFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
-	if rep.Summary.FailureMix != nil {
+	if len(rep.Summary.FailureMix) != 0 {
 		t.Fatalf("failure mix = %v, want none on a clean window", rep.Summary.FailureMix)
+	}
+}
+
+// TestReportRendersEmptyListsAsEmpty pins the collection contract: an
+// empty window renders every list as [], never null.
+func TestReportRendersEmptyListsAsEmpty(t *testing.T) {
+	t.Parallel()
+	q := summaryQueryer(0, 0)
+	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	for name, rows := range map[string][]Dimension{
+		"by_tenant": rep.ByTenant, "by_key": rep.ByKey,
+		"by_model": rep.ByModel, "by_upstream": rep.ByUpstream,
+	} {
+		if rows == nil {
+			t.Errorf("%s = null, want []", name)
+		}
+	}
+	if rep.Timeline == nil {
+		t.Error("timeline = null, want []")
+	}
+	if rep.Summary.FailureMix == nil {
+		t.Error("failure_mix = null, want []")
 	}
 }
 

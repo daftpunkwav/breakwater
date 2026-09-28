@@ -162,7 +162,7 @@ func (responsesWire) RenderSuccess(w http.ResponseWriter, status int, header htt
 	resp, ok := parseChatResponse(upstreamBody)
 	if !ok {
 		// Not a parseable chat reply: pass through rather than guess.
-		renderExchangeBody(w, status, header, upstreamBody, passthroughHeaderNames)
+		renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
 		return
 	}
 	writeJSONResponse(w, status, responsesObject(resp.ID, resp.Model, resp.Choices[0].Message.Content, resp.Usage))
@@ -171,7 +171,7 @@ func (responsesWire) RenderSuccess(w http.ResponseWriter, status int, header htt
 // RenderUpstreamError implements Wire: upstream errors are already
 // OpenAI-shaped; rewrap under this wire's content type.
 func (responsesWire) RenderUpstreamError(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
-	renderExchangeBody(w, status, header, upstreamBody, passthroughHeaderNames)
+	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
 }
 
 // RenderError implements Wire.
