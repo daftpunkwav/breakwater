@@ -191,6 +191,43 @@ func TestExecutorHintOnFinalAttemptKeepsPassthrough(t *testing.T) {
 	}
 }
 
+// TestExecutorHintOnDeadlineKeepsPassthrough: the failover path strips
+// the first candidate's hint, and an overall deadline expiring during
+// that stripped wait wraps the same error object into the loop's final
+// error. finish must still recognise it as the last-failed stash and
+// pass the upstream error through — a clone from the strip would break
+// the identity match and downgrade the reply to a generic 502.
+func TestExecutorHintOnDeadlineKeepsPassthrough(t *testing.T) {
+	t.Parallel()
+	impatient := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
+		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
+		resp.Header.Set("Retry-After", "30")
+		return resp, nil
+	}}
+	healthy := &stubUpstream{id: "fast", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
+		return jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`), nil
+	}}
+	// The stripped hint contributes no DelayHint, so the loop falls back
+	// to its computed backoff — 5s against a 50ms overall deadline. The
+	// deadline ends the run inside that backoff sleep, wrapping the
+	// stripped error deterministically, with no real waiting.
+	exec := New(retry.Policy{
+		MaxAttempts:     3,
+		OverallDeadline: 50 * time.Millisecond,
+		BackoffInitial:  5 * time.Second,
+	}, nil)
+	result := execute(t, exec, []upstream.Upstream{impatient, healthy}, false, `{}`)
+	if result.Status != http.StatusTooManyRequests {
+		t.Fatalf("status = %d body = %s, want the 429 passthrough", result.Status, result.Body)
+	}
+	if !strings.Contains(string(result.Body), "rate_limit_error") {
+		t.Fatalf("body = %s, want the upstream error body passed through", result.Body)
+	}
+	if result.ErrorCode != "" {
+		t.Fatalf("error code = %q, want empty for an upstream passthrough", result.ErrorCode)
+	}
+}
+
 // TestStashParsesRetryAfterHeader pins the parsing at the stash site:
 // integer seconds and HTTP-dates land on the status error, garbage and
 // absence mean no hint.

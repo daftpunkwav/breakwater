@@ -49,16 +49,20 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("upstream exchange failed with status %d", e.StatusCode)
 }
 
-// StripRetryAfter returns err with any Retry-After hint removed. The
-// attempt loop strips the hint when the next attempt will target a
-// different upstream: the wait one upstream asked for says nothing
-// about another. Errors without a hint pass through unchanged.
+// StripRetryAfter clears any Retry-After hint from err in place and
+// returns err itself. The in-place clear is deliberate: the relay's
+// passthrough renderer matches the final loop error against the stash
+// by object identity, and the loop wraps that error when an overall
+// deadline or the retry budget ends the run — a clone would survive
+// inside the wrap yet fail the identity match, downgrading an upstream
+// error passthrough to a generic gateway envelope. The hint must die
+// either way: no later attempt may wait on a schedule a different
+// upstream or credential asked for. Errors without a hint pass through
+// untouched.
 func StripRetryAfter(err error) error {
 	var status *StatusError
 	if errors.As(err, &status) && status.RetryAfter > 0 {
-		clone := *status
-		clone.RetryAfter = 0
-		return &clone
+		status.RetryAfter = 0
 	}
 	return err
 }

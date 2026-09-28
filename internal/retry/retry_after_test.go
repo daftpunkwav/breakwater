@@ -47,15 +47,15 @@ func TestParseRetryAfter(t *testing.T) {
 func TestStripRetryAfter(t *testing.T) {
 	t.Parallel()
 	hinted := &StatusError{StatusCode: 429, RetryAfter: 5 * time.Second}
-	stripped, ok := StripRetryAfter(hinted).(*StatusError)
-	if !ok {
-		t.Fatalf("StripRetryAfter returned %T, want *StatusError", StripRetryAfter(hinted))
+	stripped := StripRetryAfter(hinted)
+	// The clear is in place on purpose: the relay's passthrough renderer
+	// matches the loop's final error against its stash by object
+	// identity, so a clone here would break the match.
+	if stripped != error(hinted) {
+		t.Fatalf("StripRetryAfter returned %T, want the same error object", stripped)
 	}
-	if stripped.StatusCode != 429 || stripped.RetryAfter != 0 {
-		t.Fatalf("stripped = %+v, want the status kept and the hint cleared", stripped)
-	}
-	if hinted.RetryAfter == 0 {
-		t.Fatal("StripRetryAfter mutated the original error")
+	if hinted.StatusCode != 429 || hinted.RetryAfter != 0 {
+		t.Fatalf("stripped = %+v, want the status kept and the hint cleared in place", hinted)
 	}
 
 	plain := errors.New("connection reset")

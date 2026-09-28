@@ -387,11 +387,10 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 	// candidate or to a different credential of the same upstream. The
 	// hint travels only when a further attempt will actually run and
 	// re-hit the same credential: stripping on the final attempt would
-	// replace the error with a clone and break the identity match the
-	// last-failed passthrough in finish relies on. No retry can read
-	// the hint then, so leaving it is free — which is also why a
-	// committed error skips the lookahead entirely: the loop ends on
-	// it without ever consulting anything.
+	// clear a hint nobody can read again. No retry can read the hint
+	// then, so leaving it is free — which is also why a committed error
+	// skips the lookahead entirely: the loop ends on it without ever
+	// consulting anything.
 	if !errors.Is(err, retry.ErrCommitted) && r.exec.policy.MaxAttempts > attempt {
 		next, _ := r.target(attempt + 1)
 		if next.ID() != cand.ID() || r.credentialRotates(cand) {
