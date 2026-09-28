@@ -53,6 +53,37 @@ func PromptTokens(req protocol.ChatRequest) int64 {
 	return promptEstimate(req)
 }
 
+// PromptTokens returns the prompt-only estimate, scanning the canonical
+// messages at most once per request and caching the result on the
+// carrier. The reservation estimate, the context-window pre-filter and
+// the partial-stream meter all read the same number of the same
+// request, so each re-counting the prompt would repeat an O(prompt)
+// scan on the request path. The carrier is single-goroutine by
+// contract, so the cache needs no locking.
+func (c *Carrier) PromptTokens() int64 {
+	if !c.promptKnown {
+		c.promptTokens = promptEstimate(c.Chat)
+		c.promptKnown = true
+	}
+	return c.promptTokens
+}
+
+// ReserveTokens returns the pre-call token estimate of the request on
+// the carrier: the cached prompt estimate plus the clamped completion
+// budget. It is the carrier form of EstimateTokens — the reservation
+// stages' entry point, so the prompt scan is shared instead of
+// repeated.
+func (c *Carrier) ReserveTokens(maxRequestTokens int64) int64 {
+	return c.PromptTokens() + completionEstimate(c.Chat, maxRequestTokens)
+}
+
+// EstimatePartialTokens estimates usage for a stream that ended without
+// a usage report, from the carrier's cached prompt estimate. It is the
+// carrier form of EstimatePartialTokens.
+func (c *Carrier) EstimatePartialTokens(streamBytes int64) int64 {
+	return c.PromptTokens() + streamBytes/4
+}
+
 func promptEstimate(req protocol.ChatRequest) int64 {
 	prompt := int64(0)
 	for _, m := range req.Messages {

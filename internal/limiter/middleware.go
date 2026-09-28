@@ -44,7 +44,10 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 			}
 
 			limits := Limits{RPM: carrier.Tenant.Tier.RPM, TPM: carrier.Tenant.Tier.TPM}
-			tokens := pipeline.EstimateTokens(carrier.Chat, carrier.Tenant.Tier.MaxTokens)
+			// The carrier caches the prompt scan, so the context
+			// pre-filter downstream reuses this estimate instead of
+			// re-counting the prompt.
+			tokens := carrier.ReserveTokens(carrier.Tenant.Tier.MaxTokens)
 
 			decision, err := l.Allow(r.Context(), carrier.Tenant.ID, limits, tokens)
 			if err != nil {

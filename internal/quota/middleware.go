@@ -45,7 +45,7 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 			if amount <= 0 {
 				// A deployment without the limiter stage still needs an
 				// estimate; with the standard order this never fires.
-				amount = pipeline.EstimateTokens(carrier.Chat, carrier.Tenant.Tier.MaxTokens)
+				amount = carrier.ReserveTokens(carrier.Tenant.Tier.MaxTokens)
 				carrier.Tokens = amount
 			}
 

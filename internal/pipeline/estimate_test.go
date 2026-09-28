@@ -103,3 +103,33 @@ func TestEstimateTokensClampBoundaryKeepsEqualBudget(t *testing.T) {
 		t.Fatalf("EstimateTokens = %d, want 503 (3 prompt words + 500)", got)
 	}
 }
+
+func TestCarrierEstimatesScanOnceAndMatchFreeForms(t *testing.T) {
+	t.Parallel()
+	maxTokens := int64(10_000)
+	chat := protocol.ChatRequest{
+		Model:     "mock-model",
+		Messages:  []protocol.ChatMessage{{Role: "user", Content: "one two three"}, {Role: "assistant", Content: "four five"}},
+		MaxTokens: &maxTokens,
+	}
+	carrier := &Carrier{Chat: chat}
+
+	// The carrier forms agree with the free forms they mirror.
+	if got, want := carrier.PromptTokens(), PromptTokens(chat); got != want {
+		t.Fatalf("carrier PromptTokens = %d, want %d", got, want)
+	}
+	if got, want := carrier.ReserveTokens(500), EstimateTokens(chat, 500); got != want {
+		t.Fatalf("carrier ReserveTokens = %d, want %d", got, want)
+	}
+	if got, want := carrier.EstimatePartialTokens(100), EstimatePartialTokens(chat, 100); got != want {
+		t.Fatalf("carrier EstimatePartialTokens = %d, want %d", got, want)
+	}
+
+	// Mutating the caller's chat afterwards must not move the cached
+	// estimate: one scan per request, by design — the stages downstream
+	// of ingest read the same request.
+	chat.Messages[0].Content = "completely different text"
+	if got := carrier.PromptTokens(); got != 5 {
+		t.Fatalf("cached PromptTokens = %d, want the cached 5", got)
+	}
+}

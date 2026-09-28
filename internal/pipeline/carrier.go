@@ -63,6 +63,12 @@ type Carrier struct {
 	// Tokens is the estimated, clamp-adjusted token cost every
 	// reservation downstream is based on.
 	Tokens int64
+	// promptTokens caches the prompt-only token estimate: one scan of
+	// the messages shared by every consumer (the limiter's reservation,
+	// the context pre-filter, the partial-stream meter) instead of one
+	// scan per consumer. Written once, on first use.
+	promptTokens int64
+	promptKnown  bool
 	// Lease is the quota lease reserved for this request.
 	Lease string
 	// Consumed is the tokens the request actually used; stages that

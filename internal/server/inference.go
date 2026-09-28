@@ -136,8 +136,9 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// hold the prompt loses every candidate before the relay spends an
 	// attempt on a doomed exchange. The estimate is approximate by
 	// design, so the filter fails open — models without a ceiling are
-	// never filtered.
-	inputTokens := pipeline.PromptTokens(carrier.Chat)
+	// never filtered. The carrier's cached estimate: the limiter stage
+	// already scanned the prompt for its reservation.
+	inputTokens := carrier.PromptTokens()
 	if overContext(s.contextLimits, carrier.Chat.Model, inputTokens) {
 		wire.RenderError(w, http.StatusRequestEntityTooLarge, "context_window_exceeded",
 			"prompt does not fit any candidate model for "+carrier.Chat.Model)
@@ -191,7 +192,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case result.UsageKnown:
 		carrier.Consumed = result.Usage.TotalTokens
 	case result.Streamed:
-		carrier.Consumed = pipeline.EstimatePartialTokens(carrier.Chat, result.StreamBytes)
+		carrier.Consumed = carrier.EstimatePartialTokens(result.StreamBytes)
 	default:
 		carrier.Consumed = carrier.Tokens
 	}
