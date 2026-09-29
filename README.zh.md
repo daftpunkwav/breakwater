@@ -126,6 +126,11 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 `deploy/schema.sql`，本地 seed 见 `deploy/seed.sql`），否则
 `BREAKWATER_IDENTITY` JSON 就是 system of record。
 
+网关最多会在该数据库上开三个 PostgreSQL 连接池——身份解析（≤8 连接）、
+quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` 默认取
+身份 DSN）——因此单 DSN 部署至多持有 14 个连接，与宿主机核数无关。
+多个网关共享一个数据库时，按这个预算规划服务端的 `max_connections`。
+
 ## 配置
 
 全部配置走环境变量；核心旋钮：

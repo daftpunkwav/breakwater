@@ -141,6 +141,13 @@ seeded automatically from the static identity set. With
 (schema in `deploy/schema.sql`, local seed in `deploy/seed.sql`),
 otherwise the `BREAKWATER_IDENTITY` JSON is the system of record.
 
+The gateway opens up to three PostgreSQL pools against that database —
+identity resolution (≤8 connections), quota reconciliation snapshots (≤2)
+and monitoring records (≤4; `BREAKWATER_INSIGHTS_DSN` defaults to the
+identity DSN) — so a single-DSN deployment holds at most 14 connections
+regardless of the host's core count. Size the server's `max_connections`
+with that budget in mind when several gateways share one database.
+
 ## Configuration
 
 All configuration is environment-based; core knobs:
