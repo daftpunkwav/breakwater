@@ -27,7 +27,7 @@ tests, metrics and fault-injection experiments.
 | `internal/limiter`    | RPM/TPM token buckets (in-memory + Redis Lua), per-tenant concurrency gate, 429 stages |
 | `internal/quota`      | Lease ledger (in-memory + Redis Lua), sweeper, 402 stage  |
 | `internal/cache`      | Exact-match cache, hand-written singleflight, eligibility |
-| `internal/circuit`    | Three-state breaker (plus a nop for breaker-less runs)    |
+| `internal/circuit`    | Breakers behind one port: three-state consecutive machine or windowed ratio guard (plus a nop for breaker-less runs) |
 | `internal/retry`      | Attempt loop, budgets, retryability classifier            |
 | `internal/router`     | Candidate selection: static priority or measured-latency order, breaker pre-filtering, runtime operator switches |
 | `internal/upstream`   | Provider port + OpenAI-compatible adapter                 |
@@ -170,6 +170,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | Ceiling of a committed stream's body (after the headers); `0` lets the client own the stream's lifetime. Keep it looser than the attempt timeout, which bounds time-to-first-byte: otherwise a slow header is cut by this ceiling, and the request fails over instead of waiting for it. |
 | `BREAKWATER_STREAM_IDLE_TIMEOUT`      | _(off)_        | Idle watchdog of a committed stream: an upstream that stops producing for the whole window loses the stream (same honest error frame) even while the ceiling would still allow it. `0` disables — thinking models can legitimately stay silent for minutes between tokens. |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | Exact-match response cache      |
+| `BREAKWATER_CIRCUIT_STRATEGY`         | `consecutive`  | `consecutive` opens after `FAIL_THRESHOLD` consecutive server faults and re-admits one probe after `COOLDOWN`; `ratio` denies a rising share of calls computed from a rolling 10s window of outcomes and always admits one call per second, so it never fully cuts traffic (its denials surface on `breakwater_circuit_denied_total`; threshold and cooldown are consecutive-only) |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |

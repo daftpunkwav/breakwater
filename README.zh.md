@@ -25,7 +25,7 @@ failover 的熔断、有界重试、缓存击穿防护、基于 lease 的 quota 
 | `internal/limiter`    | RPM/TPM token 桶（in-memory + Redis Lua）、每 tenant 并发闸、429 阶段 |
 | `internal/quota`      | Lease 台账（in-memory + Redis Lua）、sweeper、402 阶段      |
 | `internal/cache`      | 精确匹配缓存、手写 singleflight、eligibility               |
-| `internal/circuit`    | 三态 breaker（含无 breaker 运行用的 nop）                  |
+| `internal/circuit`    | 同一 port 后的两种 breaker：三态连续失败状态机，或窗口化 ratio 守卫（含无 breaker 运行用的 nop） |
 | `internal/retry`      | Attempt loop、预算、retryability 分类器                    |
 | `internal/router`     | 候选选择：static 优先级或实测延迟排序、breaker 预过滤、运行时运维开关 |
 | `internal/upstream`   | Provider port + OpenAI-compatible adapter                  |
@@ -155,6 +155,7 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | 已提交流的响应体（header 之后）的天花板；`0` 让客户端拥有流的生命周期。保持比 attempt timeout（约束 time-to-first-byte）更宽松：否则慢 header 会被这个天花板切断，请求转而 failover 而不是等待。 |
 | `BREAKWATER_STREAM_IDLE_TIMEOUT`      | _(关)_         | 已提交流的空闲看门狗：上游停更超过整个窗口即失去这条流（同样的诚实错误帧），即使天花板仍有余量。`0` 关闭——思考型模型在 token 之间合法静默数分钟是常态。 |
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | 精确匹配响应缓存           |
+| `BREAKWATER_CIRCUIT_STRATEGY`         | `consecutive`  | `consecutive`：连续 `FAIL_THRESHOLD` 次 server fault 后 open，`COOLDOWN` 后放行一个 probe；`ratio`：按 10s 滚动结果窗口计算拒绝率，拒绝占比随失败上升，且每秒始终放行一个调用，永不完全切断流量（拒绝体现在 `breakwater_circuit_denied_total`；threshold 与 cooldown 仅作用于 consecutive） |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | breaker 阈值、cooldown、probe 超时        |
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | 退出轮换的 upstream 的主动恢复探测；interval `0` 禁用（恢复只能等真实流量）；auto-disable 的 upstream 需要 `threshold` 次连续健康探测才恢复 |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(关)_         | JSONL access log 文件（有界队列、丢最旧）                    |

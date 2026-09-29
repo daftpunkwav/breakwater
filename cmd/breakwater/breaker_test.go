@@ -51,3 +51,34 @@ func TestBuildBreakerBothModes(t *testing.T) {
 		t.Fatalf("state = %s, want open", got)
 	}
 }
+
+// TestBuildBreakerRatioStrategy: the ratio strategy composes the
+// windowed probability guard — the state gauge stays closed through
+// failures, denials ride the denial counter, and Reset admits again.
+func TestBuildBreakerRatioStrategy(t *testing.T) {
+	t.Parallel()
+	metrics := obs.NewMetrics()
+	breaker := buildBreaker(config.Circuit{Enabled: true, Strategy: "ratio"}, metrics)
+
+	// Saturate the window with failure evidence. From the sixth event
+	// on a denial is a legal outcome under the real random source, and
+	// a denial feeds the window too — both paths build the pressure.
+	for i := 0; i < 20; i++ {
+		perm, ok := breaker.Allow(context.Background(), "u")
+		if !ok {
+			continue
+		}
+		perm.Report(circuit.OutcomeServerFault)
+	}
+	if got := breaker.StateOf(context.Background(), "u"); got != circuit.StateClosed {
+		t.Fatalf("ratio state = %s, want closed", got)
+	}
+
+	// Denials are probabilistic (covered at the unit level); here the
+	// wiring just has to hold under a denial draw and an operator reset.
+	breaker.Allow(context.Background(), "u")
+	breaker.Reset(context.Background(), "u")
+	if perm, ok := breaker.Allow(context.Background(), "u"); !ok || perm == nil {
+		t.Fatal("expected admission after Reset")
+	}
+}

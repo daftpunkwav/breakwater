@@ -83,10 +83,24 @@ type Cache struct {
 // Circuit configures the per-upstream breaker. Enabled=false composes
 // the nop breaker instead.
 type Circuit struct {
-	Enabled       bool
+	// Enabled composes the real breaker; false is the nop breaker.
+	Enabled bool
+	// Strategy selects the guard mechanism: "consecutive" (the default)
+	// opens after a run of failures and re-admits one probe after the
+	// cooldown; "ratio" denies a rising share of calls computed from a
+	// rolling window of outcomes and always admits one call per
+	// forced-pass interval, so it never fully cuts traffic.
+	Strategy string
+	// FailThreshold drives the consecutive strategy only: the run of
+	// server faults that opens the breaker.
 	FailThreshold int
-	Cooldown      time.Duration
-	ProbeTimeout  time.Duration
+	// Cooldown drives the consecutive strategy only: how long an open
+	// breaker waits before admitting one probe.
+	Cooldown time.Duration
+	// ProbeTimeout bounds a half-open probe of the consecutive
+	// strategy; an unanswered probe counts as a failure at the
+	// deadline.
+	ProbeTimeout time.Duration
 }
 
 // Upstream is one OpenAI-compatible provider binding. List order across

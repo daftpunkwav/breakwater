@@ -190,6 +190,8 @@ func NewMetrics() *Metrics {
 		[]string{"upstream"}, nil)
 	reg("breakwater_circuit_half_open_total", "Breaker half-open transitions.", "counter",
 		[]string{"upstream"}, nil)
+	reg("breakwater_circuit_denied_total", "Calls denied by the ratio-strategy breaker.", "counter",
+		[]string{"upstream"}, nil)
 	reg("breakwater_circuit_state", "Breaker state (0 closed, 1 half-open, 2 open).", "gauge",
 		[]string{"upstream"}, nil)
 
@@ -362,6 +364,14 @@ func (m *Metrics) CircuitHalfOpen(upstream string) {
 		return
 	}
 	m.inc("breakwater_circuit_half_open_total", 1, upstream)
+}
+
+// CircuitDenied records a call denied by the ratio-strategy breaker.
+func (m *Metrics) CircuitDenied(upstream string) {
+	if m == nil {
+		return
+	}
+	m.inc("breakwater_circuit_denied_total", 1, upstream)
 }
 
 // CircuitState publishes the current breaker state as a gauge.

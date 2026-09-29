@@ -436,9 +436,17 @@ func driftHook(metrics *obs.Metrics) func(quota.TenantDrift) {
 }
 
 // buildBreaker assembles the breaker registry with its metric hooks.
+// The ratio strategy swaps the three-state machine for the windowed
+// probability guard: no transitions ever fire, so the denial counter
+// carries that mode's signal alone.
 func buildBreaker(cfg config.Circuit, metrics *obs.Metrics) circuit.Breaker {
 	if !cfg.Enabled {
 		return circuit.NopBreaker{}
+	}
+	if cfg.Strategy == "ratio" {
+		return circuit.NewRatioRegistry(circuit.RatioOnDenial(func(id string) {
+			metrics.CircuitDenied(id)
+		}))
 	}
 	return circuit.NewRegistry(circuit.Config{
 		FailThreshold: cfg.FailThreshold,

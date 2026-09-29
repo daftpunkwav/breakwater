@@ -90,6 +90,7 @@ const (
 	envCacheCapacity = "BREAKWATER_CACHE_CAPACITY"
 
 	envCircuitEnabled   = "BREAKWATER_CIRCUIT_ENABLED"
+	envCircuitStrategy  = "BREAKWATER_CIRCUIT_STRATEGY"
 	envCircuitThreshold = "BREAKWATER_CIRCUIT_FAIL_THRESHOLD"
 	envCircuitCooldown  = "BREAKWATER_CIRCUIT_COOLDOWN"
 	envCircuitProbe     = "BREAKWATER_CIRCUIT_PROBE_TIMEOUT"
@@ -149,6 +150,7 @@ func Load() (Config, error) {
 		},
 		Circuit: Circuit{
 			Enabled:       true,
+			Strategy:      "consecutive",
 			FailThreshold: defaultCircuitThreshold,
 			Cooldown:      defaultCircuitCooldown,
 			ProbeTimeout:  defaultCircuitProbe,
@@ -321,6 +323,7 @@ func loadCircuit(cfg *Config) error {
 	if cfg.Circuit.Enabled, err = envBool(envCircuitEnabled, cfg.Circuit.Enabled); err != nil {
 		return err
 	}
+	cfg.Circuit.Strategy = envString(envCircuitStrategy, cfg.Circuit.Strategy)
 	if cfg.Circuit.FailThreshold, err = envInt(envCircuitThreshold, cfg.Circuit.FailThreshold); err != nil {
 		return err
 	}
@@ -388,6 +391,11 @@ func validate(cfg *Config) error {
 		}
 	}
 	if cfg.Circuit.Enabled {
+		switch cfg.Circuit.Strategy {
+		case "consecutive", "ratio":
+		default:
+			return fmt.Errorf("config: %s must be \"consecutive\" or \"ratio\"", envCircuitStrategy)
+		}
 		if cfg.Circuit.FailThreshold <= 0 {
 			return fmt.Errorf("config: %s must be positive", envCircuitThreshold)
 		}

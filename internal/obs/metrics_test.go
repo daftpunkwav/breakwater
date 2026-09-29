@@ -80,6 +80,23 @@ func TestMetricsCircuitStateGauge(t *testing.T) {
 	}
 }
 
+// TestMetricsCircuitDeniedRenders: the ratio-strategy denial counter
+// renders per upstream from its first increment.
+func TestMetricsCircuitDeniedRenders(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.CircuitDenied("u1")
+	m.CircuitDenied("u1")
+
+	var out strings.Builder
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(out.String(), `breakwater_circuit_denied_total{upstream="u1"} 2`) {
+		t.Errorf("circuit denied counter missing:\n%s", out.String())
+	}
+}
+
 // TestMetricsLogsDroppedRendersFromSync pins that the drop counter is
 // exposed from the first scrape — including the healthy zero, which
 // must still produce a sample line for the scraper — and that the
@@ -115,6 +132,7 @@ func TestMetricsNilSafety(t *testing.T) {
 	m.ObserveDuration("u", 0.5)
 	m.InflightAdd(1)
 	m.RateLimited("t")
+	m.ConcurrencyLimited("t")
 	m.QuotaReserved("t", 10)
 	m.QuotaRefunded("t", 5)
 	m.QuotaReconciliationError()
@@ -125,10 +143,48 @@ func TestMetricsNilSafety(t *testing.T) {
 	m.CacheShared()
 	m.CircuitOpened("u")
 	m.CircuitHalfOpen("u")
+	m.CircuitDenied("u")
 	m.CircuitState("u", 1)
 	m.RetryScheduled("u")
 	m.RetryBudgetExhausted()
 	m.Failover("a", "b")
 	m.StreamAborted("u")
+	m.UpstreamProbe("u", true)
+	m.UpstreamAutoDisabled("u", "reason")
+	m.CredentialRetired("u", "reason")
+	m.ObserveTTFT("u", 0.25)
 	m.SetLogsDropped(3)
+	m.SetInsightsDropped(2)
+}
+
+// TestMetricsRecoveryAndRotationRenders: the probe, auto-disable,
+// credential-retirement and concurrency counters and the TTFT
+// histogram all render from their first increments.
+func TestMetricsRecoveryAndRotationRenders(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.UpstreamProbe("u", true)
+	m.UpstreamProbe("u", false)
+	m.UpstreamAutoDisabled("u", "upstream_auth_failure")
+	m.CredentialRetired("u", "upstream_auth_failure")
+	m.ConcurrencyLimited("tenant")
+	m.ObserveTTFT("u", 0.25)
+
+	var out strings.Builder
+	if err := m.Render(&out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		`breakwater_upstream_probe_total{upstream="u",result="ok"} 1`,
+		`breakwater_upstream_probe_total{upstream="u",result="fail"} 1`,
+		`breakwater_upstream_auto_disabled_total{upstream="u",reason="upstream_auth_failure"} 1`,
+		`breakwater_credential_retired_total{upstream="u",reason="upstream_auth_failure"} 1`,
+		`breakwater_concurrency_limited_total{tenant="tenant"} 1`,
+		`breakwater_upstream_ttft_seconds_count{upstream="u"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition missing %q\ngot:\n%s", want, text)
+		}
+	}
 }

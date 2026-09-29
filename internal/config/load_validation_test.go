@@ -54,6 +54,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"bad cache capacity", envCacheCapacity, "lots", "parse", false},
 		{"zero cache capacity", envCacheCapacity, "0", "must be positive", false},
 		{"bad circuit enabled", envCircuitEnabled, "perhaps", "parse", false},
+		{"unknown circuit strategy", envCircuitStrategy, "adaptive", "consecutive", false},
 		{"bad circuit threshold", envCircuitThreshold, "many", "parse", false},
 		{"zero circuit threshold", envCircuitThreshold, "0", "must be positive", false},
 		{"bad circuit cooldown", envCircuitCooldown, "ages", "parse", false},
