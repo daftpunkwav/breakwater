@@ -107,3 +107,33 @@ func TestCappedRecordersStillCount(t *testing.T) {
 		t.Fatalf("exposition missing the overflow leaf:\n%s", buf.String())
 	}
 }
+
+// TestChildOfScrubsNULFromLabels: a client-controlled model label
+// carrying NUL must not forge another tuple's key, the reserved
+// overflow leaf's key, or a raw NUL byte in the rendered exposition.
+func TestChildOfScrubsNULFromLabels(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	// Two distinct tuples whose raw values would join to the same key
+	// through a smuggled separator stay distinct.
+	m.Request("t1", "model\x00b", "up", 200)
+	m.Request("t1", "model", "b\x00up", 200)
+	// The single-label overflow key cannot be forged either.
+	m.RateLimited("\x00overflow")
+
+	f := m.families["breakwater_rate_limited_total"]
+	if _, forged := f.children[overflowKey]; forged {
+		t.Fatal("a NUL-carrying label must not reach the reserved overflow leaf")
+	}
+
+	var buf bytes.Buffer
+	if err := m.Render(&buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if out := buf.String(); strings.ContainsRune(out, '\x00') {
+		t.Fatalf("a NUL byte reached the exposition payload: %q", out)
+	}
+	if !strings.Contains(buf.String(), `model="modelb"`) {
+		t.Fatalf("the scrubbed model label missing:\n%s", buf.String())
+	}
+}

@@ -160,3 +160,24 @@ func TestResponsesStreamAbort(t *testing.T) {
 		t.Fatalf("abort stream = %s", body)
 	}
 }
+
+// TestIngestResponsesRejectsNonPositiveMaxOutputTokens: the Responses
+// wire re-encodes the field, so a non-positive budget is refused at
+// ingest — the same refusal the Messages wire makes — instead of being
+// forwarded upstream for the provider to reject.
+func TestIngestResponsesRejectsNonPositiveMaxOutputTokens(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{
+		`{"model":"m","max_output_tokens":0}`,
+		`{"model":"m","max_output_tokens":-5}`,
+	} {
+		if _, err := Ingest(FormatOpenAIResponses, []byte(raw)); err == nil ||
+			!strings.Contains(err.Error(), "max_output_tokens must be positive") {
+			t.Fatalf("ingest(%s) err = %v, want the positive-budget refusal", raw, err)
+		}
+	}
+	// An absent budget stays legal.
+	if _, err := Ingest(FormatOpenAIResponses, []byte(`{"model":"m","input":"hi"}`)); err != nil {
+		t.Fatalf("absent max_output_tokens must stay legal: %v", err)
+	}
+}

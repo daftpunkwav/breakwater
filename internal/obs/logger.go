@@ -56,7 +56,11 @@ type Logger struct {
 	pending int
 	signal  chan struct{}
 	done    chan struct{}
-	wg      sync.WaitGroup
+	// closeOnce guards the done channel's close: Close is idempotent,
+	// so a shutdown path that fires twice (an explicit Close after the
+	// deferred one) cannot panic on the second close.
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 // NewLogger starts the drain goroutine writing JSON lines to out. The
@@ -137,7 +141,7 @@ func (l *Logger) Flush(ctx context.Context) error {
 // a sink that never accepts the write must hold neither the drain nor
 // the process's shutdown past the caller's deadline.
 func (l *Logger) Close(ctx context.Context) error {
-	close(l.done)
+	l.closeOnce.Do(func() { close(l.done) })
 	waited := make(chan struct{})
 	go func() {
 		l.wg.Wait()

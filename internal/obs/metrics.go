@@ -106,6 +106,21 @@ func overflowValues(n int) []string {
 // per-label detail is bounded, visible and recoverable (a restart
 // clears it) instead of silently permanent.
 func (f *family) childOf(values ...string) *child {
+	// A client-controlled label (the model name) carrying NUL could
+	// forge another tuple's key — or the reserved overflow leaf's — by
+	// smuggling the join separator, and the raw byte would poison the
+	// rendered exposition. Scrub it from the values first; the key and
+	// the stored labels read the cleaned form.
+	for _, v := range values {
+		if strings.IndexByte(v, 0) >= 0 {
+			clean := make([]string, len(values))
+			for i, s := range values {
+				clean[i] = strings.ReplaceAll(s, "\x00", "")
+			}
+			values = clean
+			break
+		}
+	}
 	key := strings.Join(values, "\x00")
 	f.mu.RLock()
 	c, ok := f.children[key]

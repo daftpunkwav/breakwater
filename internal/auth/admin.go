@@ -27,9 +27,11 @@ import (
 	"time"
 )
 
-// MaxKeysPerUser bounds the keys one user may hold. The limit keeps
-// the administration surface (and the blast radius of one leaked
-// device) finite.
+// MaxKeysPerUser bounds the active keys one user may hold. The limit
+// keeps the administration surface (and the blast radius of one leaked
+// device) finite; disabled keys hold no live credential and do not
+// consume the ceiling, so disabling keys never locks a user out of
+// fresh issuance.
 const MaxKeysPerUser = 5
 
 var (

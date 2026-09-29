@@ -183,3 +183,25 @@ func TestLoggerBatchesSinkWrites(t *testing.T) {
 		t.Fatalf("buffered = %d, want 0 after the pass", got)
 	}
 }
+
+// TestCloseIsIdempotent: a shutdown path that fires Close twice (an
+// explicit call after the deferred one) must be a no-op, not a panic
+// on the second close of the drain's done channel.
+func TestCloseIsIdempotent(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	l := NewLogger(&out, 8)
+
+	l.Record(Entry{TenantID: "t1", Status: 200})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := l.Close(ctx); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := l.Close(ctx); err != nil {
+		t.Fatalf("second close must be a safe no-op: %v", err)
+	}
+	if !strings.Contains(out.String(), `"t1"`) {
+		t.Fatalf("the drain did not flush the recorded entry: %q", out.String())
+	}
+}

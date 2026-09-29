@@ -52,7 +52,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 				rejectCode = carrier.RejectCode
 			}
 			upstream := "-"
-			aborted, cacheHit, streamed := false, false, false
+			aborted, clientGone, cacheHit, streamed := false, false, false, false
 			var tokens int64
 			var trail []relay.AttemptTrace
 			errorCode := rejectCode
@@ -71,6 +71,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 						upstream = carrier.Relay.UpstreamID
 					}
 					aborted = carrier.Relay.Aborted
+					clientGone = carrier.Relay.ClientGone
 					streamed = carrier.Relay.Streamed
 					tokens = carrier.Consumed
 					trail = carrier.Relay.Trail
@@ -98,7 +99,11 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 
 			metrics.Request(tenant, model, upstream, status)
 			metrics.ObserveDuration(upstream, duration.Seconds())
-			if aborted {
+			// A client that walked away mid-stream never receives the
+			// error frame — the exchange skips it — so the abort counter,
+			// whose contract is "terminated through the error event
+			// contract", must not charge the disconnect to the upstream.
+			if aborted && !clientGone {
 				metrics.StreamAborted(upstream)
 			}
 

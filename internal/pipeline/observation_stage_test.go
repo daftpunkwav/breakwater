@@ -116,6 +116,24 @@ func TestObservationStageRecordsStreamAbort(t *testing.T) {
 	}
 }
 
+// TestObservationStageSkipsAbortCounterWhenClientGone: a client that
+// walked away mid-stream never receives the error frame — the exchange
+// skips writing it — so the abort counter, whose contract is the error
+// event contract, must not charge the disconnect to the upstream.
+func TestObservationStageSkipsAbortCounterWhenClientGone(t *testing.T) {
+	t.Parallel()
+
+	metrics := obs.NewMetrics()
+	carrier := &Carrier{Relay: &relay.Result{UpstreamID: "up-1", Aborted: true, ClientGone: true}}
+
+	serveThroughObservation(t, metrics, nil, carrier, http.StatusOK)
+
+	rendered := renderMetrics(t, metrics)
+	if strings.Contains(rendered, `breakwater_sse_stream_aborted_total{`) {
+		t.Fatalf("a client disconnect must not count as an abort: %s", rendered)
+	}
+}
+
 // TestObservationStageRecordsAttemptTrail: the relay's attempt trail
 // rides into the access entry as the failover walk the request took;
 // a request without a trail records none.

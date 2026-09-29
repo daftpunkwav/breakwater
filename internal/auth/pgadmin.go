@@ -159,8 +159,12 @@ func createKeyTx(ctx context.Context, tx pgx.Tx, userID, name string) (IssuedKey
 	}
 
 	var count int64
+	// Only active keys count toward the ceiling: a disabled key holds no
+	// live credential, and with no delete endpoint a disabled key that
+	// consumed its slot forever would lock the user out of issuance
+	// once every key had been turned off.
 	if err := tx.QueryRow(ctx,
-		`SELECT count(*) FROM api_keys WHERE tenant_id = $1`, userID).Scan(&count); err != nil {
+		`SELECT count(*) FROM api_keys WHERE tenant_id = $1 AND status = 'active'`, userID).Scan(&count); err != nil {
 		return IssuedKey{}, fmt.Errorf("auth: count keys: %w", err)
 	}
 	if count >= MaxKeysPerUser {

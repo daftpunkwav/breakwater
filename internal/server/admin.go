@@ -29,6 +29,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -223,8 +224,10 @@ func (a *Admin) guarded(w http.ResponseWriter, r *http.Request, method string, f
 }
 
 // authorized checks the bearer token; empty token disables the check.
-// The comparison is constant-time: the token guards a privileged
-// surface and must not leak through timing.
+// The comparison is constant-time in both content and length:
+// ConstantTimeCompare alone leaks a length mismatch through its early
+// return, so fixed-length digests are compared instead — the token
+// guards a privileged surface and must not leak through timing.
 func (a *Admin) authorized(r *http.Request) bool {
 	if a.token == "" {
 		return true
@@ -235,7 +238,9 @@ func (a *Admin) authorized(r *http.Request) bool {
 		return false
 	}
 	presented := strings.TrimSpace(raw[len(prefix):])
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(a.token)) == 1
+	given := sha256.Sum256([]byte(presented))
+	want := sha256.Sum256([]byte(a.token))
+	return subtle.ConstantTimeCompare(given[:], want[:]) == 1
 }
 
 // renderQuotaError maps the balance port's errors onto the quota

@@ -61,6 +61,13 @@ func ingestResponses(body []byte) (IngestResult, error) {
 	if req.Model == "" {
 		return IngestResult{}, fmt.Errorf("model is required")
 	}
+	if req.MaxOutputTokens != nil && *req.MaxOutputTokens <= 0 {
+		// This wire re-encodes the field into the canonical request, so
+		// the gateway owns its validity: a non-positive budget is the
+		// client's error, the same refusal the Messages wire makes for a
+		// non-positive max_tokens — not something to forward upstream.
+		return IngestResult{}, fmt.Errorf("max_output_tokens must be positive")
+	}
 	for field, raw := range map[string]json.RawMessage{
 		"tools":       req.Tools,
 		"tool_choice": req.ToolChoice,

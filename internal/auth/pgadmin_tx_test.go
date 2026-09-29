@@ -37,16 +37,18 @@ func (r *scriptedRow) Scan(dest ...any) error {
 }
 
 // fakeTx serves the scripted answers in call order and records the
-// commits.
+// commits and the SQL text of every query.
 type fakeTx struct {
 	pgx.Tx
 	answers []scriptedRow
 	calls   int
 	commit  error
 	commits int
+	sqls    []string
 }
 
-func (f *fakeTx) QueryRow(context.Context, string, ...any) pgx.Row {
+func (f *fakeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	f.sqls = append(f.sqls, sql)
 	if f.calls >= len(f.answers) {
 		return &scriptedRow{err: errors.New("unexpected query")}
 	}
@@ -147,5 +149,27 @@ func TestCreateKeyTxTooManyKeys(t *testing.T) {
 	}
 	if tx.calls != 2 {
 		t.Fatalf("queries = %d, want no insert past the cap", tx.calls)
+	}
+}
+
+// TestCreateKeyTxCountsActiveKeysOnly: the ceiling's count query
+// filters on active status. A disabled key holds no live credential
+// and with no delete endpoint would otherwise consume its slot
+// forever, locking the user out of fresh issuance.
+func TestCreateKeyTxCountsActiveKeysOnly(t *testing.T) {
+	t.Parallel()
+	tx := &fakeTx{answers: []scriptedRow{
+		{values: []any{"u1"}},                  // lock acquired
+		{values: []any{int64(MaxKeysPerUser)}}, // active keys under... at the cap
+		{err: errors.New("no scripted insert row")},
+	}}
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); !errors.Is(err, ErrTooManyKeys) {
+		t.Fatalf("err = %v, want ErrTooManyKeys at the active cap", err)
+	}
+	if len(tx.sqls) < 2 {
+		t.Fatalf("queries = %d, want the lock and the count", len(tx.sqls))
+	}
+	if !strings.Contains(tx.sqls[1], "status = 'active'") {
+		t.Fatalf("count query = %q, want the active-only filter", tx.sqls[1])
 	}
 }
