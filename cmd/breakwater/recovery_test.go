@@ -389,8 +389,8 @@ func TestSwitchEnableRevivesRing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
 	}
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	sw.OnUpstreamEnable = reviveRing(map[string]upstream.CredentialPool{"u1": adapter}, discardLogger())
+	sw := router.NewSwitch([]string{"m1"}, []string{"u1"},
+		router.WithOnUpstreamEnable(reviveRing(map[string]upstream.CredentialPool{"u1": adapter}, discardLogger())))
 
 	adapter.RetireCredential(0)
 	if err := sw.SetUpstream("u1", false); err != nil {

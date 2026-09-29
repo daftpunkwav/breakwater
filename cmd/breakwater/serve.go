@@ -284,12 +284,12 @@ func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *o
 		return routingPlane{}, err
 	}
 	routingSwitch := router.NewSwitch(knownModels(cfg.Upstreams), upstreamIDs(cfg.Upstreams),
-		router.WithWildcardModels(wildcardServed(cfg.Upstreams)))
+		router.WithWildcardModels(wildcardServed(cfg.Upstreams)),
+		router.WithOnUpstreamEnable(reviveRing(rings, logger)))
 	// An upstream returning to rotation — operator enable or lifted
 	// auto disable — carries its credential ring back to full strength:
 	// the same decision that lifts the disable lifts what the fatal
 	// conditions retired inside it.
-	routingSwitch.OnUpstreamEnable = reviveRing(rings, logger)
 	if err := validateModelNames(cfg.Upstreams, cfg.Fallbacks, cfg.ContextLimits); err != nil {
 		return routingPlane{}, err
 	}

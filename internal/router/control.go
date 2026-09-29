@@ -71,12 +71,13 @@ type Switch struct {
 	// switch cannot know the wildcard's full model vocabulary up front,
 	// so the typo protection only applies when no wildcard exists.
 	wildcardModels bool
-	// OnUpstreamEnable, when set, fires after an upstream returns to
+	// onUpstreamEnable, when set, fires after an upstream returns to
 	// rotation — an operator enable or a lifted auto disable. The
-	// assembly binds it to restore what fatal conditions retired
-	// inside the upstream (its credential ring). It runs outside the
-	// switch lock and must not call back into the Switch.
-	OnUpstreamEnable func(id string)
+	// assembly installs it once at construction (WithOnUpstreamEnable)
+	// to restore what fatal conditions retired inside the upstream
+	// (its credential ring). It runs outside the switch lock and must
+	// not call back into the Switch.
+	onUpstreamEnable func(id string)
 }
 
 // SwitchOption customizes a Switch.
@@ -87,6 +88,14 @@ type SwitchOption func(*Switch)
 // enumerated it.
 func WithWildcardModels(wildcard bool) SwitchOption {
 	return func(s *Switch) { s.wildcardModels = wildcard }
+}
+
+// WithOnUpstreamEnable installs the callback fired when an upstream
+// returns to rotation; nil (the default) fires nothing. It carries no
+// per-call state, so a switch built without it can never grow one
+// mid-flight — the enable path reads the field without the lock.
+func WithOnUpstreamEnable(fn func(id string)) SwitchOption {
+	return func(s *Switch) { s.onUpstreamEnable = fn }
 }
 
 // NewSwitch builds a switch over the configured model names and
@@ -150,8 +159,8 @@ func (s *Switch) SetUpstream(id string, enabled bool) error {
 	s.mu.Unlock()
 	// Fired outside the lock: the callback restores upstream-side
 	// state and must never run while holding the switch.
-	if enabled && s.OnUpstreamEnable != nil {
-		s.OnUpstreamEnable(id)
+	if enabled && s.onUpstreamEnable != nil {
+		s.onUpstreamEnable(id)
 	}
 	return nil
 }
@@ -191,8 +200,8 @@ func (s *Switch) AutoEnableUpstream(id string) error {
 	}
 	delete(s.autoDisabled, id)
 	s.mu.Unlock()
-	if s.OnUpstreamEnable != nil {
-		s.OnUpstreamEnable(id)
+	if s.onUpstreamEnable != nil {
+		s.onUpstreamEnable(id)
 	}
 	return nil
 }

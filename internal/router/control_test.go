@@ -271,9 +271,9 @@ func TestSwitchViewCarriesAutoDisableReasons(t *testing.T) {
 // failing-closed unknown name never reaches it.
 func TestSwitchFiresEnableCallback(t *testing.T) {
 	t.Parallel()
-	sw := NewSwitch([]string{"m1"}, []string{"u1"})
 	var enabled []string
-	sw.OnUpstreamEnable = func(id string) { enabled = append(enabled, id) }
+	sw := NewSwitch([]string{"m1"}, []string{"u1"},
+		WithOnUpstreamEnable(func(id string) { enabled = append(enabled, id) }))
 
 	// Disables stay silent.
 	if err := sw.SetUpstream("u1", false); err != nil {
