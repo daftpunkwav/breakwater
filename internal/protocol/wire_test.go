@@ -48,3 +48,38 @@ func TestRenderExchangeBodyClampsUnrenderableStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestValidHeaderValue(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"application/json", "7", "text/event-stream; charset=utf-8", "a b", "a\tb", "na\xefve"} {
+		if !ValidHeaderValue(v) {
+			t.Errorf("ValidHeaderValue(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"a\r\nSet-Cookie: x", "a\nb", "a\x00b", "a\x7f", "a\x1bb"} {
+		if ValidHeaderValue(v) {
+			t.Errorf("ValidHeaderValue(%q) = true, want false", v)
+		}
+	}
+}
+
+// TestRenderExchangeBodyDropsIllegalHeaderValues pins the passthrough's
+// upstream-boundary check: a hostile or broken upstream cannot put
+// control bytes into the client response's forwarded headers — the
+// illegal value is dropped, the legal one still forwarded.
+func TestRenderExchangeBodyDropsIllegalHeaderValues(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
+	header.Set("Retry-After", "3\r\nSet-Cookie: injected=1")
+
+	rec := httptest.NewRecorder()
+	renderExchangeBody(rec, http.StatusTooManyRequests, header, []byte("body"), PassthroughHeaderNames)
+
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("retry-after = %q, want the illegal value dropped", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want the legal value forwarded", got)
+	}
+}

@@ -35,6 +35,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,16 @@ import (
 // maxAdminBodyBytes bounds the body of admin writes; they carry one
 // number at most.
 const maxAdminBodyBytes = 1 << 12
+
+// validTenantID is the tenant identifier rule the quota endpoints
+// enforce on the admin-supplied path segment: the same character set
+// the identity stores accept (internal/auth static tenants) and the
+// config layer enforces on upstream ids (internal/config). Both are
+// separate regexes on purpose — this package must not import config,
+// and auth's rule guards construction, not this surface's input — but
+// the three must stay in lockstep: a tenant id is a Redis key segment,
+// a ledger identity and an access-log field at once.
+var validTenantID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`).MatchString
 
 // BalanceLookup reports a tenant's current quota balance. It returns
 // quota.ErrUnknownTenant for a tenant with no ledger; any other error is
@@ -193,6 +204,16 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tenantID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/tenants/"), "/quota")
 		if tenantID == "" {
 			http.NotFound(w, r)
+			return
+		}
+		// The tenant id is a Redis/ledger key segment and an access-log
+		// field downstream; a character outside the identity stores' own
+		// rule would create or read ledger entries no real tenant can
+		// ever own. Reject it here, at the surface's boundary, before the
+		// ledger is consulted.
+		if !validTenantID(tenantID) {
+			protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+				"tenant ids are 1-128 characters of [A-Za-z0-9._-]")
 			return
 		}
 		switch r.Method {

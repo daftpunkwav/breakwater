@@ -64,10 +64,15 @@ func TestStreamAbortTerminatesHonestly(t *testing.T) {
 		t.Fatalf("delivered bytes lost: %q", body)
 	}
 	wantTail := "event: error\n" +
-		`data: {"error":{"message":"upstream stream failed mid-flight: connection reset by peer","type":"gateway_error","code":"upstream_reset"}}` +
+		`data: {"error":{"message":"upstream stream failed mid-flight","type":"gateway_error","code":"upstream_reset"}}` +
 		"\n\ndata: [DONE]\n\n"
 	if !strings.HasSuffix(body, wantTail) {
 		t.Fatalf("abort contract violated, tail = %q", body[len(body)-200:])
+	}
+	if strings.Contains(body, "connection reset by peer") {
+		// The raw pump error is a net error whose text carries internal
+		// addresses; the client frame stays code-level.
+		t.Fatalf("abort frame reflects the raw pump error: %q", body)
 	}
 }
 
@@ -173,6 +178,56 @@ func TestAbortCodeMapsFailureClasses(t *testing.T) {
 	if got := abortCode(errors.New("connection reset by peer")); got != protocol.CodeUpstreamReset {
 		t.Fatalf("code = %s, want upstream_reset", got)
 	}
+}
+
+// TestStreamAbortFrameStaysCodeLevel pins the abort frame's message
+// contract on the timeout classification too: the frame carries the
+// code-level phrase, never the raw pump error, whatever broke the
+// stream.
+func TestStreamAbortFrameStaysCodeLevel(t *testing.T) {
+	t.Parallel()
+	partial := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		header := http.Header{}
+		header.Set("Content-Type", "text/event-stream")
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(&deadlineReader{data: partial}),
+		}, nil
+	}}
+	exec := New(testPolicy(), nil)
+
+	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
+	if !result.Aborted {
+		t.Fatal("result not marked aborted")
+	}
+	body := string(result.Body)
+	if !strings.Contains(body, `"code":"upstream_timeout"`) {
+		t.Fatalf("abort code = %q, want upstream_timeout", body)
+	}
+	if !strings.Contains(body, "upstream stream timed out mid-flight") {
+		t.Fatalf("abort frame = %q, want the code-level timeout phrase", body)
+	}
+	if strings.Contains(body, "pump") {
+		t.Fatalf("abort frame reflects the raw pump error: %q", body)
+	}
+}
+
+// deadlineReader yields some bytes then fails with the deadline error,
+// simulating an upstream that stops mid-stream at a context deadline.
+type deadlineReader struct {
+	data string
+	off  int
+}
+
+func (b *deadlineReader) Read(p []byte) (int, error) {
+	if b.off >= len(b.data) {
+		return 0, context.DeadlineExceeded
+	}
+	n := copy(p, b.data[b.off:])
+	b.off += n
+	return n, nil
 }
 
 // extractJSONField pulls one field from the payload of a named SSE

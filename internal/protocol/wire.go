@@ -166,16 +166,35 @@ func (chatWire) Stream() StreamTranscoder { return nil }
 // as read-only.
 var PassthroughHeaderNames = []string{"Content-Type", "Retry-After"}
 
+// ValidHeaderValue reports whether v is a legal HTTP header field
+// value: visible ASCII, obs-text, space or horizontal tab (RFC 9110's
+// field-value grammar). Every control byte — CR and LF included — and
+// DEL disqualify it. The passthrough surfaces copy upstream-controlled
+// values into the client response through this check, so a hostile or
+// broken upstream cannot put control bytes on the wire (HTTP/1's
+// space-replacement and HTTP/2's silent drop would otherwise give the
+// two protocol versions different answers).
+func ValidHeaderValue(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if b := v[i]; (b < 0x20 && b != '\t') || b == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // renderExchangeBody writes status, selected headers and body. A
 // broken upstream can report a status outside the renderable range;
-// net/http panics on those, so the passthrough clamps instead.
+// net/http panics on those, so the passthrough clamps instead. The
+// selected headers carry upstream-controlled values, so each one is
+// forwarded only when it is a legal header field value.
 func renderExchangeBody(w http.ResponseWriter, status int, header http.Header, body []byte, names []string) {
 	if status < 100 || status > 599 {
 		status = http.StatusBadGateway
 	}
 	out := w.Header()
 	for _, name := range names {
-		if v := header.Get(name); v != "" {
+		if v := header.Get(name); v != "" && ValidHeaderValue(v) {
 			out.Set(name, v)
 		}
 	}

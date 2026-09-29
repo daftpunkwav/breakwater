@@ -137,6 +137,40 @@ func TestAdminQuotaRejectsWrongMethod(t *testing.T) {
 	}
 }
 
+// TestAdminQuotaRejectsInvalidTenantID pins the quota endpoints' input
+// rule: the admin-supplied tenant id is a ledger key segment and an
+// access-log field downstream, so a path id outside the identity
+// stores' character set is a 400 at the boundary — it never reaches the
+// ledger read or write.
+func TestAdminQuotaRejectsInvalidTenantID(t *testing.T) {
+	t.Parallel()
+	written := false
+	setter := func(_ *http.Request, tenantID string, balance int64) error {
+		written = true
+		return nil
+	}
+	admin := NewAdmin("", nil, setter, nil)
+
+	for _, id := range []string{"a/b", "t:1", "a b", "a\tb", strings.Repeat("a", 129), "../escape"} {
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			req := httptest.NewRequest(method, "/admin/tenants/x/quota",
+				strings.NewReader(`{"balance":1}`))
+			// Set the decoded path directly: a hostile client can put
+			// any byte sequence in the URL, and percent-decoding hands
+			// it to the handler verbatim.
+			req.URL.Path = "/admin/tenants/" + id + "/quota"
+			rec := httptest.NewRecorder()
+			admin.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s %q status = %d, want 400", method, id, rec.Code)
+			}
+		}
+	}
+	if written {
+		t.Fatal("a rejected tenant id reached the ledger write")
+	}
+}
+
 func TestAdminQuotaEndpoint(t *testing.T) {
 	t.Parallel()
 	balances := func(_ *http.Request, tenantID string) (int64, error) {

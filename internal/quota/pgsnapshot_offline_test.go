@@ -25,6 +25,29 @@ func TestPGSnapshotStoreRejectsUnparseableDSN(t *testing.T) {
 	}
 }
 
+// TestPGSnapshotStoreErrorRedactsDSNPassword pins the startup-error
+// contract the three pg constructors share (quota snapshots, identity,
+// insights): a parse failure surfaces the DSN, so the driver's password
+// redaction must hold — the error reaches the operator's console and
+// logs, where the raw password must never appear.
+func TestPGSnapshotStoreErrorRedactsDSNPassword(t *testing.T) {
+	t.Parallel()
+	for _, dsn := range []string{
+		"postgres://user:secretpw@127.0.0.1:5432/quota?sslmode=bogus",
+		"host=127.0.0.1 password=secretpw user=u port=notanum",
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := NewPGSnapshotStore(ctx, dsn)
+		cancel()
+		if err == nil {
+			t.Fatalf("dsn %q: want a parse rejection", dsn)
+		}
+		if msg := err.Error(); strings.Contains(msg, "secretpw") {
+			t.Fatalf("error message carries the DSN password: %q", msg)
+		}
+	}
+}
+
 func TestPGSnapshotStoreSurfacesUnreachableDatabase(t *testing.T) {
 	t.Parallel()
 	// Port 1 on loopback refuses connections immediately; pgx pools are

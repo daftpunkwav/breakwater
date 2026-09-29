@@ -146,14 +146,18 @@ func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) 
 // format's honest termination and is reported as committed (no
 // transparent retry).
 func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, lease *streamLease, model string) (circuit.Outcome, error) {
-	// Commit: from here on the loop must never see a plain error.
+	// Commit: from here on the loop must never see a plain error. The
+	// forwarded headers carry upstream-controlled values, so each is
+	// set only when it is a legal header field value — the same rule
+	// the buffered passthrough applies (internal/protocol). An unusable
+	// Content-Type falls back to the SSE default.
 	header := r.job.Out.Header()
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
+	if ct := resp.Header.Get("Content-Type"); ct != "" && protocol.ValidHeaderValue(ct) {
 		header.Set("Content-Type", ct)
 	} else {
 		header.Set("Content-Type", "text/event-stream")
 	}
-	if cc := resp.Header.Get("Cache-Control"); cc != "" {
+	if cc := resp.Header.Get("Cache-Control"); cc != "" && protocol.ValidHeaderValue(cc) {
 		header.Set("Cache-Control", cc)
 	}
 	r.job.Out.WriteHeader(http.StatusOK)
@@ -211,7 +215,16 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 	// The failure taxonomy reads the same code the client saw in the
 	// stream's error frame.
 	r.gatewayCode = string(code)
-	message := "upstream stream failed mid-flight: " + pumpErr.Error()
+	// The abort frame stays code-level, never the raw pump error: a
+	// mid-stream read failure is a net error whose text carries the
+	// gateway's and the upstream's internal addresses, and the client
+	// surface must not reflect network internals — the same rule the
+	// transport-error branch of finish() holds. The classification the
+	// code carries (reset vs timeout) is the client-visible truth.
+	message := "upstream stream failed mid-flight"
+	if code == protocol.CodeUpstreamTimeout {
+		message = "upstream stream timed out mid-flight"
+	}
 	if transcoder != nil {
 		_ = transcoder.Abort(r.job.Out, code, message)
 	} else {
