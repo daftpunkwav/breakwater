@@ -103,7 +103,8 @@ Redis）：
 
     BREAKWATER_UPSTREAMS='[{"id":"mock","base_url":"http://127.0.0.1:8090","probe_url":"http://127.0.0.1:8090/healthz","models":["*"]}]' \
     BREAKWATER_IDENTITY='{"tiers":[{"id":"free","rpm":60,"tpm":200000,"max_tokens":4096,"monthly_quota":10000000,"allowed_models":["*"]}],"tenants":[{"id":"local","name":"Local","tier":"free","keys":["bw-local-dev-key"]}]}' \
-    BREAKWATER_ADMIN_TOKEN='dev-admin' \n    go run ./cmd/breakwater    go run ./cmd/breakwater
+    BREAKWATER_ADMIN_TOKEN='dev-admin' \
+    go run ./cmd/breakwater
 
 经网关发送一次补全：
 
