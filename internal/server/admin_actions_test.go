@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/daftpunkwav/breakwater/internal/router"
 )
 
 func TestAdminBreakerResetEndpoint(t *testing.T) {
@@ -35,7 +37,10 @@ func TestAdminBreakerResetEndpoint(t *testing.T) {
 		t.Fatalf("reset invoked for %q, want u1", resetFor)
 	}
 
-	// An unknown upstream is a 404, any other failure a 500.
+	// An unknown upstream is a 404, any other failure a 500 — under
+	// either sentinel vocabulary: the admin bindings report this
+	// package's sentinel, the routing switch reports router's, and the
+	// mapping must not confuse the second with a backend failure.
 	admin2 := NewAdmin("", nil, nil, nil, WithBreakerReset(func(*http.Request, string) error {
 		return ErrUnknownUpstream
 	}))
@@ -43,6 +48,15 @@ func TestAdminBreakerResetEndpoint(t *testing.T) {
 	admin2.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/breakers/u1/reset", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("reset unknown = %d, want 404", rec.Code)
+	}
+
+	adminRouterSentinel := NewAdmin("", nil, nil, nil, WithBreakerReset(func(*http.Request, string) error {
+		return router.ErrUnknownUpstream
+	}))
+	rec = httptest.NewRecorder()
+	adminRouterSentinel.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/breakers/u1/reset", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("reset router-unknown = %d, want 404", rec.Code)
 	}
 
 	admin3 := NewAdmin("", nil, nil, nil, WithBreakerReset(func(*http.Request, string) error {
@@ -72,6 +86,7 @@ func TestAdminUpstreamProbeEndpoint(t *testing.T) {
 	}{
 		{"healthy", nil, http.StatusOK},
 		{"unknown upstream", ErrUnknownUpstream, http.StatusNotFound},
+		{"router-unknown upstream", router.ErrUnknownUpstream, http.StatusNotFound},
 		{"no probe url", ErrProbeUnconfigured, http.StatusConflict},
 		{"probe failed", errors.New("probe status 503"), http.StatusBadGateway},
 	}

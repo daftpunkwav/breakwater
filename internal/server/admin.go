@@ -79,7 +79,10 @@ type BalanceWriter func(r *http.Request, tenantID string, balance int64) error
 type BreakerStates func(r *http.Request) []BreakerView
 
 // ErrUnknownUpstream reports a breaker-reset or probe call naming an
-// upstream the gateway does not configure.
+// upstream the gateway does not configure. The endpoint mapping also
+// accepts router.ErrUnknownUpstream — the routing switch names the same
+// condition — so a bound action reporting either sentinel renders as
+// 404 instead of leaking into the 500 branch.
 var ErrUnknownUpstream = errors.New("admin: unknown upstream")
 
 // ErrProbeUnconfigured reports a probe call for an upstream that
@@ -347,7 +350,10 @@ func (a *Admin) serveBreakerReset(w http.ResponseWriter, r *http.Request, id str
 	switch err := a.breakerReset(r, id); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "state": string(circuit.StateClosed)})
-	case errors.Is(err, ErrUnknownUpstream):
+	case errors.Is(err, ErrUnknownUpstream), errors.Is(err, router.ErrUnknownUpstream):
+		// Both sentinel vocabularies name "no such upstream"; the mapping
+		// accepts either so the 404 cannot degrade into the 500 branch
+		// when a binding reports the other package's sentinel.
 		protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
 	default:
 		protocol.WriteError(w, http.StatusInternalServerError, "breaker_reset_failed", err.Error())
@@ -365,7 +371,9 @@ func (a *Admin) serveUpstreamProbe(w http.ResponseWriter, r *http.Request, id st
 	switch err := a.upstreamProbe(r, id); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "ok": true})
-	case errors.Is(err, ErrUnknownUpstream):
+	case errors.Is(err, ErrUnknownUpstream), errors.Is(err, router.ErrUnknownUpstream):
+		// Either sentinel means "no such upstream": 404, never the 502
+		// of a genuine probe failure.
 		protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
 	case errors.Is(err, ErrProbeUnconfigured):
 		protocol.WriteError(w, http.StatusConflict, "probe_unconfigured", err.Error())

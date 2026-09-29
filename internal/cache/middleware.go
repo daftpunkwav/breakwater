@@ -169,10 +169,12 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 // passthrough set (protocol.PassthroughHeaderNames): the body's media
 // type, and the Retry-After a negatively cached 429/5xx owes its
 // client — a hit that drops it invites the immediate retry the upstream
-// asked to wait out. One list, two consumers: neither can drift.
+// asked to wait out. One list, two consumers: neither can drift. The
+// values need no legality re-check here: the only writers store headers
+// already validated by the passthrough surfaces at capture time.
 func replay(w http.ResponseWriter, entry Entry) {
 	header := w.Header()
-	for _, name := range protocol.PassthroughHeaderNames {
+	for _, name := range protocol.PassthroughHeaderNames() {
 		if v := entry.Header.Get(name); v != "" {
 			header.Set(name, v)
 		}

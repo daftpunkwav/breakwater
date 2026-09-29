@@ -142,12 +142,12 @@ func (chatWire) Format() Format { return FormatOpenAIChat }
 
 // RenderSuccess implements Wire: verbatim passthrough.
 func (chatWire) RenderSuccess(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
-	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
+	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames())
 }
 
 // RenderUpstreamError implements Wire: verbatim passthrough.
 func (chatWire) RenderUpstreamError(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
-	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames)
+	renderExchangeBody(w, status, header, upstreamBody, PassthroughHeaderNames())
 }
 
 // RenderError implements Wire: the OpenAI error envelope.
@@ -158,13 +158,22 @@ func (chatWire) RenderError(w http.ResponseWriter, status int, code, message str
 // Stream implements Wire: the canonical wire streams bytes untouched.
 func (chatWire) Stream() StreamTranscoder { return nil }
 
-// PassthroughHeaderNames are the upstream response headers a client may
+// passthroughHeaderNames are the upstream response headers a client may
 // act on and are therefore forwarded: the body's media type, and the
 // Retry-After a 429/5xx owes its client. This is the single source of
 // truth — the cache's replay of a stored entry forwards exactly this
-// set, so a header added here reaches replayed responses too. Treat it
-// as read-only.
-var PassthroughHeaderNames = []string{"Content-Type", "Retry-After"}
+// set, so a header added here reaches replayed responses too. The set
+// is package-private; callers receive copies (PassthroughHeaderNames),
+// so no call site can rewrite it for the whole process.
+var passthroughHeaderNames = []string{"Content-Type", "Retry-After"}
+
+// PassthroughHeaderNames returns the forwarded upstream response
+// headers (see passthroughHeaderNames). The result is a fresh copy per
+// call: a caller may treat it as mutable scratch without corrupting
+// the shared set or racing a concurrent render reading it.
+func PassthroughHeaderNames() []string {
+	return append([]string(nil), passthroughHeaderNames...)
+}
 
 // ValidHeaderValue reports whether v is a legal HTTP header field
 // value: visible ASCII, obs-text, space or horizontal tab (RFC 9110's

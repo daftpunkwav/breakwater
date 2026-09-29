@@ -42,7 +42,7 @@ func TestRenderExchangeBodyClampsUnrenderableStatus(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{0, 42, 600, 999} {
 		rec := httptest.NewRecorder()
-		renderExchangeBody(rec, status, http.Header{}, []byte("boom"), PassthroughHeaderNames)
+		renderExchangeBody(rec, status, http.Header{}, []byte("boom"), PassthroughHeaderNames())
 		if rec.Code != http.StatusBadGateway {
 			t.Fatalf("status %d rendered as %d, want clamped 502", status, rec.Code)
 		}
@@ -74,12 +74,36 @@ func TestRenderExchangeBodyDropsIllegalHeaderValues(t *testing.T) {
 	header.Set("Retry-After", "3\r\nSet-Cookie: injected=1")
 
 	rec := httptest.NewRecorder()
-	renderExchangeBody(rec, http.StatusTooManyRequests, header, []byte("body"), PassthroughHeaderNames)
+	renderExchangeBody(rec, http.StatusTooManyRequests, header, []byte("body"), PassthroughHeaderNames())
 
 	if got := rec.Header().Get("Retry-After"); got != "" {
 		t.Fatalf("retry-after = %q, want the illegal value dropped", got)
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("content type = %q, want the legal value forwarded", got)
+	}
+}
+
+// TestPassthroughHeaderNamesContract pins the shared passthrough set —
+// the one list both the response wires and the cache's replay forward —
+// and the copy semantics of the hand-out: a caller mutating its slice
+// must not rewrite the set for the whole process.
+func TestPassthroughHeaderNamesContract(t *testing.T) {
+	t.Parallel()
+	got := PassthroughHeaderNames()
+	want := []string{"Content-Type", "Retry-After"}
+	if len(got) != len(want) {
+		t.Fatalf("passthrough set = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("passthrough set = %v, want %v", got, want)
+		}
+	}
+
+	got[0] = "X-Injected"
+	again := PassthroughHeaderNames()
+	if again[0] != "Content-Type" {
+		t.Fatalf("mutating a returned slice changed the shared set: %v", again)
 	}
 }
