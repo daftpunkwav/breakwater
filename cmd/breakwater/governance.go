@@ -124,6 +124,14 @@ func redisOptions(cfg config.Config) *redis.Options {
 		DialTimeout:  redisDialTimeout,
 		ReadTimeout:  redisSocketTimeout,
 		WriteTimeout: redisSocketTimeout,
+		// -1, not 0: the library reads an unset (0) MaxRetries as its
+		// default of 3 and would multiply every pinned timeout by four
+		// attempts plus backoff — seconds per stage against a black-holed
+		// backend, exactly the stall the timeouts exist to prevent. One
+		// attempt, one bound: the stage fails closed inside its own
+		// timeout, and the background loops (sweeper, reconciler,
+		// recovery) retry at their own pace.
+		MaxRetries: -1,
 	}
 	if !cfg.Redis.TLS {
 		return opts

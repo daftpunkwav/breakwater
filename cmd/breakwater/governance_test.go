@@ -92,13 +92,21 @@ func TestRedisNamespaceIsTrimmedAndEmptySafe(t *testing.T) {
 // timeouts are pinned at assembly, not left on the library defaults —
 // every request crosses this client serially, so a black-holed Redis
 // must stall a request well under a second per stage, and the same
-// bounds must hold on the TLS path.
+// bounds must hold on the TLS path. Retries stay disabled at the same
+// spot: the library reads an unset MaxRetries (0) as its default of
+// three and would re-ask a dead backend four times per command,
+// multiplying the pinned timeouts into seconds per stage.
 func TestRedisOptionsPinClientTimeouts(t *testing.T) {
 	t.Parallel()
 	opts := redisOptions(config.Config{Redis: config.Redis{Addr: "127.0.0.1:6379"}})
 	if opts.DialTimeout <= 0 || opts.ReadTimeout <= 0 || opts.WriteTimeout <= 0 {
 		t.Fatalf("client timeouts unset: dial=%s read=%s write=%s, want explicit bounds",
 			opts.DialTimeout, opts.ReadTimeout, opts.WriteTimeout)
+	}
+	// -1 is the library's disable sentinel; 0 would silently mean
+	// "default three retries".
+	if opts.MaxRetries != -1 {
+		t.Fatalf("MaxRetries = %d, want -1 (retries disabled)", opts.MaxRetries)
 	}
 	if opts.TLSConfig != nil {
 		t.Fatal("plaintext address must not grow a TLS config")
@@ -111,5 +119,8 @@ func TestRedisOptionsPinClientTimeouts(t *testing.T) {
 	if tlsOpts.DialTimeout <= 0 || tlsOpts.ReadTimeout <= 0 || tlsOpts.WriteTimeout <= 0 {
 		t.Fatalf("tls path client timeouts unset: dial=%s read=%s write=%s",
 			tlsOpts.DialTimeout, tlsOpts.ReadTimeout, tlsOpts.WriteTimeout)
+	}
+	if tlsOpts.MaxRetries != -1 {
+		t.Fatalf("tls path MaxRetries = %d, want -1 (retries disabled)", tlsOpts.MaxRetries)
 	}
 }
