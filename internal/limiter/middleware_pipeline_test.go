@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -213,6 +214,21 @@ func TestLimiterMiddlewareRetryAfterClampsToOneSecond(t *testing.T) {
 		if got := rec.Header().Get("Retry-After"); got != "1" {
 			t.Fatalf("retry-after %v rendered as %q, want the 1s minimum", retryAfter, got)
 		}
+	}
+}
+
+func TestLimiterMiddlewareRetryAfterSaturates(t *testing.T) {
+	t.Parallel()
+	// The longest possible wait must render as its ceiling in seconds:
+	// an add-first ceiling overflows on a saturated wait and would
+	// advertise the 1s minimum for the longest wait there is, sending
+	// the client straight back into the 429.
+	req := chatRequest(t, limiterTenant, strings.NewReader(threeWordBody))
+	lim := &stubLimiter{decision: Decision{Allowed: false, RetryAfter: time.Duration(math.MaxInt64)}}
+	rec, _, _ := serveThroughLimiter(t, lim, nil, req, 0)
+
+	if got := rec.Header().Get("Retry-After"); got != "9223372037" {
+		t.Fatalf("retry-after = %q, want 9223372037 (the saturated wait, ceiled)", got)
 	}
 }
 

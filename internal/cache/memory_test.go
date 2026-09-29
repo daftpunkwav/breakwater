@@ -7,6 +7,7 @@ package cache
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -119,5 +120,23 @@ func TestMemoryCapacityEvicts(t *testing.T) {
 	}
 	if present != 2 {
 		t.Fatalf("entries present = %d, want 2 after eviction", present)
+	}
+}
+
+// TestSetSaturatesHugeTTL: a base TTL near the Duration ceiling must
+// survive the jitter multiply saturated, not overflow into a negative
+// that the clamp stores as a 1ms entry.
+func TestSetSaturatesHugeTTL(t *testing.T) {
+	t.Parallel()
+	var now time.Time
+	m := NewMemory(WithClock(func() time.Time { return now }))
+	ctx := context.Background()
+
+	if err := m.Set(ctx, "k", testEntry(), time.Duration(math.MaxInt64)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	now = now.Add(time.Second)
+	if _, err := m.Get(ctx, "k"); err != nil {
+		t.Fatalf("a saturated-TTL entry must outlive a second: %v", err)
 	}
 }

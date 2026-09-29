@@ -62,8 +62,13 @@ func Middleware(l Limiter, metrics *obs.Metrics) pipeline.Middleware {
 				// Advertise the ceiling of the real wait: truncating
 				// 1500ms to 1s sends a well-behaved client straight into
 				// a second 429, the round trip this header exists to
-				// spare.
-				seconds := int64((decision.RetryAfter + time.Second - 1) / time.Second)
+				// spare. Divide before rounding up: an add-first ceiling
+				// overflows for a saturated (maximum) wait and would
+				// advertise the 1s minimum for the longest wait there is.
+				seconds := int64(decision.RetryAfter / time.Second)
+				if decision.RetryAfter%time.Second > 0 {
+					seconds++
+				}
 				if seconds < 1 {
 					seconds = 1
 				}

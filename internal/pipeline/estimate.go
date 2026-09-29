@@ -17,6 +17,7 @@
 package pipeline
 
 import (
+	"math"
 	"unicode"
 
 	"github.com/daftpunkwav/breakwater/internal/protocol"
@@ -34,7 +35,7 @@ const DefaultCompletionReserve int64 = 256
 // maxRequestTokens is the tenant's per-request cap; values below one
 // disable the clamp.
 func EstimateTokens(req protocol.ChatRequest, maxRequestTokens int64) int64 {
-	return promptEstimate(req) + completionEstimate(req, maxRequestTokens)
+	return addSaturating(promptEstimate(req), completionEstimate(req, maxRequestTokens))
 }
 
 // EstimatePartialTokens estimates usage for a stream that ended
@@ -74,7 +75,7 @@ func (c *Carrier) PromptTokens() int64 {
 // stages' entry point, so the prompt scan is shared instead of
 // repeated.
 func (c *Carrier) ReserveTokens(maxRequestTokens int64) int64 {
-	return c.PromptTokens() + completionEstimate(c.Chat, maxRequestTokens)
+	return addSaturating(c.PromptTokens(), completionEstimate(c.Chat, maxRequestTokens))
 }
 
 // EstimatePartialTokens estimates usage for a stream that ended without
@@ -124,4 +125,18 @@ func completionEstimate(req protocol.ChatRequest, maxRequestTokens int64) int64 
 		completion = maxRequestTokens
 	}
 	return completion
+}
+
+// addSaturating returns a+b clamped to math.MaxInt64 instead of
+// wrapping. Both operands are non-negative estimates; a wrapped sum
+// would go negative, and a negative reservation reads to the limiter
+// as affordable and to the ledger as a balance credit — free money
+// minted by an overflow. A client-declared max_tokens near the int64
+// ceiling against a tier without its own clamp reaches exactly that.
+func addSaturating(a, b int64) int64 {
+	sum := a + b
+	if sum < 0 {
+		return math.MaxInt64
+	}
+	return sum
 }

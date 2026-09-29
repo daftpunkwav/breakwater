@@ -20,6 +20,7 @@ package limiter
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 )
@@ -129,9 +130,21 @@ func deficitWait(deficit float64, capacity int64) time.Duration {
 		return 0
 	}
 	seconds := deficit / (float64(capacity) / 60.0)
+	// Saturate before the conversion: a deficit far past what a Duration
+	// can hold (an enormous request against a near-zero TPM) overflows
+	// the float→Duration conversion into a negative, which the clamp
+	// below would report as a 1ms wait — an invitation to hammer the
+	// gateway. An effectively-unreachable refill is the honest answer.
+	if seconds >= maxDurationSeconds {
+		return time.Duration(math.MaxInt64)
+	}
 	wait := time.Duration(seconds * float64(time.Second))
 	if wait < time.Millisecond {
 		wait = time.Millisecond
 	}
 	return wait
 }
+
+// maxDurationSeconds is the largest wait, in seconds, that survives the
+// float→Duration conversion without wrapping.
+const maxDurationSeconds = math.MaxInt64 / float64(time.Second)

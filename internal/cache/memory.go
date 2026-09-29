@@ -16,6 +16,7 @@ package cache
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -93,8 +94,15 @@ func (m *Memory) Set(_ context.Context, key string, entry Entry, baseTTL time.Du
 		return nil
 	}
 	jitter := 1 + (2*rand.Float64()-1)*m.jitterFraction
-	ttl := time.Duration(float64(baseTTL) * jitter)
-	if ttl < time.Millisecond {
+	// The multiply runs in float space; a base TTL near the Duration
+	// ceiling overflows the conversion into a negative, which the clamp
+	// below would store as a 1ms entry — silently defeating the
+	// configured TTL. Saturate instead of wrapping.
+	scaled := float64(baseTTL) * jitter
+	ttl := time.Duration(scaled)
+	if scaled >= float64(math.MaxInt64) {
+		ttl = time.Duration(math.MaxInt64)
+	} else if ttl < time.Millisecond {
 		ttl = time.Millisecond
 	}
 	// Clone before taking the write lock: the private copy is the

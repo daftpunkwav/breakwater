@@ -8,6 +8,7 @@
 package pipeline
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -87,6 +88,27 @@ func TestEstimateTokensFloorsEmptyPromptAtOne(t *testing.T) {
 	// zero-cost reservation can never ride through.
 	if got := EstimateTokens(protocol.ChatRequest{}, 0); got != 1+DefaultCompletionReserve {
 		t.Fatalf("EstimateTokens = %d, want %d", got, 1+DefaultCompletionReserve)
+	}
+}
+
+// TestEstimateTokensSaturatesHugeDeclaredBudget: a client-declared
+// max_tokens near the int64 ceiling against a tier without its own
+// clamp must saturate the estimate, not wrap it negative — a negative
+// reservation reads to the limiter as affordable and to the ledger as
+// a balance credit.
+func TestEstimateTokensSaturatesHugeDeclaredBudget(t *testing.T) {
+	t.Parallel()
+	huge := int64(math.MaxInt64)
+	req := protocol.ChatRequest{
+		MaxTokens: &huge,
+		Messages:  []protocol.ChatMessage{{Role: "user", Content: "hello world"}},
+	}
+	if got := EstimateTokens(req, 0); got != math.MaxInt64 {
+		t.Fatalf("estimate = %d, want saturation at MaxInt64", got)
+	}
+	// The tier clamp still applies before the add.
+	if got := EstimateTokens(req, 100); got != 102 {
+		t.Fatalf("clamped estimate = %d, want 102", got)
 	}
 }
 

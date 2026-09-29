@@ -7,6 +7,7 @@ package limiter
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,26 @@ func newTestRedis(t *testing.T) (*Redis, *miniredis.Miniredis) {
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	return NewRedis(client, ""), mr
+}
+
+// TestRetryAfterDurationSaturates: the script's millisecond wait
+// survives the conversion intact in the normal range; a wait past the
+// Duration range — the residue of an astronomical deficit — saturates
+// at the ceiling instead of wrapping negative.
+func TestRetryAfterDurationSaturates(t *testing.T) {
+	t.Parallel()
+	if got := retryAfterDuration(0); got != 0 {
+		t.Fatalf("zero wait = %v, want 0", got)
+	}
+	if got := retryAfterDuration(1500); got != 1500*time.Millisecond {
+		t.Fatalf("plain wait = %v, want 1.5s", got)
+	}
+	if got := retryAfterDuration(math.MaxInt64); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("huge wait = %v, want the Duration ceiling", got)
+	}
+	if got := retryAfterDuration(-5); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("wrapped wait = %v, want the Duration ceiling", got)
+	}
 }
 
 func TestNamespacedKeyPrefix(t *testing.T) {

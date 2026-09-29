@@ -8,6 +8,7 @@ package limiter
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 )
@@ -20,6 +21,17 @@ func TestDeficitWaitGuards(t *testing.T) {
 	}
 	if got := deficitWait(5, 0); got != 0 {
 		t.Fatalf("disabled ceiling wait = %v, want 0", got)
+	}
+}
+
+func TestDeficitWaitSaturatesPastTheDurationCeiling(t *testing.T) {
+	t.Parallel()
+	// A 1e15-token deficit against a 1-TPM bucket needs far longer than
+	// a Duration can hold. The wait must saturate at the ceiling, not
+	// wrap into a negative that the 1ms clamp reports as an immediate
+	// retry — an invitation to hammer a gateway that cannot say yes.
+	if got := deficitWait(1e15, 1); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("astronomical deficit wait = %v, want the Duration ceiling", got)
 	}
 }
 

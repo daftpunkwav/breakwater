@@ -16,6 +16,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -86,8 +87,23 @@ func (r *Redis) Allow(ctx context.Context, tenantID string, limits Limits, token
 	retryMs, _ := res[1].(int64)
 	return Decision{
 		Allowed:    allowed == 1,
-		RetryAfter: time.Duration(retryMs) * time.Millisecond,
+		RetryAfter: retryAfterDuration(retryMs),
 	}, nil
+}
+
+// retryAfterDuration converts the script's millisecond wait into a
+// Duration. The script computes the wait in doubles and Redis narrows
+// the return to an integer, so an astronomically large deficit (a
+// huge request against a near-zero TPM) can arrive past the Duration
+// range or wrapped negative; both mean "effectively forever" and
+// saturate to the Duration ceiling rather than wrapping into a
+// negative — which the rejection path would clamp to an immediate
+// retry.
+func retryAfterDuration(retryMs int64) time.Duration {
+	if retryMs < 0 || retryMs > math.MaxInt64/int64(time.Millisecond) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(retryMs) * time.Millisecond
 }
 
 // Refund implements Limiter.
