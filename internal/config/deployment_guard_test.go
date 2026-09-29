@@ -1,9 +1,10 @@
 /**
  * @file deployment_guard_test
- * @description The unauthenticated-deployment refusal: an upstream-armed
- * gateway without an identity source, and a PostgreSQL identity without
- * an admin token, fail to boot unless the operator opts in explicitly;
- * the identity source may also load from a file:// URL.
+ * @description The unauthenticated-deployment refusals: an upstream-armed
+ * gateway without an identity source, a PostgreSQL identity without an
+ * admin token, and any armed configuration (upstreams, identity or
+ * insights) without an admin token fail to boot unless the operator opts
+ * in explicitly; the identity source may also load from a file:// URL.
  */
 package config
 
@@ -49,17 +50,65 @@ func TestLoadRejectsPostgresIdentityWithoutAdminToken(t *testing.T) {
 	}
 }
 
-// TestLoadAcceptsStaticIdentityWithoutAdminToken: the documented
-// quick-start posture — upstreams armed with the static identity set and
-// no admin token — still boots. The static mode has no key-minting
-// surface, so the open admin area there is the documented dev trade-off.
-func TestLoadAcceptsStaticIdentityWithoutAdminToken(t *testing.T) {
+// TestLoadRejectsArmedPostureWithoutAdminToken: the documented static
+// quick start — upstreams armed with the static identity set — is exactly
+// the posture where the admin surface carries live bindings (balance
+// writes, breaker resets, model/upstream switches), so an empty token
+// refuses to boot and the error names both remedies. The unguarded
+// surface can rewrite every tenant's balance anonymously.
+func TestLoadRejectsArmedPostureWithoutAdminToken(t *testing.T) {
 	cleanEnv(t)
 	t.Setenv(envUpstreams, `[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"]}]`)
 	t.Setenv(envIdentity, `{"tiers":[{"id":"free","models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
 
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load accepted an armed deployment without an admin token")
+	}
+	for _, want := range []string{envAdminToken, envAllowUnauthenticated} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to name %s", err, want)
+		}
+	}
+
+	cleanEnv(t)
+	t.Setenv(envInsightsDSN, "postgres://db.local/bw")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted an insights-only deployment without an admin token")
+	} else if !strings.Contains(err.Error(), envAdminToken) {
+		t.Fatalf("error = %q, want it to name %s", err, envAdminToken)
+	}
+}
+
+// TestLoadAcceptsArmedPostureWithAdminToken: the quick start boots once
+// the admin surface is guarded; with the opt-in it boots unguarded.
+func TestLoadAcceptsArmedPostureWithAdminToken(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv(envUpstreams, `[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"]}]`)
+	t.Setenv(envIdentity, `{"tiers":[{"id":"free","models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
+	t.Setenv(envAdminToken, "dev-admin")
+
 	if _, err := Load(); err != nil {
-		t.Fatalf("Load rejected the static-identity quick start: %v", err)
+		t.Fatalf("Load rejected the guarded quick start: %v", err)
+	}
+
+	cleanEnv(t)
+	t.Setenv(envUpstreams, `[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"]}]`)
+	t.Setenv(envIdentity, `{"tiers":[{"id":"free","models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
+	t.Setenv(envAllowUnauthenticated, "true")
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load rejected the explicit opt-in: %v", err)
+	}
+}
+
+// TestLoadAcceptsUnarmedDeploymentWithoutAdminToken: the zero-config
+// baseline keeps booting tokenless — with no upstreams, no identity and
+// no insights store the admin surface has no live bindings to expose.
+func TestLoadAcceptsUnarmedDeploymentWithoutAdminToken(t *testing.T) {
+	cleanEnv(t)
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load rejected the unarmed zero-config deployment: %v", err)
 	}
 }
 
@@ -96,6 +145,7 @@ func TestLoadIdentityFromFile(t *testing.T) {
 		t.Fatalf("write identity file: %v", err)
 	}
 	t.Setenv(envIdentity, "file://"+path)
+	t.Setenv(envAdminToken, "dev-admin")
 
 	cfg, err := Load()
 	if err != nil {

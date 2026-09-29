@@ -78,6 +78,7 @@ loop 周期性探测 auto-disabled 与被 breaker 逐出的 upstream，健康应
          "monthly_quota":50000000,"allowed_models":["*"]}],
       "tenants":[{"id":"local","name":"Local","tier":"free",
          "keys":["bw-local-dev-key"]}]}' \
+    BREAKWATER_ADMIN_TOKEN='dev-admin' \
     go run ./cmd/breakwater
 
 然后配置 agent（变量名以其文档为准）：
@@ -130,7 +131,9 @@ passthrough 按状态类分类。客户端断连绝不计为失败。
 
 用户与 key 管理需要 PostgreSQL identity store；limits 层按 tier → user →
 key 合并（标量就近取胜、deny 取并集、allow 只收紧），在 auth cache TTL 内
-生效。只要端口在你的机器之外可达，就用 `BREAKWATER_ADMIN_TOKEN` 守住 admin
+生效。部署守卫也会拒绝启动"武装但无 token"的配置（upstreams / identity /
+insights 任一存在却无 `BREAKWATER_ADMIN_TOKEN`）。只要端口在你的机器之外
+可达，就用 `BREAKWATER_ADMIN_TOKEN` 守住 admin
 面。Routing 开关在内存中、重启即重置；永久移除是配置变更。
 
 设置 `BREAKWATER_ROUTING_STRATEGY=latency`，同模型候选即按实测交换延迟排序

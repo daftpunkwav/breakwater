@@ -43,6 +43,9 @@ func TestLoadAcceptsValidUpstreams(t *testing.T) {
 	// unauthenticated-deployment guard); this test is about the table
 	// itself, so it arms the static set minimally.
 	t.Setenv("BREAKWATER_IDENTITY", `{"tiers":[{"id":"free","allowed_models":["*"]}],"tenants":[{"id":"t","tier":"free","keys":["k"]}]}`)
+	// An armed configuration needs the admin token (the deployment
+	// posture guard); this test is about the table itself.
+	t.Setenv("BREAKWATER_ADMIN_TOKEN", "dev-admin")
 	if err := loadWithUpstreams(t,
 		`[{"id":"a","base_url":"http://127.0.0.1:8090","models":["*"]}]`); err != nil {
 		t.Fatalf("valid upstreams rejected: %v", err)

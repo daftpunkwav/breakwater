@@ -117,7 +117,7 @@ backends (no Redis needed for a smoke run):
 
     BREAKWATER_UPSTREAMS='[{"id":"mock","base_url":"http://127.0.0.1:8090","probe_url":"http://127.0.0.1:8090/healthz","models":["*"]}]' \
     BREAKWATER_IDENTITY='{"tiers":[{"id":"free","rpm":60,"tpm":200000,"max_tokens":4096,"monthly_quota":10000000,"allowed_models":["*"]}],"tenants":[{"id":"local","name":"Local","tier":"free","keys":["bw-local-dev-key"]}]}' \
-    go run ./cmd/breakwater
+    BREAKWATER_ADMIN_TOKEN='dev-admin' \n    go run ./cmd/breakwater    go run ./cmd/breakwater
 
 Send a completion through the gateway:
 
@@ -156,7 +156,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_POSTGRES_DSN`             | _(none)_       | Identity system of record (overrides the static set)       |
 | `BREAKWATER_REDIS_ADDR`               | _(none)_       | Enables the Redis backends; without it, in-memory          |
 | `BREAKWATER_REDIS_TLS`                | _(off)_        | Wraps the Redis connection in TLS; the certificate must verify against the system roots with the address host as the server name. Balances and rate limit state cross the wire in plaintext otherwise |
-| `BREAKWATER_ALLOW_UNAUTHENTICATED`    | _(off)_        | Explicit dev opt-in permitting a refused posture: upstreams without any identity source (an unauthenticated open proxy), or a PostgreSQL identity without `BREAKWATER_ADMIN_TOKEN` (an open key-minting surface). Both refuse to boot without this |
+| `BREAKWATER_ALLOW_UNAUTHENTICATED`    | _(off)_        | Explicit dev opt-in permitting a refused posture: upstreams without any identity source (an unauthenticated open proxy), a PostgreSQL identity without `BREAKWATER_ADMIN_TOKEN` (an open key-minting surface), or any armed configuration (upstreams, identity or insights) without `BREAKWATER_ADMIN_TOKEN` (an open admin surface: balance writes, breaker resets, routing switches). All refuse to boot without this |
 | `BREAKWATER_REDIS_NAMESPACE`          | _(none)_       | Prefixes every limiter and quota key. Set it whenever two deployments share one Redis instance — otherwise they share tenant balances, and one environment's sweeper refunds the other's live leases. Empty assumes this gateway owns its Redis outright. **Setting it on a deployment that already has balances abandons every existing key (nothing is migrated), and the static-identity seeder then re-provisions each tenant at its full monthly budget** — treat it as a reset, not a rename. A PostgreSQL-identity deployment has no seeder, so there a namespace change leaves every tenant without a ledger until one is provisioned. |
 | `BREAKWATER_QUOTA_LEASE_TTL`          | _derived_      | How long a reserved quota lease may live before the sweeper reclaims and refunds it. Derived from `OverallDeadline + StreamTimeout` plus headroom, because a horizon shorter than the longest request silently refunds a request that really spent tokens; a value below that is rejected at startup. An unbounded stream or deadline leaves nothing to derive from, so those default to 24h. |
 | `BREAKWATER_RETRY_MAX_ATTEMPTS`       | `3`            | Upstream attempts per request                              |
@@ -175,7 +175,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` / `_BACKOFF_MAX` | `30s` / `5s` / `2` / _(off)_ | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes. `BACKOFF_MAX` spaces an auto-disabled upstream's probes out after failures (wait starts at one interval, doubles per consecutive failure, capped here; a healthy answer forgets the ladder); `0` keeps every tick probing |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ACCESS_LOG_QUEUE_SIZE`    | `4096`         | Capacity of the access log's in-memory queue; overflow drops entries and counts the drops |
-| `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
+| `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*`. Required on any armed deployment (upstreams, identity or insights configured); the unarmed zero-config run boots without it |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing; needs Redis + PostgreSQL; `0` disables |
 | `BREAKWATER_INSIGHTS_DSN`             | _(main DSN)_   | PostgreSQL the monitoring records persist to; defaults to `BREAKWATER_POSTGRES_DSN`; unset without any DSN |
 

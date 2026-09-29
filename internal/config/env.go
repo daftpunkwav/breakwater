@@ -536,10 +536,13 @@ func loadIdentitySource(key, raw string) (string, error) {
 // guardDeploymentPosture refuses to boot a deployment that would serve
 // without authentication: upstreams without any identity source turn the
 // inference endpoints into an unauthenticated open proxy burning the
-// configured upstream credentials, and a PostgreSQL identity without an
-// admin token leaves the key-minting management surface open. Both are
-// legitimate local-development postures, so the refusal names every
-// remedy and the explicit opt-in that overrides it.
+// configured upstream credentials, a PostgreSQL identity without an
+// admin token leaves the key-minting management surface open, and any
+// armed configuration without an admin token leaves the admin surface's
+// live bindings (balance writes, breaker resets, model and upstream
+// switches, the traffic record) to anonymous callers. All are legitimate
+// local-development postures, so every refusal names its remedy and the
+// explicit opt-in that overrides it.
 func guardDeploymentPosture(cfg Config) error {
 	insecure, err := envBool(envAllowUnauthenticated, false)
 	if err != nil {
@@ -556,7 +559,20 @@ func guardDeploymentPosture(cfg Config) error {
 		return fmt.Errorf("config: %s is set but %s is empty: the identity management surface (user and api-key issuance) would be open to unauthenticated callers; set %s, or set %s=1 to accept an unauthenticated deployment explicitly",
 			envPostgresDSN, envAdminToken, envAdminToken, envAllowUnauthenticated)
 	}
+	if cfg.Security.AdminToken == "" && adminSurfaceArmed(cfg) {
+		return fmt.Errorf("config: %s is empty but the admin surface has live bindings (upstreams, identity or insights): balance writes, breaker resets and the model/upstream switches would be open to unauthenticated callers; set %s, or set %s=1 to accept an unauthenticated deployment explicitly",
+			envAdminToken, envAdminToken, envAllowUnauthenticated)
+	}
 	return nil
+}
+
+// adminSurfaceArmed reports whether the configuration gives the admin
+// surface anything live to guard. The surface mounts on every run, but a
+// deployment with no upstreams, no identity and no insights store has
+// nothing behind it but empty lists — the zero-configuration baseline
+// stays bootable without a token.
+func adminSurfaceArmed(cfg Config) bool {
+	return len(cfg.Upstreams) > 0 || cfg.Identity != "" || cfg.Obs.InsightsDSN != ""
 }
 
 // validID reports whether a configured identifier (upstream ids today)

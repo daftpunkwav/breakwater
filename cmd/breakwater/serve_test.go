@@ -28,12 +28,14 @@ import (
 )
 
 // baseEnv returns the environment entries of a minimal working gateway:
-// one mock upstream, one static identity, an ephemeral port.
+// one mock upstream, one static identity, a guarded admin surface (the
+// armed-posture guard refuses to boot without it), an ephemeral port.
 func baseEnv(addr string) []string {
 	return []string{
 		"BREAKWATER_ADDR=" + addr,
 		`BREAKWATER_UPSTREAMS=[{"id":"mock","base_url":"http://127.0.0.1:1","models":["*"]}]`,
 		`BREAKWATER_IDENTITY={"tiers":[{"id":"free","rpm":10,"tpm":1000,"max_tokens":64,"monthly_quota":1000,"allowed_models":["*"]}],"tenants":[{"id":"t1","name":"T1","tier":"free","keys":["k1"]}]}`,
+		"BREAKWATER_ADMIN_TOKEN=test-admin",
 	}
 }
 

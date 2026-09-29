@@ -88,6 +88,7 @@ unchanged. Give it the gateway address and one of your tenant API keys
          "monthly_quota":50000000,"allowed_models":["*"]}],
       "tenants":[{"id":"local","name":"Local","tier":"free",
          "keys":["bw-local-dev-key"]}]}' \
+    BREAKWATER_ADMIN_TOKEN='dev-admin' \
     go run ./cmd/breakwater
 
 Then configure the agent (variable names per its documentation):
@@ -147,8 +148,10 @@ status class. Client disconnects never count as failures.
 User and key management requires the PostgreSQL identity store; the
 limits layers merge tier → user → key (nearest scalar wins, denies
 union, allows only tighten) and take effect within the auth cache
-TTL. Guard the admin surface with `BREAKWATER_ADMIN_TOKEN` whenever
-the port is reachable beyond your own machine. Routing switches are
+TTL. The deployment guard also refuses to boot an armed configuration
+(upstreams, identity or insights configured) without
+`BREAKWATER_ADMIN_TOKEN`. Guard the admin surface whenever the port is
+reachable beyond your own machine. Routing switches are
 in-memory and reset on restart; permanent removal is a config change.
 
 Set `BREAKWATER_ROUTING_STRATEGY=latency` to order same-model
