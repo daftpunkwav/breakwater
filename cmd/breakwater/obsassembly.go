@@ -124,21 +124,34 @@ func (c combinedSink) Record(entry obs.Entry) {
 		c.file.Record(entry)
 	}
 	if c.insights != nil {
-		c.insights.Record(insights.Record{
-			Time:       entry.Time,
-			TenantID:   entry.TenantID,
-			KeyID:      entry.KeyID,
-			RequestID:  entry.RequestID,
-			Model:      entry.Model,
-			Upstream:   entry.Upstream,
-			Path:       entry.Path,
-			Status:     entry.Status,
-			DurationMS: entry.Duration.Milliseconds(),
-			Tokens:     entry.Tokens,
-			CacheHit:   entry.CacheHit,
-			Streamed:   entry.Streamed,
-			ErrorCode:  entry.ErrorCode,
-		})
+		c.insights.Record(insightsRecord(entry))
+	}
+}
+
+// insightsRecord projects one access entry onto the assessment record —
+// the single conversion the fan-out uses. The pin test
+// (TestInsightsRecordFieldCoverage) holds both schemas together: a
+// field either side gains fails that test until it is projected here or
+// explicitly added to the deliberately-dropped set. That set today:
+// Attempts, the per-attempt trail (the access log's dimension, not a
+// persisted assessment column), and Method (the request_log schema has
+// no method column; projecting it is a DDL migration, not a code
+// change).
+func insightsRecord(entry obs.Entry) insights.Record {
+	return insights.Record{
+		Time:       entry.Time,
+		TenantID:   entry.TenantID,
+		KeyID:      entry.KeyID,
+		RequestID:  entry.RequestID,
+		Model:      entry.Model,
+		Upstream:   entry.Upstream,
+		Path:       entry.Path,
+		Status:     entry.Status,
+		DurationMS: entry.Duration.Milliseconds(),
+		Tokens:     entry.Tokens,
+		CacheHit:   entry.CacheHit,
+		Streamed:   entry.Streamed,
+		ErrorCode:  entry.ErrorCode,
 	}
 }
 

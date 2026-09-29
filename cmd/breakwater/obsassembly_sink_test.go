@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -65,6 +66,110 @@ func TestCombinedSinkOptionalSides(t *testing.T) {
 	insightsOnly.Record(obs.Entry{Status: 200})
 	if err := insightsOnly.Flush(context.Background()); err != nil {
 		t.Fatalf("insights-only flush: %v", err)
+	}
+}
+
+// TestInsightsRecordFieldCoverage holds the two record schemas
+// together. obs.Entry is append-only by contract and insights.Record
+// mirrors it, but nothing else forces the projection to keep up: a
+// field added to either shape without updating insightsRecord would
+// silently stop persisting (or start ignoring) a column. The test pins:
+//
+//   - every projected field carries the entry's value;
+//   - every exported insights.Record field is covered by the projection
+//     (a new column fails here until the converter sets it);
+//   - every exported obs.Entry field is either projected or in the
+//     deliberately-dropped set (a new log field fails here until the
+//     author makes that call explicitly).
+func TestInsightsRecordFieldCoverage(t *testing.T) {
+	t.Parallel()
+	entry := obs.Entry{
+		Time:      time.Unix(1700000000, 0).UTC(),
+		TenantID:  "tenant",
+		KeyID:     "key-42",
+		RequestID: "req-9f2c",
+		Model:     "mock-model",
+		Upstream:  "mock",
+		Method:    http.MethodPost,
+		Path:      "/v1/chat/completions",
+		Status:    200,
+		Duration:  1500 * time.Microsecond,
+		CacheHit:  true,
+		Tokens:    137,
+		Streamed:  true,
+		ErrorCode: "rate_limit_exceeded",
+		Attempts:  []obs.AttemptTrace{{Upstream: "mock", Credential: 0, Status: 200}},
+	}
+
+	got := insightsRecord(entry)
+	want := insights.Record{
+		Time:       entry.Time,
+		TenantID:   "tenant",
+		KeyID:      "key-42",
+		RequestID:  "req-9f2c",
+		Model:      "mock-model",
+		Upstream:   "mock",
+		Path:       "/v1/chat/completions",
+		Status:     200,
+		DurationMS: 1,
+		Tokens:     137,
+		CacheHit:   true,
+		Streamed:   true,
+		ErrorCode:  "rate_limit_exceeded",
+	}
+	if got != want {
+		t.Fatalf("insightsRecord = %+v, want %+v", got, want)
+	}
+
+	// Every record field non-zero on a fully-populated entry: a field
+	// the converter forgets reads as zero here, at the seam, instead of
+	// silently missing its column in PostgreSQL.
+	rv := reflect.ValueOf(got)
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		if rv.Field(i).IsZero() {
+			t.Errorf("insights.Record.%s left zero by insightsRecord: extend the converter with the field", rt.Field(i).Name)
+		}
+	}
+
+	// The field correspondence table: obs.Entry field -> insights.Record
+	// field. The dropped set is deliberate, never silent:
+	//   - Attempts: the per-attempt trail is the access log's dimension,
+	//     not a persisted assessment column.
+	//   - Method: the request_log schema has no method column; projecting
+	//     it is a persistence-schema migration (DDL), not a code change.
+	projected := map[string]string{
+		"Time": "Time", "TenantID": "TenantID", "KeyID": "KeyID",
+		"RequestID": "RequestID", "Model": "Model", "Upstream": "Upstream",
+		"Path": "Path", "Status": "Status", "Duration": "DurationMS",
+		"Tokens": "Tokens", "CacheHit": "CacheHit", "Streamed": "Streamed",
+		"ErrorCode": "ErrorCode",
+	}
+	dropped := map[string]bool{"Attempts": true, "Method": true}
+
+	et := reflect.TypeOf(entry)
+	for i := 0; i < et.NumField(); i++ {
+		name := et.Field(i).Name
+		if _, ok := projected[name]; ok {
+			continue
+		}
+		if dropped[name] {
+			continue
+		}
+		t.Errorf("obs.Entry.%s is neither projected nor pinned as deliberately dropped: project it in insightsRecord or add it to the dropped set", name)
+	}
+	for i := 0; i < rt.NumField(); i++ {
+		name := rt.Field(i).Name
+		found := false
+		for _, target := range projected {
+			if target == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("insights.Record.%s is not covered by the projection table", name)
+		}
 	}
 }
 
