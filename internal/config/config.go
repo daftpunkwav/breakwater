@@ -60,6 +60,11 @@ type Probe struct {
 	// auto-disabled upstream; one failure resets the count. Values
 	// above one keep a flapping upstream from cycling back in.
 	Threshold int
+	// BackoffMax, when positive, spaces an auto-disabled upstream's
+	// probes out after failures: the first failed probe waits one
+	// interval, each consecutive failure doubles the wait, capped here.
+	// Zero keeps every tick probing.
+	BackoffMax time.Duration
 }
 
 // Routing configures how the router orders eligible candidates.

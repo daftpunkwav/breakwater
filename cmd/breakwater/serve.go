@@ -140,7 +140,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, version 
 	// Active recovery probing: upstreams taken out of rotation (auto
 	// disabled, breaker ejected) are asked periodically whether they
 	// are back; only those with a configured probe_url can be asked.
-	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, cfg.Probe.Threshold,
+	startRecovery(ctx, cfg.Probe.Interval, cfg.Probe.Timeout, cfg.Probe.BackoffMax, cfg.Probe.Threshold,
 		breaker, routing.routeSwitch, routing.probes, metrics, logger)
 
 	logger.Info("gateway starting",

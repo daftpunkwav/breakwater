@@ -172,7 +172,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | Exact-match response cache      |
 | `BREAKWATER_CIRCUIT_STRATEGY`         | `consecutive`  | `consecutive` opens after `FAIL_THRESHOLD` consecutive server faults and re-admits one probe after `COOLDOWN`; `ratio` denies a rising share of calls computed from a rolling 10s window of outcomes and always admits one call per second, so it never fully cuts traffic (its denials surface on `breakwater_circuit_denied_total`; threshold and cooldown are consecutive-only) |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | Breaker threshold, cooldown, probe timeout      |
-| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes |
+| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` / `_BACKOFF_MAX` | `30s` / `5s` / `2` / _(off)_ | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes. `BACKOFF_MAX` spaces an auto-disabled upstream's probes out after failures (wait starts at one interval, doubles per consecutive failure, capped here; a healthy answer forgets the ladder); `0` keeps every tick probing |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ACCESS_LOG_QUEUE_SIZE`    | `4096`         | Capacity of the access log's in-memory queue; overflow drops entries and counts the drops |
 | `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*` (empty = open, dev only)  |
@@ -217,7 +217,12 @@ its own:
   auto-disabled and breaker-ejected upstreams; restoring an
   auto-disabled upstream takes `BREAKWATER_PROBE_THRESHOLD`
   consecutive healthy probes (one failure resets the count), so a
-  flapping upstream cannot cycle back in. Only the system's own
+  flapping upstream cannot cycle back in. With
+  `BREAKWATER_PROBE_BACKOFF_MAX` set, a failed probe spaces the next
+  one out — the wait starts at one interval and doubles per
+  consecutive failure up to the ceiling, so a hard-down upstream is
+  asked ever more rarely; a healthy answer forgets the ladder, and
+  `0` (the default) keeps every tick probing. Only the system's own
   disables are lifted this way — an operator disable survives until an
   operator lifts it. Point `probe_url` at an authenticated endpoint if
   you want credential and quota failures to self-heal.

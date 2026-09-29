@@ -103,6 +103,7 @@ const (
 	envProbeInterval = "BREAKWATER_PROBE_INTERVAL"
 	envProbeTimeout  = "BREAKWATER_PROBE_TIMEOUT"
 	envProbePasses   = "BREAKWATER_PROBE_THRESHOLD"
+	envProbeBackoff  = "BREAKWATER_PROBE_BACKOFF_MAX"
 
 	envFallbacks     = "BREAKWATER_FALLBACKS"
 	envContextLimits = "BREAKWATER_CONTEXT_LIMITS"
@@ -349,6 +350,9 @@ func loadProbe(cfg *Config) error {
 	if cfg.Probe.Threshold, err = envInt(envProbePasses, cfg.Probe.Threshold); err != nil {
 		return err
 	}
+	if cfg.Probe.BackoffMax, err = envDuration(envProbeBackoff, cfg.Probe.BackoffMax); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -408,6 +412,12 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Probe.Interval < 0 {
 		return fmt.Errorf("config: %s must not be negative", envProbeInterval)
+	}
+	if cfg.Probe.BackoffMax < 0 {
+		return fmt.Errorf("config: %s must not be negative", envProbeBackoff)
+	}
+	if cfg.Probe.BackoffMax > 0 && cfg.Probe.Interval <= 0 {
+		return fmt.Errorf("config: %s needs %s to be set: there is no loop to back off within", envProbeBackoff, envProbeInterval)
 	}
 	if cfg.Probe.Interval > 0 && cfg.Probe.Timeout <= 0 {
 		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbeTimeout, envProbeInterval)

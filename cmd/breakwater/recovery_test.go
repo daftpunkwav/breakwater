@@ -111,7 +111,7 @@ func TestRecoveryLiftsAutoDisableOnHealthyProbe(t *testing.T) {
 		t.Fatalf("auto disable: %v", err)
 	}
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, circuit.NopBreaker{}, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	waitFor(t, 2*time.Second, func() bool { return sw.UpstreamEnabled("u1") })
@@ -148,7 +148,7 @@ func TestRecoveryRequiresConsecutivePasses(t *testing.T) {
 		t.Fatalf("auto disable: %v", err)
 	}
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 2, circuit.NopBreaker{}, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 2, circuit.NopBreaker{}, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	time.Sleep(80 * time.Millisecond)
@@ -169,7 +169,7 @@ func TestRecoveryRestoresAtThreshold(t *testing.T) {
 		t.Fatalf("auto disable: %v", err)
 	}
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 3, circuit.NopBreaker{}, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 3, circuit.NopBreaker{}, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	waitFor(t, 2*time.Second, func() bool { return sw.UpstreamEnabled("u1") })
@@ -187,7 +187,7 @@ func TestRecoveryKeepsUnhealthyUpstreamOut(t *testing.T) {
 		t.Fatalf("auto disable: %v", err)
 	}
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, circuit.NopBreaker{}, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	time.Sleep(40 * time.Millisecond)
@@ -208,7 +208,7 @@ func TestRecoveryNeverLiftsManualDisable(t *testing.T) {
 		t.Fatalf("manual disable: %v", err)
 	}
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, circuit.NopBreaker{}, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	time.Sleep(40 * time.Millisecond)
@@ -233,7 +233,7 @@ func TestRecoverySkipsUnprobeableUpstreams(t *testing.T) {
 
 	// u1 is probe-capable but healthy-idle; u2 has no target.
 	adapter, _ := newProbeTarget(t, http.StatusOK)
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, circuit.NopBreaker{}, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	time.Sleep(40 * time.Millisecond)
@@ -261,7 +261,7 @@ func TestRecoveryRevivesBreakerEjectedUpstream(t *testing.T) {
 	}
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, breaker, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, breaker, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	waitFor(t, 2*time.Second, func() bool { return breaker.StateOf(ctx, "u1") == circuit.StateClosed })
@@ -283,7 +283,7 @@ func TestRecoveryWaitsOutBreakerCooldown(t *testing.T) {
 	perm.Report(circuit.OutcomeServerFault)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, breaker, sw,
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, breaker, sw,
 		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
 
 	time.Sleep(40 * time.Millisecond)
@@ -303,8 +303,8 @@ func TestStartRecoveryDisabledModes(t *testing.T) {
 	targets := map[string]upstream.Upstream{"u1": adapter}
 
 	// Neither call may panic nor change state; both return immediately.
-	startRecovery(ctx, 0, time.Second, 1, circuit.NopBreaker{}, sw, targets, obs.NewMetrics(), discardLogger())
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 1, circuit.NopBreaker{}, sw, nil, obs.NewMetrics(), discardLogger())
+	startRecovery(ctx, 0, time.Second, 0, 1, circuit.NopBreaker{}, sw, targets, obs.NewMetrics(), discardLogger())
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw, nil, obs.NewMetrics(), discardLogger())
 	time.Sleep(10 * time.Millisecond)
 	if !sw.UpstreamEnabled("u1") {
 		t.Fatal("disabled recovery must not change switch state")

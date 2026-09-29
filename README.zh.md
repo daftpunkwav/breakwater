@@ -157,7 +157,7 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
 | `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | 精确匹配响应缓存           |
 | `BREAKWATER_CIRCUIT_STRATEGY`         | `consecutive`  | `consecutive`：连续 `FAIL_THRESHOLD` 次 server fault 后 open，`COOLDOWN` 后放行一个 probe；`ratio`：按 10s 滚动结果窗口计算拒绝率，拒绝占比随失败上升，且每秒始终放行一个调用，永不完全切断流量（拒绝体现在 `breakwater_circuit_denied_total`；threshold 与 cooldown 仅作用于 consecutive） |
 | `BREAKWATER_CIRCUIT_*`                | on / `5` / `30s` / `5s` | breaker 阈值、cooldown、probe 超时        |
-| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` | `30s` / `5s` / `2` | 退出轮换的 upstream 的主动恢复探测；interval `0` 禁用（恢复只能等真实流量）；auto-disable 的 upstream 需要 `threshold` 次连续健康探测才恢复 |
+| `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` / `_BACKOFF_MAX` | `30s` / `5s` / `2` / _(关)_ | 退出轮换的 upstream 的主动恢复探测；interval `0` 禁用（恢复只能等真实流量）；auto-disable 的 upstream 需要 `threshold` 次连续健康探测才恢复。`BACKOFF_MAX` 在失败后拉开 auto-disable upstream 的探测间隔（等待从一个 interval 起步、每连续失败翻倍、封顶于此；健康应答即忘记阶梯）；`0` 保持每个 tick 都探测 |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(关)_         | JSONL access log 文件（有界队列、丢最旧）                    |
 | `BREAKWATER_ACCESS_LOG_QUEUE_SIZE`    | `4096`         | access log 内存队列容量；溢出丢弃条目并计数                  |
 | `BREAKWATER_ADMIN_TOKEN`              | _(无)_         | 守护 `/admin/*` 的 Bearer token（留空 = 不设防，仅限开发）   |
@@ -204,8 +204,12 @@ Lua 脚本上，identity tier 余额自动从静态 identity 集合 seed。配�
   `probe_url` 时）周期性探测 auto-disable 与被 breaker 逐出的 upstream；
   恢复一个 auto-disable 的 upstream 需要 `BREAKWATER_PROBE_THRESHOLD` 次
   连续健康探测（一次失败清零计数），flapping 的 upstream 无法循环回归。
-  只有系统自己的禁用可以这样解除——运维禁用存活到运维亲自解除。想让凭据
-  与 quota 故障自愈，就把 `probe_url` 指向一个需要鉴权的端点。
+  设置 `BREAKWATER_PROBE_BACKOFF_MAX` 后，一次失败的探测会把下一次推开——
+  等待从一个 interval 起步，每连续失败翻倍、封顶于此值，彻底宕掉的
+  upstream 被问得越来越少；一次健康应答即忘记整个阶梯，`0`（默认）保持
+  每个 tick 都探测。只有系统自己的禁用可以这样解除——运维禁用存活到
+  运维亲自解除。想让凭据与 quota 故障自愈，就把 `probe_url` 指向一个
+  需要鉴权的端点。
 - 两个运维把手补完这个环：`POST /admin/breakers/{id}/reset` 强制打开的
   breaker 关闭（"我修好了 upstream，现在放行"），`POST
   /admin/upstreams/{id}/probe` 按需跑一次健康交换（200 健康，upstream 未

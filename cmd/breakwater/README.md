@@ -13,7 +13,7 @@ The gateway binary and its composition root: the one place that decides which ba
 | `governance.go` | Backend selection: `newGovernanceBackends` (Redis with a fail-fast Ping, or in-memory), `newAuthStore` (PostgreSQL / static `BREAKWATER_IDENTITY` / none, each wrapped in `auth.NewCachedStore` with a 60 s positive / 5 s negative TTL), `seedBalances` |
 | `obsassembly.go` | Observation assembly: the JSONL access log file sink (`BREAKWATER_ACCESS_LOG_PATH`), the insights store (`BREAKWATER_INSIGHTS_DSN`, defaulting to `BREAKWATER_POSTGRES_DSN`), the `combinedSink` fan-out |
 | `adminassembly.go` | Admin surface assembly: `buildAdmin` binds the balance, breaker state/reset and on-demand probe endpoints to the live ledger, breaker registry and upstream adapters (`adminBindings`) |
-| `recovery.go` | The active recovery loop: probes auto-disabled upstreams (`BREAKWATER_PROBE_THRESHOLD` consecutive healthy answers lift the disable) and drives synthetic probes through the breaker for breaker-ejected upstreams |
+| `recovery.go` | The active recovery loop: probes auto-disabled upstreams (`BREAKWATER_PROBE_THRESHOLD` consecutive healthy answers lift the disable; `BREAKWATER_PROBE_BACKOFF_MAX` spaces the probes of a failing one out on a doubling ladder) and drives synthetic probes through the breaker for breaker-ejected upstreams |
 
 ## Assembly order
 

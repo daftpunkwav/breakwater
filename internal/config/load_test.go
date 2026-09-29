@@ -22,7 +22,7 @@ var envVars = []string{
 	envCacheEnabled, envCacheTTL, envCacheCapacity,
 	envCircuitEnabled, envCircuitStrategy, envCircuitThreshold, envCircuitCooldown, envCircuitProbe,
 	envAccessLogPath, envAdminToken, envRouting,
-	envProbeInterval, envProbeTimeout, envProbePasses,
+	envProbeInterval, envProbeTimeout, envProbePasses, envProbeBackoff,
 	envFallbacks, envContextLimits,
 	envAllowUnauthenticated,
 }
@@ -126,9 +126,10 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envCircuitCooldown, "45s")
 	t.Setenv(envCircuitProbe, "3s")
 	t.Setenv(envRouting, "latency")
-	t.Setenv(envProbeInterval, "0s")
+	t.Setenv(envProbeInterval, "45s")
 	t.Setenv(envProbeTimeout, "7s")
 	t.Setenv(envProbePasses, "3")
+	t.Setenv(envProbeBackoff, "4m")
 	t.Setenv(envFallbacks, `{"m1":["m2","m3"]}`)
 	t.Setenv(envContextLimits, `{"m1":128000,"m2":32000}`)
 
@@ -182,7 +183,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.Circuit != (Circuit{Enabled: false, Strategy: "ratio", FailThreshold: 9, Cooldown: 45 * time.Second, ProbeTimeout: 3 * time.Second}) {
 		t.Fatalf("circuit = %+v", cfg.Circuit)
 	}
-	if cfg.Probe != (Probe{Interval: 0, Timeout: 7 * time.Second, Threshold: 3}) {
+	if cfg.Probe != (Probe{Interval: 45 * time.Second, Timeout: 7 * time.Second, Threshold: 3, BackoffMax: 4 * time.Minute}) {
 		t.Fatalf("probe = %+v", cfg.Probe)
 	}
 	if cfg.Routing.Strategy != "latency" {

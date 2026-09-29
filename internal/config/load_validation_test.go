@@ -68,6 +68,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"zero probe timeout while enabled", envProbeTimeout, "0s", "must be positive", false},
 		{"bad probe threshold", envProbePasses, "lots", "parse", false},
 		{"zero probe threshold while enabled", envProbePasses, "0", "must be positive", false},
+		{"negative probe backoff", envProbeBackoff, "-1m", "must not be negative", false},
 		{"bad fallbacks JSON", envFallbacks, "{", "parse", true},
 		{"empty fallback key", envFallbacks, `{"":["m2"]}`, "empty model name", true},
 		{"empty fallback chain", envFallbacks, `{"m1":[]}`, "lists no fallbacks", true},
@@ -221,5 +222,17 @@ func TestLoadRejectsBrokenRetryBudgetShare(t *testing.T) {
 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+// TestLoadRejectsProbeBackoffWithoutLoop: the backoff schedules the
+// attempts of a loop that must exist — configured alone it is a
+// contradiction, not a setting.
+func TestLoadRejectsProbeBackoffWithoutLoop(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv(envProbeInterval, "0s")
+	t.Setenv(envProbeBackoff, "4m")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "no loop to back off within") {
+		t.Fatalf("Load accepted a backoff without a loop: %v", err)
 	}
 }
