@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | [`auth/`](auth/) | 身份：users、roles、分层 key limits（static/PostgreSQL store、进程内 LRU） | [链接](auth/README.md) |
 | [`cache/`](cache/) | 精确匹配缓存、手写 singleflight、eligibility | [链接](cache/README.md) |
-| [`circuit/`](circuit/) | 三态 breaker（含无 breaker 运行用的 nop） | [链接](circuit/README.md) |
+| [`circuit/`](circuit/) | 同一 port 后的 breaker：三态连续失败状态机，或窗口化 ratio 守卫（含无 breaker 运行用的 nop） | [链接](circuit/README.md) |
 | [`config/`](config/) | 配置 schema 与加载（`BREAKWATER_*` env → 类型化配置） | — |
 | [`httpserver/`](httpserver/) | 共享 HTTP 生命周期与响应 tee | — |
 | [`insights/`](insights/) | 监控记录存储：批量异步写入、稳定性聚合（成功率、失败构成、分位数、时间线） | — |

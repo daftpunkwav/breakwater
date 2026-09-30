@@ -37,6 +37,9 @@
 | 请求绝不超出 attempt 上限，重试绝不超出全局 in-flight 预算 | `internal/retry` | `TestExecuteCapsAttempts`、`TestBudgetCapsInFlightRetries`、`TestBudgetReleaseAbsorbsImbalance` |
 | 第一个响应字节之后，loop 绝不重试 | `internal/retry`、`internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
 | 打开的 breaker 拒绝一切调用；half-open 恰放行一个 probe 并回收被弃的 | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`、`TestBreakerReclaimsAbandonedProbe` |
+| ratio 守卫按失败占比拒绝越来越多的调用，但绝不完全切断流量——每个强制放行间隔仍有一个调用通过 | `internal/circuit` | `TestRatioDenialTracksFailureShare`、`TestRatioForcePassAdmitsOnePerInterval` |
+| 彻底宕掉的上游其恢复探测按翻倍阶梯拉开间隔；一次健康应答即忘记阶梯 | `cmd/breakwater` | `TestProbeBackoffLadder`、`TestRecoveryBackoffZeroKeepsFixedPace` |
+| 对账轮次不会活过自己的节拍；卡死的 store 在边界处中止该轮 | `internal/quota` | `TestStartReconcilerBoundsAWedgedRound` |
 | 断掉的流保留已交付字节，以一个错误事件加 `[DONE]` 收尾 | `internal/relay`、`internal/protocol` | `TestWriteAbortContract`、`TestWriteAbortAllCodes`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
 | 余额绝不透支；扣减减去退款与余额对账 | `internal/quota` | `TestMemoryConcurrentDrainReconciles`、`TestRedisConcurrentDrainReconciles` |
 | 每笔预留都有 lease 记录；被弃的 lease 被回收 | `internal/quota` | `TestStartSweeperReclaimsUntilCancelled` |
@@ -54,9 +57,9 @@ PostgreSQL，因此数据库门控的集成测试在那里运行——这正是�
 
 | 包 | 本地、无数据库 | 双服务齐备 |
 | ------- | ------------------- | ------------------ |
-| `internal/auth` | 90.5% | ~99% |
-| `internal/insights` | 94.5% | ~99% |
-| `cmd/breakwater` | 94.7% | ~96% |
+| `internal/auth` | 90.3% | ~99% |
+| `internal/insights` | 87.2% | ~99% |
+| `cmd/breakwater` | 92.3% | ~96% |
 
 其余所有包在本地、无任何服务的情况下即 ≥95%。即便双数据库齐备，
 `cmd/breakwater` 未覆盖的仍是一组防御性 error return——任何合法配置都无法

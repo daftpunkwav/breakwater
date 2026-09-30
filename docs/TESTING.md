@@ -40,6 +40,9 @@ are the index — run any of them to check the property directly.
 | A request never exceeds its attempt cap, and retries never exceed the global in-flight budget | `internal/retry` | `TestExecuteCapsAttempts`, `TestBudgetCapsInFlightRetries`, `TestBudgetReleaseAbsorbsImbalance` |
 | After the first response byte, the loop never retries | `internal/retry`, `internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
 | An open breaker denies every call; half-open admits exactly one probe and reclaims abandoned ones | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`, `TestBreakerReclaimsAbandonedProbe` |
+| The ratio guard denies a rising share of calls but never cuts traffic entirely — one call per forced-pass interval still gets through | `internal/circuit` | `TestRatioDenialTracksFailureShare`, `TestRatioForcePassAdmitsOnePerInterval` |
+| A hard-down upstream's recovery probes space out on a doubling ladder; a healthy answer forgets the ladder | `cmd/breakwater` | `TestProbeBackoffLadder`, `TestRecoveryBackoffZeroKeepsFixedPace` |
+| A reconcile round cannot outlive its own cadence; a wedged store aborts the round at the bound | `internal/quota` | `TestStartReconcilerBoundsAWedgedRound` |
 | A broken stream keeps its delivered bytes and ends with one error event plus `[DONE]` | `internal/relay`, `internal/protocol` | `TestWriteAbortContract`, `TestWriteAbortAllCodes`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
 | The balance never over-drafts; debits minus refunds reconcile against the balance | `internal/quota` | `TestMemoryConcurrentDrainReconciles`, `TestRedisConcurrentDrainReconciles` |
 | Every reservation has a lease record; abandoned leases are reclaimed | `internal/quota` | `TestStartSweeperReclaimsUntilCancelled` |
@@ -59,9 +62,9 @@ services reads lower, because whole SQL paths sit behind
 
 | Package | Local, no databases | With both services |
 | ------- | ------------------- | ------------------ |
-| `internal/auth` | 90.5% | ~99% |
-| `internal/insights` | 94.5% | ~99% |
-| `cmd/breakwater` | 94.7% | ~96% |
+| `internal/auth` | 90.3% | ~99% |
+| `internal/insights` | 87.2% | ~99% |
+| `cmd/breakwater` | 92.3% | ~96% |
 
 Every other package reads ≥95% locally, without any service. What
 remains uncovered in `cmd/breakwater` even with both databases is a set

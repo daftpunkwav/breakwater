@@ -19,7 +19,7 @@ them (root README, "Layout zoning"):
 | --- | --- | --- |
 | [`auth/`](auth/) | Identity: users, roles, layered key limits (static/PostgreSQL stores, process-local LRU) | [link](auth/README.md) |
 | [`cache/`](cache/) | Exact-match cache, hand-written singleflight, eligibility | [link](cache/README.md) |
-| [`circuit/`](circuit/) | Three-state breaker (plus a nop for breaker-less runs) | [link](circuit/README.md) |
+| [`circuit/`](circuit/) | Breakers behind one port: three-state consecutive machine or windowed ratio guard (plus a nop for breaker-less runs) | [link](circuit/README.md) |
 | [`config/`](config/) | Configuration schema and loading (`BREAKWATER_*` env → typed config) | — |
 | [`httpserver/`](httpserver/) | Shared HTTP lifecycle and the response tee | — |
 | [`insights/`](insights/) | Monitoring record store: batched async writes, stability aggregation (success rate, failure mix, percentiles, timelines) | — |
