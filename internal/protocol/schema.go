@@ -13,6 +13,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 )
@@ -72,7 +73,16 @@ func ParseChatRequest(body []byte) (ChatRequest, error) {
 // (non-streaming JSON, or the final usage chunk of a stream). ok is
 // false when the body is malformed or carries no usage — providers that
 // omit usage exist, and settlement needs an explicit signal for that.
+//
+// The decode is gated on a byte scan: a body without the literal
+// "usage" key cannot hold a usage object, and a stream pumps thousands
+// of frames past this parser for exactly one that carries it. A frame
+// whose prose happens to spell the key falls through to the decode and
+// gets the answer it always got — only the cheap negative changes.
 func ParseUsage(body []byte) (usage Usage, ok bool) {
+	if !bytes.Contains(body, []byte(`"usage"`)) {
+		return Usage{}, false
+	}
 	var envelope struct {
 		Usage *Usage `json:"usage"`
 	}
