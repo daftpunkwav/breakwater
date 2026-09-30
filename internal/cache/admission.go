@@ -104,7 +104,8 @@ func (a *admission) record(h uint64) {
 }
 
 // estimate returns the key's read frequency: the smallest of the sketch
-// rows (their independent seeds decorrelate false positives) plus the
+// rows (their independent mixing decorrelates false positives — a
+// wrong-high estimate needs collisions in all four rows) plus the
 // doorkeeper's presence bit.
 func (a *admission) estimate(h uint64) int {
 	a.mu.Lock()
@@ -115,7 +116,7 @@ func (a *admission) estimate(h uint64) int {
 func (a *admission) estimateLocked(h uint64) int {
 	min := byte(maxNibble)
 	for i := range a.rows {
-		if v := a.nibble((h^a.seeds[i])&a.mask, a.rows[i]); v < min {
+		if v := a.nibble(a.slot(h, i), a.rows[i]); v < min {
 			min = v
 		}
 	}
@@ -123,6 +124,17 @@ func (a *admission) estimateLocked(h uint64) int {
 		min += estimateDoorBoo
 	}
 	return int(min)
+}
+
+// slot maps a key hash to one row's counter index. The mix must be a
+// bijection on the full word before the mask: a bare XOR against the
+// seed cancels under it — (h1 ^ s) & mask == (h2 ^ s) & mask exactly
+// when h1 and h2 agree on the masked bits, for every seed alike — so
+// two colliding keys would share the slot in all four rows and the
+// rows would read as one hash instead of four.
+func (a *admission) slot(h uint64, row int) uint64 {
+	x := (h ^ a.seeds[row]) * 0x9E3779B97F4A7C15
+	return (x ^ (x >> 31)) & a.mask
 }
 
 // nibble reads one 4-bit counter packed two per byte.
@@ -134,7 +146,7 @@ func (a *admission) nibble(idx uint64, row []byte) byte {
 // wrapping: a counter that wraps would lie about frequency order.
 func (a *admission) sketchIncrement(h uint64) {
 	for i := range a.rows {
-		idx := (h ^ a.seeds[i]) & a.mask
+		idx := a.slot(h, i)
 		cell := &a.rows[i][idx>>1]
 		shift := (idx & 1) * 4
 		if v := (*cell >> shift) & 0x0f; v < maxNibble {

@@ -70,10 +70,27 @@ func TestAdmissionSaturation(t *testing.T) {
 // every counter is at most halved, and the door bitmap ends zeroed —
 // because estimate values themselves carry the doorkeeper's random
 // false positives.
+//
+// The keys are fixed raw hashes, not a.hash output: every integer path
+// the test inspects (slots, door bits, halve) is pure given the fixed
+// seeds, so the exact-equality assertions hold for every run. A random
+// per-process seed cannot say the same — a one-hit key that false-
+// positives through the doorkeeper into the sketch could land on the
+// hot key's slot and turn "3 halved to 1" into 2. These constants are
+// chosen so none of the one-hit keys shares the hot key's slot in any
+// row; a doorkeeper false positive among them is then harmless (its
+// 1-counters halve to zero).
 func TestAdmissionHalveDecaysAndKeepsOrder(t *testing.T) {
 	t.Parallel()
 	a := newAdmission(16)
-	hot := a.hash("hot")
+	const hot = 0xe220a8397b1dcdaf
+	// oneHitKeys are spread-hash shapes with no slot overlap on hot.
+	var oneHitKeys = [12]uint64{
+		0xeefa317fac7ab8fd, 0x9a989360446679b8, 0xc8e28bfe16044686,
+		0xee73b213dfd00283, 0x73107157f961ea45, 0xeeca0d1638d4ff44,
+		0x5267207749d7d891, 0x7d58d2344464bd8e, 0x103269e656fb174c,
+		0xa05955c9267c7f5f, 0xe4ef795ff906fdce, 0x3d836a4cefe2d32c,
+	}
 
 	for i := 0; i < 4; i++ {
 		a.record(hot)
@@ -92,8 +109,8 @@ func TestAdmissionHalveDecaysAndKeepsOrder(t *testing.T) {
 
 	// Twelve one-hit keys push the increment count past the reset
 	// budget (16); the last record triggers door clear + sketch halve.
-	for i := 0; i < 12; i++ {
-		a.record(a.hash(string(rune('a' + i))))
+	for _, h := range oneHitKeys {
+		a.record(h)
 	}
 	total, hotLeft := 0, 0
 	for i := range a.rows {
@@ -117,6 +134,51 @@ func TestAdmissionHalveDecaysAndKeepsOrder(t *testing.T) {
 	}
 	if hotLeft != sketchRows {
 		t.Fatalf("hot rows carry %d, want %d (3 halved to 1 per row)", hotLeft, sketchRows)
+	}
+}
+
+// TestAdmissionRowsDecorrelateCollisions: two hashes that agree on the
+// masked bits must not share the slot in every sketch row. A bare XOR
+// against the seed cancels under the mask — the collision condition
+// would be seed-free — so the rows would all read as one hash and the
+// min-of-rows estimate would lose its false-positive defense. The mix
+// in slot keeps the rows' collision events independent: among mask-
+// colliding pairs only a coincidence-rate minority shares all four
+// rows (about one in sixteen cubed; five is already generous). The
+// pairs come from a deterministic mixer so they carry the full-word
+// entropy a key hash actually has — small sequential integers would
+// sit in one carry basin and prove nothing.
+func TestAdmissionRowsDecorrelateCollisions(t *testing.T) {
+	t.Parallel()
+	// spread deterministically turns an index into a full-word hash
+	// shape (the splitmix64 finalizer).
+	spread := func(x uint64) uint64 {
+		x += 0x9E3779B97F4A7C15
+		x ^= x >> 30
+		x *= 0xBF58476D1CE4E5B9
+		x ^= x >> 27
+		x *= 0x94D049BB133111EB
+		x ^= x >> 31
+		return x
+	}
+	a := newAdmission(16)
+	shared := 0
+	for x := uint64(0); x < 1000; x++ {
+		h1 := spread(x)
+		h2 := h1 ^ (spread(x+1000) &^ 0xf) // agrees with h1 on every masked bit
+		inAllRows := true
+		for row := range a.rows {
+			if a.slot(h1, row) != a.slot(h2, row) {
+				inAllRows = false
+				break
+			}
+		}
+		if inAllRows {
+			shared++
+		}
+	}
+	if shared > 5 {
+		t.Fatalf("%d of 1000 mask-colliding pairs share all four rows: the rows read as one hash", shared)
 	}
 }
 
