@@ -6,6 +6,8 @@
  * - Store entries under content-hash keys with expiry
  * - Apply the expiry jitter on Set so aligned TTLs cannot expire into
  *   a stampede
+ * - Reclaim expired entries on a throttled in-write sweep, so time
+ *   cannot quietly eat the capacity that the admission gate defends
  * - Admit new entries under capacity pressure through a TinyLFU-style
  *   gate: the newcomer must be at least as frequently read as the
  *   sampled victim it would displace (see admission.go)
@@ -25,6 +27,11 @@ import (
 	"time"
 )
 
+// sweepInterval paces the expired-entry sweep: at most one full scan
+// per interval, triggered from the write path. A thousand-entry scan
+// costs microseconds; the per-Set check is one timestamp comparison.
+const sweepInterval = time.Second
+
 // memoryEntry is the stored form; expiry is absolute.
 type memoryEntry struct {
 	entry   Entry
@@ -37,6 +44,8 @@ type Memory struct {
 	entries map[string]memoryEntry
 	max     int
 	now     func() time.Time
+	// sweepAt is the earliest instant the next expiry sweep may run.
+	sweepAt time.Time
 	// jitterFraction bounds the random TTL spread: effective TTL is
 	// base * (1 ± jitterFraction).
 	jitterFraction float64
@@ -137,6 +146,16 @@ func (m *Memory) Set(_ context.Context, key string, entry Entry, baseTTL time.Du
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Expired entries stop occupying capacity here: a sweep at most
+	// once per interval, from the write path that already holds the
+	// lock. Without it, time would quietly eat the slots the admission
+	// gate defends, and the gate's victim samples would skew toward
+	// the dead.
+	now := m.now()
+	if m.sweepAt.IsZero() || !m.sweepAt.After(now) {
+		m.sweepLocked(now)
+		m.sweepAt = now.Add(sweepInterval)
+	}
 	// An update of a resident key bypasses the gate: refreshing what
 	// callers demonstrably use is always right.
 	if _, resident := m.entries[key]; !resident && len(m.entries) >= m.max {
@@ -148,9 +167,21 @@ func (m *Memory) Set(_ context.Context, key string, entry Entry, baseTTL time.Du
 	}
 	m.entries[key] = memoryEntry{
 		entry:   stored,
-		expires: m.now().Add(ttl),
+		expires: now.Add(ttl),
 	}
 	return nil
+}
+
+// sweepLocked deletes every expired entry. The map walk is bounded by
+// the capacity and runs at most once per sweepInterval; visibility is
+// unaffected either way, because Get judges expiry itself — this only
+// frees the slots earlier than overwrite would.
+func (m *Memory) sweepLocked(now time.Time) {
+	for key, me := range m.entries {
+		if !now.Before(me.expires) {
+			delete(m.entries, key)
+		}
+	}
 }
 
 // admitLocked runs the capacity-pressure decision: a random sample of

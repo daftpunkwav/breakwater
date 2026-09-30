@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestAdmissionDoorkeeperSemantics: a first read only arms the
@@ -127,8 +128,8 @@ func TestMemoryGateRejectsColdOverflow(t *testing.T) {
 	m := NewMemory(WithCapacity(2))
 	ctx := context.Background()
 
-	_ = m.Set(ctx, "a", testEntry(), 1<<20)
-	_ = m.Set(ctx, "b", testEntry(), 1<<20)
+	_ = m.Set(ctx, "a", testEntry(), time.Hour)
+	_ = m.Set(ctx, "b", testEntry(), time.Hour)
 	// Read both residents repeatedly; the doorkeeper's first read
 	// counts too, so this puts both estimates well above a cold key.
 	for i := 0; i < 3; i++ {
@@ -141,7 +142,7 @@ func TestMemoryGateRejectsColdOverflow(t *testing.T) {
 	}
 
 	// A cold newcomer loses to the weakest resident.
-	_ = m.Set(ctx, "cold", testEntry(), 1<<20)
+	_ = m.Set(ctx, "cold", testEntry(), time.Hour)
 	if _, err := m.Get(ctx, "cold"); err == nil {
 		t.Fatal("a cold key must not displace read-backed residents")
 	}
@@ -160,14 +161,14 @@ func TestMemoryGateAdmitsReadBackedKey(t *testing.T) {
 	m := NewMemory(WithCapacity(1))
 	ctx := context.Background()
 
-	_ = m.Set(ctx, "resident", testEntry(), 1<<20)
+	_ = m.Set(ctx, "resident", testEntry(), time.Hour)
 	// Read the absent key three times: the gate counts the misses.
 	for i := 0; i < 3; i++ {
 		if _, err := m.Get(ctx, "newcomer"); err == nil {
 			t.Fatal("newcomer is not cached yet")
 		}
 	}
-	_ = m.Set(ctx, "newcomer", testEntry(), 1<<20)
+	_ = m.Set(ctx, "newcomer", testEntry(), time.Hour)
 	if _, err := m.Get(ctx, "newcomer"); err != nil {
 		t.Fatal("the read-backed newcomer must be admitted")
 	}
@@ -183,10 +184,10 @@ func TestMemoryUpdateBypassesGate(t *testing.T) {
 	m := NewMemory(WithCapacity(1))
 	ctx := context.Background()
 
-	_ = m.Set(ctx, "k", testEntry(), 1<<20)
+	_ = m.Set(ctx, "k", testEntry(), time.Hour)
 	updated := testEntry()
 	updated.Status = http.StatusTeapot
-	if err := m.Set(ctx, "k", updated, 1<<20); err != nil {
+	if err := m.Set(ctx, "k", updated, time.Hour); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	got, err := m.Get(ctx, "k")
@@ -210,7 +211,7 @@ func TestMemoryGateConcurrentUse(t *testing.T) {
 			for j := 0; j < 200; j++ {
 				key := "k" + string(rune('a'+j%32))
 				_, _ = m.Get(ctx, key)
-				_ = m.Set(ctx, key, testEntry(), 1<<20)
+				_ = m.Set(ctx, key, testEntry(), time.Hour)
 			}
 		}(i)
 	}
