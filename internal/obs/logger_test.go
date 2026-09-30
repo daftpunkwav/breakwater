@@ -74,29 +74,38 @@ func TestLoggerDropsOldestUnderPressure(t *testing.T) {
 	var out bytes.Buffer
 	l := NewLogger(&out, 4)
 
-	for i := 0; i < 10; i++ {
+	const total = 10
+	for i := 0; i < total; i++ {
 		l.Record(Entry{Status: i})
 	}
-	if got := l.Dropped(); got != 6 {
-		t.Fatalf("dropped = %d, want 6 (oldest evicted)", got)
-	}
-
+	// The drain goroutine consumes the ring concurrently, so the exact
+	// drop count is timing, not contract. What the ring owes is exact:
+	// every entry lands in exactly one of three states (written,
+	// dropped, buffered) — conservation; the written lines are a
+	// strictly increasing tail of the input ending at the newest
+	// (drop-oldest, FIFO); and at least one full capacity of the
+	// newest entries always survives.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := l.Flush(ctx); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
+
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("written = %d lines, want 4 (the newest)", len(lines))
+	if len(lines) < 4 || len(lines) > total {
+		t.Fatalf("written = %d lines, want between one capacity (4) and all %d", len(lines), total)
 	}
-	// The survivors are the four newest entries, in order.
+	if got := l.Dropped(); got != int64(total-len(lines)) {
+		t.Fatalf("dropped = %d with %d written, want the conservation %d", got, len(lines), total-len(lines))
+	}
+	// The survivors are the newest entries, in order, ending at the
+	// last one recorded.
 	for i, line := range lines {
 		var entry Entry
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Fatalf("line %d: %v", i, err)
 		}
-		if want := 6 + i; entry.Status != want {
+		if want := total - len(lines) + i; entry.Status != want {
 			t.Fatalf("line %d status = %d, want %d", i, entry.Status, want)
 		}
 	}
