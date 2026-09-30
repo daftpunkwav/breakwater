@@ -369,3 +369,41 @@ func TestBreakerUpstreamsAreIndependent(t *testing.T) {
 		t.Fatalf("b = %s, want closed", got)
 	}
 }
+
+// TestConsecutiveAbsorbsSlowAsHealth: a slow completion is health
+// evidence — it resets the failure run like a success, and a slow
+// half-open probe closes the breaker.
+func TestConsecutiveAbsorbsSlowAsHealth(t *testing.T) {
+	t.Parallel()
+	clock := 0
+	now := func() time.Time { return time.Unix(0, 0).Add(time.Duration(clock) * time.Second) }
+	b := NewRegistry(Config{FailThreshold: 2, Cooldown: 30 * time.Second, ProbeTimeout: 5 * time.Second}, WithClock(now))
+
+	p, ok := b.Allow(context.Background(), "u")
+	if !ok {
+		t.Fatal("closed breaker denied")
+	}
+	p.Report(OutcomeServerFault)
+	p2, _ := b.Allow(context.Background(), "u")
+	p2.Report(OutcomeSlow) // resets the run: the next fault is the first, not the second
+	if state := b.StateOf(context.Background(), "u"); state != StateClosed {
+		t.Fatalf("state = %s, want closed: a slow answer is health evidence", state)
+	}
+	p3, _ := b.Allow(context.Background(), "u")
+	p3.Report(OutcomeServerFault)
+	p4, _ := b.Allow(context.Background(), "u")
+	p4.Report(OutcomeServerFault)
+	if state := b.StateOf(context.Background(), "u"); state != StateOpen {
+		t.Fatalf("state = %s, want open after two consecutive faults", state)
+	}
+
+	clock = 31 // the cooldown elapses
+	probe, ok := b.Allow(context.Background(), "u")
+	if !ok {
+		t.Fatal("half-open must admit the probe")
+	}
+	probe.Report(OutcomeSlow)
+	if state := b.StateOf(context.Background(), "u"); state != StateClosed {
+		t.Fatalf("state = %s, want closed: a slow probe is health evidence", state)
+	}
+}

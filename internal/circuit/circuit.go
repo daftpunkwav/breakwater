@@ -56,6 +56,14 @@ const (
 	// OutcomeServerFault marks an upstream-side failure (5xx, timeout,
 	// connection reset).
 	OutcomeServerFault
+	// OutcomeSlow marks a call that completed healthily but took longer
+	// than the caller's slow-call threshold to prove itself (time to
+	// first byte for streams, full duration otherwise). It is health
+	// evidence like Success — the upstream answered — and every
+	// strategy without a notion of slowness treats it exactly as
+	// Success; the slow-call strategy additionally counts it against
+	// the window's slow share.
+	OutcomeSlow
 	// OutcomeGatewayTerminated marks a call the gateway cut short under
 	// its own policy (the stream ceiling). The upstream kept answering
 	// until the gateway stopped listening, so the outcome is no health

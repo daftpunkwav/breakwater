@@ -42,6 +42,10 @@ type Config struct {
 	// ProbeTimeout bounds a half-open probe; an unanswered probe counts
 	// as a failure at the deadline.
 	ProbeTimeout time.Duration
+	// SlowRatio drives the slow-call strategy only: the share of slow
+	// completions in the rolling window that opens the breaker. A value
+	// outside (0, 1] selects the default.
+	SlowRatio float64
 }
 
 // Config values substituted for zero members.
@@ -263,7 +267,7 @@ func (g *granted) Report(outcome Outcome) {
 	switch s.name {
 	case StateClosed:
 		switch outcome {
-		case OutcomeSuccess, OutcomeClientFault:
+		case OutcomeSuccess, OutcomeClientFault, OutcomeSlow:
 			s.failures = 0
 		case OutcomeServerFault:
 			s.failures++
@@ -290,7 +294,7 @@ func (g *granted) Report(outcome Outcome) {
 			b.reclaimProbe(s, now)
 			return
 		}
-		if now.After(s.probe.deadline) && outcome == OutcomeSuccess {
+		if now.After(s.probe.deadline) && (outcome == OutcomeSuccess || outcome == OutcomeSlow) {
 			// A success reported after its own deadline is unreliable;
 			// treat the probe as timed out.
 			b.reclaimProbe(s, now)
@@ -298,7 +302,7 @@ func (g *granted) Report(outcome Outcome) {
 		}
 		s.probe = nil
 		switch outcome {
-		case OutcomeSuccess, OutcomeClientFault:
+		case OutcomeSuccess, OutcomeClientFault, OutcomeSlow:
 			b.transition(s, StateClosed)
 		case OutcomeServerFault:
 			b.transition(s, StateOpen)

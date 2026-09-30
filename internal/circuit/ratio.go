@@ -272,10 +272,11 @@ type ratioPermission struct {
 	reported bool
 }
 
-// Report implements Permission: successes and client faults record
-// healthy answers, server faults record failures, and a gateway cut
-// records nothing. A late report lands in whatever bucket is current
-// when it arrives — the ring can only ever record the present.
+// Report implements Permission: successes, client faults and slow
+// completions record healthy answers, server faults record failures,
+// and a gateway cut records nothing. A late report lands in whatever
+// bucket is current when it arrives — the ring can only ever record
+// the present.
 func (p *ratioPermission) Report(outcome Outcome) {
 	p.reg.mu.Lock()
 	defer p.reg.mu.Unlock()
@@ -285,7 +286,7 @@ func (p *ratioPermission) Report(outcome Outcome) {
 	p.reported = true
 	now := p.reg.now()
 	switch outcome {
-	case OutcomeSuccess, OutcomeClientFault:
+	case OutcomeSuccess, OutcomeClientFault, OutcomeSlow:
 		p.s.add(now, 1, 0, 0)
 	case OutcomeServerFault:
 		p.s.add(now, 0, 1, 0)

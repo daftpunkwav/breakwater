@@ -399,3 +399,24 @@ func TestRatioConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestRatioSlowOutcomeRecordsHealthy: a slow completion lands in the
+// window as a healthy answer — it feeds accepts, not failures.
+func TestRatioSlowOutcomeRecordsHealthy(t *testing.T) {
+	t.Parallel()
+	reg, clock, _ := newRatioFixture(t)
+	const id = "u1"
+	now := clock.Now()
+
+	s := reg.stateOf(id, now)
+	p, ok := reg.Allow(context.Background(), id)
+	if !ok {
+		t.Fatal("expected admission")
+	}
+	p.Report(OutcomeSlow)
+
+	h := s.history(now)
+	if h.accepts != 1 || h.total != 1 {
+		t.Fatalf("history = %+v, want the slow completion counted healthy", h)
+	}
+}
