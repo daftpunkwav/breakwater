@@ -60,9 +60,12 @@ jobs:
       # Fails the build when the code calls a known-vulnerable function
       # in a dependency or the standard library. Pinned like every other
       # tool: a scanner bump must never be a surprise in an unrelated diff.
+      # v1.7.0 is the newest scanner that runs on the pinned 1.25
+      # toolchain; v1.8.0 requires go >= 1.26 and cannot even install
+      # under GOTOOLCHAIN=local.
       - name: Vulnerability scan
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
 
       - name: Lint
