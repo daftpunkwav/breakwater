@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,14 +36,33 @@ func awaitFlight(t *testing.T, ch <-chan struct{}, what string) {
 }
 
 // releaseFlight lets a parked fetch finish only after every caller has
-// been issued: the callers signal just before calling Do, and the
-// registry freeze between the last signal and the release keeps the
-// holder's completion from outrunning a caller still walking its last
-// instructions to the lookup.
-func releaseFlight(g *Flight, hold chan struct{}) {
+// been issued AND registered as a waiter: it waits — under the registry
+// lock — for each key's flight to hold its issued waiter count, then
+// closes the hold inside the lock. Any caller that entered Do is by
+// then its key's holder or a registered waiter, so a resumed loader
+// serves a closed set and exactly one fetch covers everyone; a caller
+// parked between its issue signal and the lookup cannot slip in as a
+// second holder, no matter how the scheduler staggers it.
+func releaseFlight(g *Flight, hold chan struct{}, issuedByKey map[string]int) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	for {
+		ready := true
+		for key, issued := range issuedByKey {
+			c := g.calls[key]
+			if c == nil || c.waiters.Load() < int64(issued) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			break
+		}
+		g.mu.Unlock()
+		runtime.Gosched()
+		g.mu.Lock()
+	}
 	close(hold)
-	g.mu.Unlock()
 }
 
 func TestFlightSingleFetchUnderStampede(t *testing.T) {
@@ -79,7 +99,7 @@ func TestFlightSingleFetchUnderStampede(t *testing.T) {
 		<-queued
 	}
 	awaitFlight(t, entered, "the flight's registration")
-	releaseFlight(g, hold)
+	releaseFlight(g, hold, map[string]int{"cold-key": waiters - 1})
 	wg.Wait()
 	close(results)
 
@@ -141,7 +161,7 @@ func TestFlightErrorsSharedWithoutRetry(t *testing.T) {
 		<-queued
 	}
 	awaitFlight(t, entered, "the flight's registration")
-	releaseFlight(g, hold)
+	releaseFlight(g, hold, map[string]int{"k": callers - 1})
 	wg.Wait()
 	close(errs)
 
@@ -238,7 +258,7 @@ func TestFlightPanicReleasesWaiters(t *testing.T) {
 	for range waiters {
 		<-queued
 	}
-	releaseFlight(g, hold)
+	releaseFlight(g, hold, map[string]int{"k": waiters})
 	wg.Wait()
 	close(errs)
 
@@ -299,7 +319,7 @@ func TestFlightKeysAreIndependent(t *testing.T) {
 	for range 2 * callersPerKey {
 		<-queued
 	}
-	releaseFlight(g, hold)
+	releaseFlight(g, hold, map[string]int{"a": callersPerKey - 1, "b": callersPerKey - 1})
 	wg.Wait()
 	if got := fetches.Load(); got != 2 {
 		t.Fatalf("fetches = %d, want 2 (one per key)", got)

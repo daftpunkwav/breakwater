@@ -22,15 +22,20 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // call is one in-flight fetch: the holder runs fn, waiters block on the
 // done channel, which the holder closes exactly once after publishing
-// the result — one channel per flight, none per waiter.
+// the result — one channel per flight, none per waiter. waiters counts
+// the callers currently attached to the flight: incremented under the
+// registry lock at join time, decremented when a waiter stops waiting,
+// so a reader holding the lock sees a stable figure.
 type call struct {
-	done  chan struct{}
-	value Entry
-	err   error
+	done    chan struct{}
+	value   Entry
+	err     error
+	waiters atomic.Int64
 }
 
 // Flight deduplicates concurrent fetches per key. It is safe for
@@ -56,6 +61,7 @@ func NewFlight() *Flight {
 func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (Entry, error)) (Entry, error, bool) {
 	g.mu.Lock()
 	if existing, ok := g.calls[key]; ok {
+		existing.waiters.Add(1)
 		g.mu.Unlock()
 		entry, err := existing.wait(ctx)
 		return entry, err, false
@@ -94,6 +100,7 @@ func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (E
 // context: a client gone mid-wait stops waiting. Receiving from the
 // closed channel happens after the holder published the result.
 func (c *call) wait(ctx context.Context) (Entry, error) {
+	defer c.waiters.Add(-1)
 	select {
 	case <-c.done:
 		return c.value, c.err

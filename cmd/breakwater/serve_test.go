@@ -25,7 +25,16 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/config"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/quota"
+	"github.com/jackc/pgx/v5"
 )
+
+// firstLine condenses a SQL statement for a failure message.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
 
 // baseEnv returns the environment entries of a minimal working gateway:
 // one mock upstream, one static identity, a guarded admin surface (the
@@ -480,6 +489,31 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skip("BREAKWATER_TEST_POSTGRES_DSN not set: reconcile arming needs a live PostgreSQL")
 	}
+	// The CI service starts an empty database, and serve arms the
+	// reconciler by listing tenants from the identity schema: the
+	// tables must exist before assembly. Apply the deploy schema —
+	// the same file first boot applies, idempotent by construction —
+	// statement by statement.
+	schema, err := os.ReadFile(filepath.Join("..", "..", "deploy", "schema.sql"))
+	if err != nil {
+		t.Fatalf("read deploy schema: %v", err)
+	}
+	connCtx, cancelConn := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelConn()
+	conn, err := pgx.Connect(connCtx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	for _, stmt := range strings.Split(string(schema), ";") {
+		if strings.TrimSpace(stmt) == "" {
+			continue
+		}
+		if _, err := conn.Exec(connCtx, stmt); err != nil {
+			t.Fatalf("apply schema statement %q: %v", firstLine(stmt), err)
+		}
+	}
+	_ = conn.Close(connCtx)
+
 	mr := miniredis.RunT(t)
 	setEnv(t, baseEnv("127.0.0.1:0"))
 	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
