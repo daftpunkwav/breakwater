@@ -113,7 +113,12 @@ jobs:
       # The compose deployment story builds these two images; a broken
       # Dockerfile must fail CI, not the next docker compose up. The
       # GHA cache keeps the module-download and build layers between
-      # runs, which is where a cold build spends most of its time.
+      # runs, which is where a cold build spends most of its time; the
+      # container-driver builder below is what supports exporting to it
+      # (the default docker driver does not).
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build gateway image
         uses: docker/build-push-action@v6
         with:
