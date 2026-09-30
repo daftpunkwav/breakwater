@@ -193,7 +193,12 @@ func NewMetrics() *Metrics {
 	reg("breakwater_quota_refunded_tokens_total", "Tokens refunded at settlement.", "counter",
 		[]string{"tenant"}, nil)
 	reg("breakwater_quota_reservation_expired_total", "Leases reclaimed by the sweeper.", "counter", nil, nil)
-	reg("breakwater_quota_reconciliation_error", "Ledger identity drifts detected by the reconcile protocol; always zero when the ledger is healthy.", "counter", nil, nil)
+	// Deliberately the one counter without the _total suffix: a rename
+	// would break every dashboard already scraping the name, so the
+	// deviation from the convention is declared here instead. The HELP
+	// carries the semantics only — whether the reading should be zero is
+	// the ledger's health, not part of the metric's meaning.
+	reg("breakwater_quota_reconciliation_error", "Ledger identity drifts detected by the reconcile protocol.", "counter", nil, nil)
 
 	reg("breakwater_cache_hit_total", "Responses served from the cache.", "counter", nil, nil)
 	reg("breakwater_cache_miss_total", "Cache lookups that missed.", "counter", nil, nil)

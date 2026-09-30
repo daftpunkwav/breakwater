@@ -40,6 +40,10 @@ import (
 // upstream is asked ever more rarely instead of every tick. Zero keeps
 // every tick probing (the breaker-ejected path needs no ladder either
 // way: the breaker's own cooldown already spaces those probes).
+//
+// In the operator-facing BREAKWATER_PROBE_* variables the parameters
+// read: interval, timeout, `passes` is BREAKWATER_PROBE_THRESHOLD and
+// `backoff` is BREAKWATER_PROBE_BACKOFF_MAX.
 func startRecovery(ctx context.Context, interval, timeout, backoff time.Duration, passes int, breaker circuit.Breaker, routingSwitch *router.Switch, probes map[string]upstream.Upstream, metrics *obs.Metrics, logger *slog.Logger) {
 	if interval <= 0 || len(probes) == 0 {
 		return

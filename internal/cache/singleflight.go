@@ -45,9 +45,14 @@ func NewFlight() *Flight {
 	return &Flight{calls: make(map[string]*call)}
 }
 
-// Do runs fn for the key, deduplicating concurrent callers. owner
-// reports whether this invocation actually executed fn (true) or
-// attached to an existing flight (false).
+// Do runs fn for the key, deduplicating concurrent callers.
+//
+// The result comes back as (entry, err, owner): the error-last
+// convention is set aside so the flight's shared outcome stays an
+// adjacent pair — entry and err are what the flight produced (a waiter
+// receives the holder's outcome, errors included), and owner reports
+// whether this invocation actually executed fn (true) or attached to
+// an existing flight (false).
 func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (Entry, error)) (Entry, error, bool) {
 	g.mu.Lock()
 	if existing, ok := g.calls[key]; ok {

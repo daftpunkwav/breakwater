@@ -1,17 +1,21 @@
 /**
  * @file priority
- * @description Static priority routing: per-model candidate lists in
- * configured order, with breaker-open upstreams excluded.
+ * @description Per-model candidate lists behind the router port: the
+ * configured order by default, or ordered by measured exchange latency
+ * under the latency strategy, with ineligible upstreams excluded.
  *
  * Responsibilities:
- * - Resolve a model to its ordered candidate upstreams
+ * - Resolve a model to its candidate upstreams and order them (static
+ *   configured order, or the latency tracker's measured order with the
+ *   near-tie leader draw)
  * - Nothing else: failover execution belongs to the relay; breaker
- *   accounting to the circuit port
+ *   accounting to the circuit port; the latency measurement itself to
+ *   the tracker
  *
- * Priority is configuration order: the first entry matching a model is
- * the primary, later matches are failover targets. The wildcard model
- * "*" matches everything, letting one generalist upstream back a
- * thousand models without listing them.
+ * Binding order is configuration order: the first entry matching a
+ * model is the primary, later matches are failover targets. The
+ * wildcard model "*" matches everything, letting one generalist
+ * upstream back a thousand models without listing them.
  */
 package router
 
@@ -47,9 +51,10 @@ type entry struct {
 	upstream upstream.Upstream
 }
 
-// Priority is the static model-to-upstreams router. Binding order is
-// immutable after construction; the optional switch and latency
-// tracker overlay runtime state on top of it. Safe for concurrent use.
+// Priority is the model-to-upstreams router. Binding order is
+// immutable after construction; the optional switch, strategy and
+// latency tracker overlay runtime state on top of it. Safe for
+// concurrent use.
 type Priority struct {
 	entries  []entry
 	breaker  circuit.Breaker
