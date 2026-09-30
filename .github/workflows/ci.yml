@@ -73,27 +73,27 @@ jobs:
         with:
           version: v2.13
 
+      # One full pass produces both verdicts: the race detector and the
+      # per-package coverage report the floor step parses. The explicit
+      # timeout keeps a hung test from burning the job's 15-minute
+      # budget on go test's default 10m plus a second full attempt of
+      # the same wait. pipefail is set because the runner's default
+      # shell is bash -e — without it a failing go test would be masked
+      # by tee and the floor would parse a half-written report.
       - name: Test
-        # The explicit timeout keeps a hung test from burning the job's
-        # 15-minute budget on go test's default 10m plus a second full
-        # attempt of the same wait.
-        run: go test -race -timeout 8m ./...
+        run: |
+          set -eo pipefail
+          go test -race -cover -timeout 8m ./... | tee /tmp/cover.txt
         env:
           BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
           BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable
 
-      # The coverage floor (>=95% per package) is a hard gate. Plain -cover
-      # keeps this pass fast; the race detector already ran above. The
-      # integration env is set here too: the identity and assessment
-      # stores keep a share of their SQL behind DSN-gated tests, so the
-      # floor is only meaningful once those tests actually run.
+      # The coverage floor (>=95% per package) is a hard gate, parsed
+      # from the run the Test step already produced — the identity and
+      # assessment stores keep a share of their SQL behind DSN-gated
+      # tests, so the floor is only meaningful on that same run.
       - name: Coverage floor
         run: |
-          # The runner's default shell is bash -e (no pipefail); without
-          # pipefail a failing go test would be masked by tee and the
-          # gate would parse a half-written report as if it were green.
-          set -eo pipefail
-          go test -cover ./... | tee /tmp/cover.txt
           failed=0
           while IFS= read -r line; do
             # The trailing % keeps "[no statements]" lines (no ratio)
@@ -109,14 +109,29 @@ jobs:
             esac
           done < /tmp/cover.txt
           exit $failed
-        env:
-          BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
-          BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable
 
       # The compose deployment story builds these two images; a broken
-      # Dockerfile must fail CI, not the next docker compose up.
+      # Dockerfile must fail CI, not the next docker compose up. The
+      # GHA cache keeps the module-download and build layers between
+      # runs, which is where a cold build spends most of its time.
       - name: Build gateway image
-        run: docker build -f deploy/breakwater.Dockerfile -t breakwater/gateway:ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/breakwater.Dockerfile
+          push: false
+          load: true
+          tags: breakwater/gateway:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build mock upstream image
-        run: docker build -f deploy/mockllm.Dockerfile -t breakwater/mockllm:ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/mockllm.Dockerfile
+          push: false
+          load: true
+          tags: breakwater/mockllm:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
