@@ -44,6 +44,9 @@ type MemoryOption func(*Memory)
 
 // WithCapacity caps the entry count; a capacity-pressure eviction drops
 // an arbitrary entry (map iteration order), not a policy-chosen victim.
+// The cap is an entry count, not a byte budget: one entry may hold up
+// to maxCacheableBytes (see middleware.go), so the worst-case footprint
+// is capacity times that bound.
 func WithCapacity(n int) MemoryOption {
 	return func(m *Memory) {
 		if n >= 1 {

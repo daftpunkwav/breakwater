@@ -38,7 +38,11 @@ const (
 
 // upstreamErrorBody is the lenient shape of an OpenAI-style error
 // envelope: {"error":{"code":...,"type":...}}. Providers disagree on
-// whether code is a string or a number, hence any.
+// whether code is a string or a number, hence any. The translated
+// wires re-render the same envelope from internal/protocol's own
+// string-typed copy (wire.go); the two decoders are deliberately
+// separate — classification needs code+type, re-render needs
+// message+code — and must track the same provider reality.
 type upstreamErrorBody struct {
 	Error struct {
 		Code any    `json:"code"`

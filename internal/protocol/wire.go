@@ -243,7 +243,15 @@ func parseChatResponse(body []byte) (chatResponse, bool) {
 }
 
 // upstreamErrorBody is the error payload of an upstream OpenAI error
-// envelope, extracted when translated wires re-render it.
+// envelope, extracted when translated wires re-render it. The relay's
+// fatal classifier (fatal.go in internal/relay) decodes the same
+// envelope with a lenient Code any — providers disagree on whether a
+// code is a string or a number; here a non-string code simply decodes
+// as empty and falls back to the placeholder below. The two decoders
+// are deliberately separate (re-render needs message+code,
+// classification needs code+type); each one's expectations are pinned
+// by its own package's envelope tests, and a provider envelope change
+// must revisit both.
 type upstreamErrorBody struct {
 	Error struct {
 		Message string `json:"message"`

@@ -55,6 +55,10 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("httpserver: no handler configured")
 	}
 	if opts.ShutdownGrace <= 0 {
+		// A caller-supplied contract, not a configuration path: the
+		// config layer refuses a non-positive grace (its own default is
+		// 15s), so this fallback only serves direct callers of this
+		// neutral package that left the field zero.
 		opts.ShutdownGrace = 10 * time.Second
 	}
 
