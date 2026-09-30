@@ -92,13 +92,20 @@ func TestStartReconcilerReportsDriftUntilCancelled(t *testing.T) {
 		t.Fatalf("drifts grew from %d to %d across failed reads", driftsFrozen, got)
 	}
 
-	// Cancellation ends the loop.
+	// Cancellation ends the loop: reads stop. A read already executing
+	// at cancel-time is legal; give it room to land before sampling,
+	// then confirm absence by polling across many loop periods — an
+	// alive loop at this interval would keep issuing reads, so any
+	// growth inside the window is a loop that ignored the cancel.
 	cancel()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	before := source.readCount()
-	time.Sleep(80 * time.Millisecond)
-	if after := source.readCount(); after != before {
-		t.Fatalf("reconcile reads continued after cancellation: %d -> %d", before, after)
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if after := source.readCount(); after != before {
+			t.Fatalf("reconcile reads continued after cancellation: %d -> %d", before, after)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

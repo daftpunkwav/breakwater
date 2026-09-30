@@ -19,15 +19,22 @@ import (
 func TestBuildBreakerHalfOpenObserver(t *testing.T) {
 	t.Parallel()
 	metrics := obs.NewMetrics()
-	breaker := buildBreaker(config.Circuit{Enabled: true, FailThreshold: 1, Cooldown: 2 * time.Millisecond, ProbeTimeout: time.Second}, metrics)
+	// The half-open transition runs on the registry's own clock: a
+	// one-hour cooldown advanced by hand proves the transition is
+	// elapsed-time driven, with no real-time sleep to outpace.
+	cooldown := time.Hour
+	now := time.Now()
+	clock := now
+	breaker := buildBreaker(config.Circuit{Enabled: true, FailThreshold: 1, Cooldown: cooldown, ProbeTimeout: time.Second}, metrics,
+		circuit.WithClock(func() time.Time { return clock }))
 
 	perm, ok := breaker.Allow(context.Background(), "u")
 	if !ok {
 		t.Fatal("closed breaker denied")
 	}
-	perm.Report(circuit.OutcomeServerFault) // -> open
+	perm.Report(circuit.OutcomeServerFault) // -> open, opened at now
 
-	time.Sleep(5 * time.Millisecond) // cooldown elapses
+	clock = now.Add(cooldown) // the cooldown elapses on the breaker's clock
 	if _, ok := breaker.Allow(context.Background(), "u"); !ok {
 		t.Fatal("half-open must admit the probe")
 	}

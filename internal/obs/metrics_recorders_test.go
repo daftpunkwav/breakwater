@@ -52,6 +52,10 @@ func TestMetricsRecordersEmitSamples(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
+		// The drift counter's HELP line is part of its published
+		// contract: semantic only — whether the reading should be zero
+		// is the ledger's health, not part of the metric's meaning.
+		"# HELP breakwater_quota_reconciliation_error Ledger identity drifts detected by the reconcile protocol.",
 		`breakwater_requests_total{tenant="t1",model="m1",upstream="u1",status="200"} 1`,
 		`breakwater_quota_reservation_tokens_total{tenant="t1"} 100`,
 		`breakwater_quota_refunded_tokens_total{tenant="t1"} 40`,

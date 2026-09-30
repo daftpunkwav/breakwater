@@ -54,21 +54,54 @@ func setEnv(t *testing.T, entries []string) {
 	}
 }
 
-// TestServeRunsAndStops pins the full assembled lifecycle: a cancelled
-// parent context ends serve cleanly with a nil error.
+// awaitGateway polls the liveness endpoint until the gateway answers,
+// so the lifecycle tests interact with a server that is actually up
+// instead of guessing a startup delay.
+func awaitGateway(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gateway never came up on %s: %v", addr, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// serveUntilReady binds the listener, starts serve in the background
+// and returns once the gateway answers, so a test cancels a server that
+// is really running. Ownership of the listener transfers to serve.
+func serveUntilReady(t *testing.T, ctx context.Context, cfg config.Config, listener net.Listener) chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", listener) }()
+	awaitGateway(t, listener.Addr().String())
+	return done
+}
+
+// TestServeRunsAndStops pins the full assembled lifecycle: the gateway
+// comes up serving, and a cancelled parent context then ends serve
+// cleanly with a nil error.
 func TestServeRunsAndStops(t *testing.T) {
 	setEnv(t, baseEnv("127.0.0.1:0"))
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listener: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(150 * time.Millisecond) // let the listener come up
-		cancel()
-	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
+	done := serveUntilReady(t, ctx, cfg, listener)
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -80,10 +113,20 @@ func TestServeRunsAndStops(t *testing.T) {
 // which orchestrators read as a failed unit and restart in a loop.
 func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
 	// An upstream that never answers, so a request stays in flight.
+	// The handler parks on a test-owned channel, not the request
+	// context: the gateway abandons the exchange at drain timeout and
+	// its transport may keep the pooled connection open, so no TCP
+	// close ever arrives — the test releases the handler itself.
+	reached := make(chan struct{})
+	release := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+		close(reached)
+		<-release
 	}))
+	// LIFO: registered last runs first, so the handler is released
+	// before its server drains.
 	defer slow.Close()
+	defer close(release)
 
 	entries := baseEnv("127.0.0.1:0")
 	entries = append(entries,
@@ -103,16 +146,24 @@ func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind listener: %v", err)
 	}
-	defer func() { _ = listener.Close() }()
 	addr := listener.Addr().String()
 	cfg.Server.Addr = addr
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Hold a request open across the shutdown signal.
+	done := serveUntilReady(t, ctx, cfg, listener)
+
+	// Hold a request open across the shutdown signal; the upstream's
+	// reached channel proves it is in flight before the cancel fires.
+	// The client context is cancelled once serve has returned: the
+	// drain timeout abandons the connection without closing it (the
+	// process exit does that in production), so the test releases the
+	// request itself — client-gone propagates to the upstream and the
+	// deferred slow.Close can drain.
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
 	go func() {
-		time.Sleep(100 * time.Millisecond) // let the listener come up
-		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost,
 			"http://"+addr+"/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
 		req.Header.Set("Authorization", "Bearer k1")
 		req.Header.Set("Content-Type", "application/json")
@@ -121,12 +172,17 @@ func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
 			_ = resp.Body.Close()
 		}
 	}()
-	time.Sleep(250 * time.Millisecond)
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the upstream")
+	}
 	cancel()
 
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", listener); err != nil {
+	if err := <-done; err != nil {
 		t.Fatalf("a drain timeout is a clean shutdown, got: %v", err)
 	}
+	reqCancel()
 }
 func TestServeRedisModeWithIdentity(t *testing.T) {
 	mr := miniredis.RunT(t)
@@ -137,13 +193,15 @@ func TestServeRedisModeWithIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listener: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		cancel()
-	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
+	done := serveUntilReady(t, ctx, cfg, listener)
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -167,11 +225,11 @@ func TestServeReconcilerNeedsReachableIdentity(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		cancel()
-	}()
+	// The reconciler's assembly fails before anything listens, so serve
+	// returns synchronously; the timeout only guards a regression that
+	// would hang instead of failing.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err == nil {
 		t.Fatal("serve: an unreachable identity database must fail the reconciler's startup")
 	}
@@ -193,12 +251,14 @@ func TestServeWithoutIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listener: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
+	done := serveUntilReady(t, ctx, cfg, listener)
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
@@ -431,12 +491,14 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listener: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		cancel()
-	}()
-	if err := serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", nil); err != nil {
+	done := serveUntilReady(t, ctx, cfg, listener)
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }

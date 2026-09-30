@@ -58,10 +58,14 @@ func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T
 	}
 
 	waiterDone := make(chan *httptest.ResponseRecorder, 1)
+	waiterIssued := make(chan struct{})
 	go func() {
+		// Signal just before firing, so the release below cannot
+		// outrun the waiter on its way to the shared flight.
+		close(waiterIssued)
 		waiterDone <- fireRequest(handler, body)
 	}()
-	time.Sleep(100 * time.Millisecond) // let the waiter join the flight
+	<-waiterIssued
 	close(release)
 
 	owner := <-ownerDone
@@ -194,8 +198,14 @@ func TestCacheSharedFetchSurvivesTheStarterLeaving(t *testing.T) {
 	cancelStarter()
 
 	waiterRec := make(chan *httptest.ResponseRecorder, 1)
-	go func() { waiterRec <- fireRequest(handler, body) }()
-	time.Sleep(50 * time.Millisecond) // let the waiter join the flight
+	waiterIssued := make(chan struct{})
+	go func() {
+		// Signal just before firing, so the release below cannot
+		// outrun the waiter on its way to the shared flight.
+		close(waiterIssued)
+		waiterRec <- fireRequest(handler, body)
+	}()
+	<-waiterIssued
 	close(release)
 
 	waiter := <-waiterRec

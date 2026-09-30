@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,12 +20,35 @@ import (
 )
 
 func TestRunStopsOnCancelledContext(t *testing.T) {
+	// Reserve an ephemeral port for the mock: the address is known up
+	// front so readiness can be polled instead of guessed.
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	addr := reserved.Addr().String()
+	if err := reserved.Close(); err != nil {
+		t.Fatalf("release the port: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(100 * time.Millisecond) // let the listener come up
-		cancel()
-	}()
-	if err := run(ctx, slog.New(slog.DiscardHandler), options{addr: "127.0.0.1:0"}); err != nil {
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, slog.New(slog.DiscardHandler), options{addr: addr}) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get("http://" + addr + "/")
+		if err == nil {
+			_ = resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mock upstream never came up on %s: %v", addr, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }

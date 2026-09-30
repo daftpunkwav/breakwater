@@ -23,30 +23,63 @@ func entryFor(status int) Entry {
 	return Entry{Status: status, Header: header, Body: []byte("payload")}
 }
 
+// awaitFlight blocks for one event or fails the test after a generous
+// deadline, so a broken flight surfaces as a failure instead of a hang.
+func awaitFlight(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s never happened", what)
+	}
+}
+
+// releaseFlight lets a parked fetch finish only after every caller has
+// been issued: the callers signal just before calling Do, and the
+// registry freeze between the last signal and the release keeps the
+// holder's completion from outrunning a caller still walking its last
+// instructions to the lookup.
+func releaseFlight(g *Flight, hold chan struct{}) {
+	g.mu.Lock()
+	close(hold)
+	g.mu.Unlock()
+}
+
 func TestFlightSingleFetchUnderStampede(t *testing.T) {
 	t.Parallel()
 	g := NewFlight()
 	var fetches atomic.Int64
 	hold := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
 
 	const waiters = 64
+	queued := make(chan struct{}, waiters)
 	var wg sync.WaitGroup
 	results := make(chan Entry, waiters)
 	for range waiters {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			queued <- struct{}{}
 			entry, _, _ := g.Do(context.Background(), "cold-key", func(context.Context) (Entry, error) {
 				fetches.Add(1)
+				// The flight is live and this loader is parked from
+				// here on: every other caller deterministically rides it.
+				once.Do(func() { close(entered) })
 				<-hold // the fetch is slow: everyone must pile onto the flight
 				return entryFor(200), nil
 			})
 			results <- entry
 		}()
 	}
-	// Give the goroutines a moment to pile up, then release the fetch.
-	time.Sleep(50 * time.Millisecond)
-	close(hold)
+	// Issue every caller before releasing the fetch — no wall-clock
+	// guess about scheduler speed.
+	for range waiters {
+		<-queued
+	}
+	awaitFlight(t, entered, "the flight's registration")
+	releaseFlight(g, hold)
 	wg.Wait()
 	close(results)
 
@@ -83,23 +116,32 @@ func TestFlightErrorsSharedWithoutRetry(t *testing.T) {
 	t.Parallel()
 	g := NewFlight()
 	hold := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
 	boom := errors.New("upstream exploded")
 
+	const callers = 8
+	queued := make(chan struct{}, callers)
 	var wg sync.WaitGroup
-	errs := make(chan error, 8)
-	for range 8 {
+	errs := make(chan error, callers)
+	for range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			queued <- struct{}{}
 			_, err, _ := g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+				once.Do(func() { close(entered) })
 				<-hold
 				return Entry{}, boom
 			})
 			errs <- err
 		}()
 	}
-	time.Sleep(50 * time.Millisecond)
-	close(hold)
+	for range callers {
+		<-queued
+	}
+	awaitFlight(t, entered, "the flight's registration")
+	releaseFlight(g, hold)
 	wg.Wait()
 	close(errs)
 
@@ -116,16 +158,20 @@ func TestFlightWaiterContextBoundsTheWait(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	// A separate goroutine owns the flight and stays in the loader.
+	// A separate goroutine owns the flight and stays in the loader;
+	// entered fires on its first statement, so the flight's
+	// registration is observed, not guessed.
+	entered := make(chan struct{})
 	ownerDone := make(chan struct{})
 	go func() {
 		defer close(ownerDone)
 		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+			close(entered)
 			<-release
 			return entryFor(200), nil
 		})
 	}()
-	time.Sleep(50 * time.Millisecond) // the flight registers
+	awaitFlight(t, entered, "the flight's registration")
 
 	waiterCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -155,6 +201,7 @@ func TestFlightPanicReleasesWaiters(t *testing.T) {
 	t.Parallel()
 	g := NewFlight()
 	hold := make(chan struct{})
+	entered := make(chan struct{})
 	boom := errors.New("kaboom")
 
 	// The holder panics inside fn; Do must release the flight and
@@ -165,18 +212,22 @@ func TestFlightPanicReleasesWaiters(t *testing.T) {
 			ownerGotPanic <- recover()
 		}()
 		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
+			close(entered)
 			<-hold
 			panic(boom)
 		})
 	}()
-	time.Sleep(50 * time.Millisecond) // the flight registers
+	awaitFlight(t, entered, "the flight's registration")
 
+	const waiters = 4
+	queued := make(chan struct{}, waiters)
 	var wg sync.WaitGroup
-	errs := make(chan error, 4)
-	for range 4 {
+	errs := make(chan error, waiters)
+	for range waiters {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			queued <- struct{}{}
 			_, err, _ := g.Do(context.Background(), "k", func(context.Context) (Entry, error) {
 				t.Error("a waiter must never execute the loader")
 				return entryFor(200), nil
@@ -184,8 +235,10 @@ func TestFlightPanicReleasesWaiters(t *testing.T) {
 			errs <- err
 		}()
 	}
-	time.Sleep(50 * time.Millisecond) // the waiters pile onto the flight
-	close(hold)
+	for range waiters {
+		<-queued
+	}
+	releaseFlight(g, hold)
 	wg.Wait()
 	close(errs)
 
@@ -211,28 +264,43 @@ func TestFlightKeysAreIndependent(t *testing.T) {
 	g := NewFlight()
 	var fetches atomic.Int64
 	hold := make(chan struct{})
-	defer close(hold)
+	enteredA := make(chan struct{})
+	enteredB := make(chan struct{})
+	var onceA, onceB sync.Once
 
+	const callersPerKey = 4
+	queued := make(chan struct{}, 2*callersPerKey)
+	var wg sync.WaitGroup
 	for _, key := range []string{"a", "b"} {
-		for range 4 {
+		for range callersPerKey {
+			wg.Add(1)
 			go func(k string) {
+				defer wg.Done()
+				queued <- struct{}{}
 				_, _, _ = g.Do(context.Background(), k, func(context.Context) (Entry, error) {
 					fetches.Add(1)
+					switch k {
+					case "a":
+						onceA.Do(func() { close(enteredA) })
+					case "b":
+						onceB.Do(func() { close(enteredB) })
+					}
 					<-hold
 					return entryFor(200), nil
 				})
 			}(key)
 		}
 	}
-	// Both keys must produce exactly one fetch while the others wait.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if fetches.Load() >= 2 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Both keys must produce exactly one fetch while the others wait:
+	// wait for both flights to register and every caller to be issued,
+	// then release — no wall-clock guess about late arrivals.
+	awaitFlight(t, enteredA, "key a's flight registration")
+	awaitFlight(t, enteredB, "key b's flight registration")
+	for range 2 * callersPerKey {
+		<-queued
 	}
-	time.Sleep(50 * time.Millisecond) // late arrivals pile onto the flights
+	releaseFlight(g, hold)
+	wg.Wait()
 	if got := fetches.Load(); got != 2 {
 		t.Fatalf("fetches = %d, want 2 (one per key)", got)
 	}

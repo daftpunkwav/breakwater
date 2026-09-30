@@ -438,8 +438,9 @@ func driftHook(metrics *obs.Metrics) func(quota.TenantDrift) {
 // buildBreaker assembles the breaker registry with its metric hooks.
 // The ratio strategy swaps the three-state machine for the windowed
 // probability guard: no transitions ever fire, so the denial counter
-// carries that mode's signal alone.
-func buildBreaker(cfg config.Circuit, metrics *obs.Metrics) circuit.Breaker {
+// carries that mode's signal alone. Extra options pass through to the
+// registry (tests inject a clock).
+func buildBreaker(cfg config.Circuit, metrics *obs.Metrics, opts ...circuit.Option) circuit.Breaker {
 	if !cfg.Enabled {
 		return circuit.NopBreaker{}
 	}
@@ -452,7 +453,7 @@ func buildBreaker(cfg config.Circuit, metrics *obs.Metrics) circuit.Breaker {
 		FailThreshold: cfg.FailThreshold,
 		Cooldown:      cfg.Cooldown,
 		ProbeTimeout:  cfg.ProbeTimeout,
-	}, circuit.OnTransition(func(id string, _, to circuit.State) {
+	}, append([]circuit.Option{circuit.OnTransition(func(id string, _, to circuit.State) {
 		switch to {
 		case circuit.StateOpen:
 			metrics.CircuitOpened(id)
@@ -460,7 +461,7 @@ func buildBreaker(cfg config.Circuit, metrics *obs.Metrics) circuit.Breaker {
 			metrics.CircuitHalfOpen(id)
 		}
 		metrics.CircuitState(id, stateValue(to))
-	}))
+	})}, opts...)...)
 }
 
 // stateValue maps breaker states onto the published gauge.
