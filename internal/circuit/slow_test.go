@@ -9,6 +9,7 @@ package circuit
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -221,10 +222,13 @@ func TestSlowResetEmptiesEverything(t *testing.T) {
 
 // TestSlowRatioDefaultAndClamp: a ratio outside (0, 1] selects the
 // default, so a misconfigured deployment cannot build a breaker that
-// never opens (0) or always opens (>1).
+// never opens (0) or always opens (>1). NaN counts as outside: every
+// direct comparison against it is false, so only the negated range
+// conjunction catches it — and a NaN ratio would otherwise arm a
+// breaker whose trigger can never fire.
 func TestSlowRatioDefaultAndClamp(t *testing.T) {
 	t.Parallel()
-	for _, bad := range []float64{0, -1, 1.5} {
+	for _, bad := range []float64{0, -1, 1.5, math.NaN()} {
 		reg := NewSlowRegistry(Config{SlowRatio: bad})
 		if reg.cfg.SlowRatio != defaultSlowRatio {
 			t.Fatalf("SlowRatio %v survived, want the default %v", bad, defaultSlowRatio)

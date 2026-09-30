@@ -248,6 +248,7 @@ func TestLoadRejectsIncompleteSlowCallStrategy(t *testing.T) {
 	}{
 		{"ratio above one", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=1.5", "BREAKWATER_CIRCUIT_SLOW_THRESHOLD=10s"}, "ratio in (0, 1]"},
 		{"ratio below the floor", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=0", "BREAKWATER_CIRCUIT_SLOW_THRESHOLD=10s"}, "ratio in (0, 1]"},
+		{"ratio not a number", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=NaN", "BREAKWATER_CIRCUIT_SLOW_THRESHOLD=10s"}, "ratio in (0, 1]"},
 		{"zero threshold", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=0.8"}, "no attempt is ever slow"},
 	}
 	for _, tc := range cases {

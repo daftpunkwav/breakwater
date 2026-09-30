@@ -415,7 +415,11 @@ func validate(cfg *Config) error {
 		switch cfg.Circuit.Strategy {
 		case "consecutive", "ratio":
 		case "slow-call":
-			if cfg.Circuit.SlowRatio <= 0 || cfg.Circuit.SlowRatio > 1 {
+			// The negated conjunction rejects NaN too: every direct
+			// comparison against NaN is false, so an OR of range checks
+			// would wave it through and the breaker would arm with a
+			// ratio it can never reach — silently inert.
+			if !(cfg.Circuit.SlowRatio > 0 && cfg.Circuit.SlowRatio <= 1) {
 				return fmt.Errorf("config: %s must be a ratio in (0, 1]", envCircuitSlowRatio)
 			}
 			if cfg.Circuit.SlowCallThreshold <= 0 {

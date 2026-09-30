@@ -95,9 +95,11 @@ func SlowOnTransition(fn func(upstreamID string, from, to State)) SlowOption {
 // NewSlowRegistry builds the slow-call-strategy breaker registry. The
 // config's FailThreshold is meaningless here; the trigger is the share
 // of slow completions in the window, taken from SlowRatio (a value
-// outside (0, 1] selects the default).
+// outside (0, 1] selects the default — NaN included, which every
+// direct comparison would wave through and which could never open the
+// breaker).
 func NewSlowRegistry(cfg Config, opts ...SlowOption) *SlowRegistry {
-	if cfg.SlowRatio <= 0 || cfg.SlowRatio > 1 {
+	if !(cfg.SlowRatio > 0 && cfg.SlowRatio <= 1) {
 		cfg.SlowRatio = defaultSlowRatio
 	}
 	if cfg.Cooldown <= 0 {
