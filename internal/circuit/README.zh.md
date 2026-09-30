@@ -58,6 +58,13 @@ reset；`slow_test.go` 覆盖 slow-call 状态机的样本下限、比例触发�
   可被观察。没有任何近期事件的窗口放行一切；空闲时间不记仇。拒绝在
   `breakwater_circuit_denied_total` 指标上可见；状态 gauge 恒为
   closed，因为永远不会有状态迁移发生。
+- slow-call 策略：窗口的慢占比只有在样本数至少达到十之后才可能开路，
+  而 server fault 是最强的慢证据（同时计入两个计数器）。一次健康的
+  探测——无论快慢——会在清空后的窗口上关闭状态机，恢复从干净的证据
+  起步，而不是从导致开路的积压里走出。breaker 从不自行判断快慢：慢
+  完成以 `OutcomeSlow` 到达，由调用方分类。
+- `OutcomeSlow` 对每个策略都是健康证据：consecutive 与 slow-call
+  状态机把它与成功完全同等对待，ratio 守卫把它计入健康桶。
 
 手写纪律：[.golangci.yml](../../.golangci.yml) 的
 `no-off-the-shelf-governance` 规则拒绝 `github.com/sony/gobreaker`。

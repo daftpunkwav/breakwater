@@ -71,6 +71,17 @@ reset; `nop_test.go` and `prober_test.go` their own files.
   everything; idle time carries no grudge. Denials surface on the
   `breakwater_circuit_denied_total` metric; the state gauge stays at
   closed because no transition ever fires.
+- Slow-call strategy: the window's slow share opens the breaker only
+  once the window holds at least ten samples, and a server fault is
+  the strongest slow evidence there is (it feeds both counters). A
+  healthy probe — slow or fast — closes the machine on an emptied
+  window, so recovery starts from clean evidence instead of the
+  backlog that opened the breaker. The breaker never judges speed
+  itself: slow completions arrive as `OutcomeSlow`, classified by the
+  caller.
+- `OutcomeSlow` is health evidence for every strategy: the consecutive
+  and slow-call machines treat it exactly like a success, and the
+  ratio guard counts it into the healthy bucket.
 
 Hand-written by discipline: the `no-off-the-shelf-governance` rule in
 [.golangci.yml](../../.golangci.yml) denies `github.com/sony/gobreaker`.

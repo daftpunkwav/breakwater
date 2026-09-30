@@ -436,11 +436,12 @@ func driftHook(metrics *obs.Metrics) func(quota.TenantDrift) {
 	return func(quota.TenantDrift) { metrics.QuotaReconciliationError() }
 }
 
-// buildBreaker assembles the breaker registry with its metric hooks.
-// The ratio strategy swaps the three-state machine for the windowed
-// probability guard: no transitions ever fire, so the denial counter
-// carries that mode's signal alone. Extra options pass through to the
-// registry (tests inject a clock).
+// buildBreaker assembles the breaker for the configured strategy: the
+// consecutive machine with its transition hooks, the ratio guard (no
+// transitions ever fire, so the denial counter carries that mode's
+// signal alone), or the slow-call machine (driven by slow completions,
+// observed through the same transition hooks). Extra options pass
+// through to the registry (tests inject a clock).
 func buildBreaker(cfg config.Circuit, metrics *obs.Metrics, opts ...circuit.Option) circuit.Breaker {
 	if !cfg.Enabled {
 		return circuit.NopBreaker{}

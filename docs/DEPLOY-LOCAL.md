@@ -123,7 +123,7 @@ the live ones.
 
 | Need                                | Surface                                            |
 | ----------------------------------- | -------------------------------------------------- |
-| Is a provider failing right now?    | `GET /admin/breakers` and `GET /metrics`           |
+| Is a provider failing or stalling?  | `GET /admin/breakers` and `GET /metrics` (the breaker strategy chooses what counts: consecutive faults, a rising error/deny share, or slow completions) |
 | Take a misbehaving model out now    | `PUT /admin/models/{id}` `{"enabled": false}`      |
 | Drain a provider (maintenance)      | `PUT /admin/upstreams/{id}` `{"enabled": false}`   |
 | What is switched off?               | `GET /admin/routing`                               |

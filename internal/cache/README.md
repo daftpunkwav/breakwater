@@ -39,6 +39,14 @@ upstream forwarding.
   negative entries at TTL/10 only for upstream-produced errors (400–507) or
   empty successes. Gateway envelopes (circuit open, budget exhausted,
   unreachable) are transient states, never facts, and never qualify.
+- The admission gate only decides under capacity pressure: a non-full
+  cache admits everything, and an update of a resident key always
+  lands. The gate stores key hashes only — reads (hits and misses)
+  feed its frequency evidence, writes never do.
+- Expired entries stop occupying capacity through the throttled sweep,
+  not through reads: `Get` judges expiry itself and the sweep only
+  frees the slots earlier. A swept key feeds nothing to the gate —
+  expiry is a time event, not a frequency event.
 - A stream the relay terminated through the error-event contract
   (`relay.Result.Aborted`) is never stored: partial bytes plus an error frame
   are not a replayable completion, whatever the status code says.

@@ -109,7 +109,7 @@ load-test 场景准备的，它们用 seed key 调用网关。加入 DSN 即可�
 
 | 需求                                | 操作面                                             |
 | ----------------------------------- | -------------------------------------------------- |
-| 某 provider 现在坏了吗？            | `GET /admin/breakers` 与 `GET /metrics`            |
+| 某 provider 现在坏了或在拖吗？      | `GET /admin/breakers` 与 `GET /metrics`（熔断策略决定什么算数：连续故障、上升的错误/拒绝占比，或慢完成） |
 | 立即摘掉一个行为不端的模型          | `PUT /admin/models/{id}` `{"enabled": false}`      |
 | 排空某 provider（维护）             | `PUT /admin/upstreams/{id}` `{"enabled": false}`   |
 | 现在关了哪些开关？                  | `GET /admin/routing`                               |
