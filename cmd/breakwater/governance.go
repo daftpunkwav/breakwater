@@ -86,7 +86,7 @@ func newGovernanceBackends(ctx context.Context, cfg config.Config) (*governanceB
 		snapshotSource: redisLedger,
 		redisClient:    rdb,
 		readiness: func() error {
-			pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			pingCtx, cancel := context.WithTimeout(context.Background(), readinessProbeTimeout)
 			defer cancel()
 			return rdb.Ping(pingCtx).Err()
 		},
@@ -101,6 +101,12 @@ func newGovernanceBackends(ctx context.Context, cfg config.Config) (*governanceB
 func redisNamespace(cfg config.Config) string {
 	return strings.TrimSpace(cfg.Redis.Namespace)
 }
+
+// readinessProbeTimeout bounds one readiness answer of either backend
+// (Redis and PostgreSQL): the fail-closed governance stages reject
+// inside it, so a readiness wait longer than the stages' own bound
+// would add nothing.
+const readinessProbeTimeout = 2 * time.Second
 
 // The governance Redis client's operation timeouts, pinned here instead
 // of riding the library defaults (dial 5s, read/write 3s on top of the
@@ -172,7 +178,7 @@ func newAuthStore(ctx context.Context, cfg config.Config) (identityAssembly, err
 			return identityAssembly{}, err
 		}
 		probe := func() error {
-			pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			pingCtx, cancel := context.WithTimeout(context.Background(), readinessProbeTimeout)
 			defer cancel()
 			return pg.Ping(pingCtx)
 		}

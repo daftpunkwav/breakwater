@@ -28,6 +28,11 @@ type SweepTarget interface {
 	SweepOnce(ctx context.Context, now time.Time, limit int) (int, error)
 }
 
+// sweepBatch caps one pass's reclaims: a backlog that piled up during
+// an outage drains over successive ticks instead of one long pass
+// holding the backend busy.
+const sweepBatch = 1000
+
 // StartSweeper runs the reclaim loop until ctx is cancelled. The first
 // sweep happens after the first tick, not before — startup must not
 // wait on reclamation. onExpired observes each reclaimed batch; nil
@@ -41,7 +46,7 @@ func StartSweeper(ctx context.Context, target SweepTarget, every time.Duration, 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				expired, err := target.SweepOnce(ctx, time.Now(), 1000)
+				expired, err := target.SweepOnce(ctx, time.Now(), sweepBatch)
 				if err != nil {
 					slog.Warn("quota sweep failed", "error", err)
 					continue

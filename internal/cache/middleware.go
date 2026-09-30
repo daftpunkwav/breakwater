@@ -38,6 +38,19 @@ import (
 // bigger reply still reaches the client but is never stored.
 const maxCacheableBytes = 8 << 20
 
+// detachedBudgetContext re-imposes budget on a context detached from
+// its parent's cancellation tree: configuration values survive, the
+// parent's cancellation and any inherited deadline do not. The shared
+// fetch applies it at two scopes — the flight's own context (the
+// flight and its store write must outlive the request that happened
+// to start it) and the handler call inside the flight (the budget
+// rides the fetch itself, whichever context the flight hands it). One
+// named mechanism for both layers keeps the "same budget, two scopes"
+// fact in one place instead of in two hand-synced expressions.
+func detachedBudgetContext(parent context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), budget)
+}
+
 // Middleware returns the cache stage over a store, a flight group and
 // the base TTL applied by the store (with its jitter). fetchBudget
 // bounds the shared fetch, which is not owned by the request that
@@ -98,17 +111,18 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 			// request carried, so the budget is re-imposed here: an
 			// unbounded fetch would leave the key unable to start a new
 			// flight until the process restarts.
-			fetchCtx, cancelFetch := context.WithTimeout(context.WithoutCancel(r.Context()), fetchBudget)
+			fetchCtx, cancelFetch := detachedBudgetContext(r.Context(), fetchBudget)
 			defer cancelFetch()
 
 			fetch := httpserver.NewDetachedBufferingTee(w, maxCacheableBytes)
 			entry, fetchErr, owner := flight.Do(fetchCtx, key, func(ctx context.Context) (Entry, error) {
 				// The budget rides the fetch itself, not the retry policy
-				// that may contribute none: WithoutCancel drops the
-				// deadline fetchCtx carries, so it is re-imposed here. A
-				// black-holed upstream must release the flight at the
-				// budget, or the key can never start a new flight.
-				bounded, cancelBounded := context.WithTimeout(context.WithoutCancel(ctx), fetchBudget)
+				// that may contribute none: detachedBudgetContext drops
+				// the deadline fetchCtx carries, so it is re-imposed on
+				// the handler call alone. A black-holed upstream must
+				// release the flight at the budget, or the key can never
+				// start a new flight.
+				bounded, cancelBounded := detachedBudgetContext(ctx, fetchBudget)
 				defer cancelBounded()
 				next.ServeHTTP(fetch, r.WithContext(bounded))
 				metrics.CacheFetch(upstreamOf(carrier))

@@ -28,6 +28,11 @@ import (
 const (
 	batchSize     = 200
 	flushInterval = 2 * time.Second
+	// maxQueuedBatches is the pending queue's headroom in whole batches:
+	// the backlog a writer may absorb between flushes before Record's
+	// drop-and-count contract takes over. The queue cap is therefore
+	// batchSize * maxQueuedBatches records, never unbounded growth.
+	maxQueuedBatches = 8
 	// probeTimeout bounds the startup schema check.
 	probeTimeout = 5 * time.Second
 	// poolMaxConns bounds the insights pool: one batch writer plus the
@@ -105,7 +110,7 @@ func (s *PGStore) probeSchema(ctx context.Context) error {
 // pressure drops the record and counts the drop.
 func (s *PGStore) Record(r Record) {
 	s.mu.Lock()
-	if s.closed || len(s.queue) >= batchSize*8 {
+	if s.closed || len(s.queue) >= batchSize*maxQueuedBatches {
 		s.drops++
 		s.mu.Unlock()
 		return
