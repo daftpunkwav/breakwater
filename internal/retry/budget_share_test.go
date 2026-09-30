@@ -24,8 +24,10 @@ func TestShareBudgetScalesWithLiveTraffic(t *testing.T) {
 
 	// Quiet pool: the floor is the whole story.
 	inflight.Store(10)
-	if !b.Acquire() || !b.Acquire() || !b.Acquire() {
-		t.Fatal("floor must admit the minimum even with no traffic")
+	for i := 0; i < 3; i++ {
+		if !b.Acquire() {
+			t.Fatal("floor must admit the minimum even with no traffic")
+		}
 	}
 	if b.Acquire() {
 		t.Fatal("admitted past the floor with 10 in flight at 20%")
@@ -71,8 +73,10 @@ func TestShareBudgetZeroTrafficAdmitsFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewShareBudget: %v", err)
 	}
-	if !b.Acquire() || !b.Acquire() {
-		t.Fatal("floor must hold at zero traffic")
+	for i := 0; i < 2; i++ {
+		if !b.Acquire() {
+			t.Fatal("floor must hold at zero traffic")
+		}
 	}
 	if b.Acquire() {
 		t.Fatal("admitted past the floor at zero traffic")

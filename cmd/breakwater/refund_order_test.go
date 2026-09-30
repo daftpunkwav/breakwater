@@ -112,7 +112,7 @@ func TestCacheHitRefundsTheWholeReservation(t *testing.T) {
 	if resp := post(fill); resp.StatusCode != http.StatusOK {
 		t.Fatalf("fill status = %d, want 200", resp.StatusCode)
 	}
-	reserved, refunded := scrapeQuotaCounters(t, addr, "t1")
+	reserved, _ := scrapeQuotaCounters(t, addr, "t1")
 	reservedAfterFill := reserved
 
 	// The byte-identical body replays from the cache: the hit must
@@ -125,7 +125,7 @@ func TestCacheHitRefundsTheWholeReservation(t *testing.T) {
 		t.Fatalf("upstream hits = %d, want 1", hits)
 	}
 
-	reserved, refunded = scrapeQuotaCounters(t, addr, "t1")
+	reserved, refunded := scrapeQuotaCounters(t, addr, "t1")
 	// The hit took a lease of its own: cache sits inside the quota
 	// stage, so a replay is reserved too, never free.
 	if reserved <= reservedAfterFill {
