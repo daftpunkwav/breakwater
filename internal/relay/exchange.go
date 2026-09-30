@@ -92,7 +92,7 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 		// cancels the forward context, and a cancelled request context
 		// takes the response body's readability with it — the upstream
 		// error status would be lost to a generic read failure.
-		body, readErr := readBounded(resp.Body, maxResponseBytes)
+		body, readErr := readBounded(resp.Body, maxResponseBytes, contentLengthHint(resp.Header))
 		_ = resp.Body.Close()
 		lease.end()
 		if readErr != nil {
@@ -121,7 +121,7 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 // buffered before anything reaches the client, so any failure here is
 // still retryable in principle.
 func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) (circuit.Outcome, error) {
-	body, readErr := readBounded(resp.Body, maxResponseBytes)
+	body, readErr := readBounded(resp.Body, maxResponseBytes, contentLengthHint(resp.Header))
 	_ = resp.Body.Close()
 	if readErr != nil {
 		return circuit.OutcomeServerFault, fmt.Errorf("relay: upstream %s read body: %w", cand.ID(), readErr)

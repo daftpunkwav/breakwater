@@ -21,11 +21,13 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
@@ -524,16 +526,44 @@ func (r *run) trace(upstream string, credentialIndex, status int) {
 // candidate.
 var errCircuitOpen = errors.New("relay: circuit open")
 
-// readBounded reads the whole body, failing closed past limit.
-func readBounded(body io.Reader, limit int64) ([]byte, error) {
-	content, err := io.ReadAll(io.LimitReader(body, limit+1))
-	if err != nil {
+// readSeedHeadroom is one Read's worth of spare capacity kept past the
+// pre-sized hint, so a hint that matches the body never pushes the read
+// into the growth chain near its end.
+const readSeedHeadroom = 512
+
+// readBounded reads the whole body, failing closed past limit. A
+// positive sizeHint (the upstream's declared Content-Length, capped at
+// the limit) pre-sizes the one buffer the read needs; the unseeded
+// growth chain would otherwise reallocate logarithmically and copy a
+// large body several times over on the way. A missing or lying hint
+// falls back to that same growth — it costs throughput, never
+// correctness.
+func readBounded(body io.Reader, limit int64, sizeHint int64) ([]byte, error) {
+	var buf bytes.Buffer
+	if sizeHint > 0 && sizeHint <= limit {
+		buf.Grow(int(sizeHint) + readSeedHeadroom)
+	}
+	if _, err := io.Copy(&buf, io.LimitReader(body, limit+1)); err != nil {
 		return nil, err
 	}
-	if int64(len(content)) > limit {
+	if int64(buf.Len()) > limit {
 		return nil, fmt.Errorf("relay: upstream body exceeds %d bytes", limit)
 	}
-	return content, nil
+	return buf.Bytes(), nil
+}
+
+// contentLengthHint extracts the body size a response declares, or -1
+// when it declares none or an unusable one. The value is a read
+// pre-sizing hint only.
+func contentLengthHint(header http.Header) int64 {
+	if header == nil {
+		return -1
+	}
+	n, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
 }
 
 // snapshot builds an exchangeSnapshot from a response and its buffered

@@ -150,7 +150,7 @@ func (errReader) Read([]byte) (int, error) { return 0, errors.New("connection re
 func TestReadBoundedRejectsOversizedBody(t *testing.T) {
 	t.Parallel()
 	oversized := strings.Repeat("x", maxResponseBytes+1)
-	_, err := readBounded(strings.NewReader(oversized), maxResponseBytes)
+	_, err := readBounded(strings.NewReader(oversized), maxResponseBytes, -1)
 	if err == nil {
 		t.Fatal("oversized body accepted")
 	}
@@ -163,7 +163,7 @@ func TestReadBoundedRejectsOversizedBody(t *testing.T) {
 // errors surface instead of masquerading as an empty body.
 func TestReadBoundedPropagatesReadFailure(t *testing.T) {
 	t.Parallel()
-	_, err := readBounded(errReader{}, maxResponseBytes)
+	_, err := readBounded(errReader{}, maxResponseBytes, -1)
 	if err == nil {
 		t.Fatal("read failure swallowed")
 	}
