@@ -236,3 +236,29 @@ func TestLoadRejectsProbeBackoffWithoutLoop(t *testing.T) {
 		t.Fatalf("Load accepted a backoff without a loop: %v", err)
 	}
 }
+
+// TestLoadRejectsIncompleteSlowCallStrategy: the slow-call strategy
+// needs both of its knobs — a ratio inside (0, 1] and a threshold that
+// actually classifies attempts — or the guard it configures is inert.
+func TestLoadRejectsIncompleteSlowCallStrategy(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries []string
+		want    string
+	}{
+		{"ratio above one", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=1.5", "BREAKWATER_CIRCUIT_SLOW_THRESHOLD=10s"}, "ratio in (0, 1]"},
+		{"ratio below the floor", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=0", "BREAKWATER_CIRCUIT_SLOW_THRESHOLD=10s"}, "ratio in (0, 1]"},
+		{"zero threshold", []string{"BREAKWATER_CIRCUIT_SLOW_RATIO=0.8"}, "no attempt is ever slow"},
+	}
+	for _, tc := range cases {
+		cleanEnv(t)
+		t.Setenv(envCircuitStrategy, "slow-call")
+		for _, entry := range tc.entries {
+			key, value, _ := strings.Cut(entry, "=")
+			t.Setenv(key, value)
+		}
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want substring %q", tc.name, err, tc.want)
+		}
+	}
+}

@@ -2,14 +2,17 @@
 
 > Language: **English** | [简体中文](README.zh.md)
 
-The hand-written per-upstream circuit breaker, in two interchangeable
+The hand-written per-upstream circuit breaker, in three interchangeable
 strategies behind one port: a three-state machine (closed → open →
 half-open) that stops traffic toward a persistently failing upstream
-and probes it back to health with exactly one request, and a ratio
-guard that denies a rising share of calls computed from a rolling
-outcome window — built for upstreams whose failures are proportional
-(a partially saturated backend degrades some requests while others
-succeed) and never fully cuts traffic.
+and probes it back to health with exactly one request; a ratio guard
+that denies a rising share of calls computed from a rolling outcome
+window — built for upstreams whose failures are proportional (a
+partially saturated backend degrades some requests while others
+succeed) and never fully cuts traffic; and a slow-call machine that
+runs the consecutive discipline on degradation evidence — the share of
+slow completions in the window opens it — for upstreams that keep
+answering while falling apart.
 The package owns the machines, their port and the active-probe helper —
 nothing else. What counts as a failure is the caller's policy, relayed
 through `Outcome`; candidate pre-filtering belongs to
@@ -27,6 +30,7 @@ sites never branch on nil.
 | `circuit.go` | Contracts: `State` (`StateClosed` / `StateOpen` / `StateHalfOpen`), `Outcome` (Success / ClientFault / ServerFault / GatewayTerminated), `Permission`, the `Breaker` port (`Allow` / `StateOf` / `Reset`) |
 | `breaker.go` | `Registry`: the process-local consecutive-strategy machine per upstream id — cooldown → single half-open probe, outcome accounting, operator `Reset`, transition observer |
 | `ratio.go` | `RatioRegistry`: the ratio-strategy guard per upstream id — a 10s rolling window (40 × 250ms buckets) of healthy answers, upstream failures and self-produced denials; `Allow` computes a deny probability from the window (tiny windows protected, trailing failures discount past accepts, healthy buckets dilute the ratio) and one call per forced-pass second is always admitted, so recovery never needs operator action. `StateOf` always reads closed — the guard is a probability, not a position |
+| `slow.go` | `SlowRegistry`: the slow-call-strategy machine per upstream id — the consecutive discipline driven by a 10s rolling window of {slow, total} completions; a server fault is the strongest slow evidence, a window below the sample minimum never opens, and a healthy probe closes the breaker on an emptied window. The breaker never judges speed itself: slow completions arrive as `OutcomeSlow`, classified by the relay (time to first byte for streams, full duration otherwise) against the configured threshold |
 | `nop.go` | `NopBreaker`: grants everything, forgets every outcome; holds no state |
 | `prober.go` | `ActiveProbe`: runs one synthetic health check through the breaker's Allow/Report protocol, so recovery does not wait for real traffic to become the probe |
 
@@ -36,8 +40,9 @@ sites never branch on nil.
 reports; `breaker_defaults_test.go` the zero-config substitutions;
 `breaker_reset_test.go` the operator reset path; `ratio_test.go` the
 ratio guard's protection floor, deny scaling, dilution, forced pass,
-window expiry and reset; `nop_test.go` and `prober_test.go` their own
-files.
+window expiry and reset; `slow_test.go` the slow-call machine's sample
+minimum, ratio trigger, fault-as-slow evidence, probe recovery and
+reset; `nop_test.go` and `prober_test.go` their own files.
 
 ## Invariants
 
@@ -70,8 +75,11 @@ files.
 Hand-written by discipline: the `no-off-the-shelf-governance` rule in
 [.golangci.yml](../../.golangci.yml) denies `github.com/sony/gobreaker`.
 Config: `BREAKWATER_CIRCUIT_ENABLED` / `_STRATEGY` (`consecutive`, the
-default, or `ratio`) / `_FAIL_THRESHOLD` / `_COOLDOWN` /
-`_PROBE_TIMEOUT` (defaults on / consecutive / 5 / 30s / 5s; the
-threshold and cooldown drive the consecutive strategy only). Operator
-surface: `GET /admin/breakers` and `POST /admin/breakers/{id}/reset`
-(a ratio reset empties the window).
+default, `ratio`, or `slow-call`) / `_FAIL_THRESHOLD` / `_COOLDOWN` /
+`_PROBE_TIMEOUT` / `_SLOW_RATIO` / `_SLOW_THRESHOLD` (defaults on /
+consecutive / 5 / 30s / 5s / 0.5 / off; the threshold and cooldown
+drive consecutive and slow-call, the ratio pair drives slow-call
+only). A slow completion is health evidence to every strategy: the
+consecutive and ratio machines absorb `OutcomeSlow` exactly like a
+success. Operator surface: `GET /admin/breakers` and
+`POST /admin/breakers/{id}/reset` (a ratio reset empties the window).

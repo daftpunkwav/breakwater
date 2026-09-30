@@ -43,6 +43,7 @@ const (
 	defaultCircuitThreshold = 5
 	defaultCircuitCooldown  = 30 * time.Second
 	defaultCircuitProbe     = 5 * time.Second
+	defaultCircuitSlowRatio = 0.5
 	defaultStreamTimeout    = 10 * time.Minute
 	defaultReconcileEvery   = time.Minute
 	defaultProbeInterval    = 30 * time.Second
@@ -89,11 +90,13 @@ const (
 	envCacheTTL      = "BREAKWATER_CACHE_TTL"
 	envCacheCapacity = "BREAKWATER_CACHE_CAPACITY"
 
-	envCircuitEnabled   = "BREAKWATER_CIRCUIT_ENABLED"
-	envCircuitStrategy  = "BREAKWATER_CIRCUIT_STRATEGY"
-	envCircuitThreshold = "BREAKWATER_CIRCUIT_FAIL_THRESHOLD"
-	envCircuitCooldown  = "BREAKWATER_CIRCUIT_COOLDOWN"
-	envCircuitProbe     = "BREAKWATER_CIRCUIT_PROBE_TIMEOUT"
+	envCircuitEnabled    = "BREAKWATER_CIRCUIT_ENABLED"
+	envCircuitStrategy   = "BREAKWATER_CIRCUIT_STRATEGY"
+	envCircuitThreshold  = "BREAKWATER_CIRCUIT_FAIL_THRESHOLD"
+	envCircuitCooldown   = "BREAKWATER_CIRCUIT_COOLDOWN"
+	envCircuitProbe      = "BREAKWATER_CIRCUIT_PROBE_TIMEOUT"
+	envCircuitSlowRatio  = "BREAKWATER_CIRCUIT_SLOW_RATIO"
+	envCircuitSlowThresh = "BREAKWATER_CIRCUIT_SLOW_THRESHOLD"
 
 	envAccessLogPath = "BREAKWATER_ACCESS_LOG_PATH"
 	envAdminToken    = "BREAKWATER_ADMIN_TOKEN"
@@ -159,6 +162,7 @@ func Load() (Config, error) {
 			FailThreshold: defaultCircuitThreshold,
 			Cooldown:      defaultCircuitCooldown,
 			ProbeTimeout:  defaultCircuitProbe,
+			SlowRatio:     defaultCircuitSlowRatio,
 		},
 		Probe: Probe{
 			Interval:  defaultProbeInterval,
@@ -338,6 +342,15 @@ func loadCircuit(cfg *Config) error {
 	if cfg.Circuit.ProbeTimeout, err = envDuration(envCircuitProbe, cfg.Circuit.ProbeTimeout); err != nil {
 		return err
 	}
+	if cfg.Circuit.SlowRatio, err = envFloat(envCircuitSlowRatio, cfg.Circuit.SlowRatio); err != nil {
+		return err
+	}
+	if cfg.Circuit.SlowCallThreshold, err = envDuration(envCircuitSlowThresh, cfg.Circuit.SlowCallThreshold); err != nil {
+		return err
+	}
+	if cfg.Circuit.SlowCallThreshold < 0 {
+		return fmt.Errorf("config: %s must not be negative", envCircuitSlowThresh)
+	}
 	return nil
 }
 
@@ -401,8 +414,15 @@ func validate(cfg *Config) error {
 	if cfg.Circuit.Enabled {
 		switch cfg.Circuit.Strategy {
 		case "consecutive", "ratio":
+		case "slow-call":
+			if cfg.Circuit.SlowRatio <= 0 || cfg.Circuit.SlowRatio > 1 {
+				return fmt.Errorf("config: %s must be a ratio in (0, 1]", envCircuitSlowRatio)
+			}
+			if cfg.Circuit.SlowCallThreshold <= 0 {
+				return fmt.Errorf("config: %s must be positive when the strategy is slow-call: without it no attempt is ever slow", envCircuitSlowThresh)
+			}
 		default:
-			return fmt.Errorf("config: %s must be \"consecutive\" or \"ratio\"", envCircuitStrategy)
+			return fmt.Errorf("config: %s must be \"consecutive\", \"ratio\" or \"slow-call\"", envCircuitStrategy)
 		}
 		if cfg.Circuit.FailThreshold <= 0 {
 			return fmt.Errorf("config: %s must be positive", envCircuitThreshold)
@@ -616,6 +636,20 @@ func envInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("config: parse %s=%q: %w", key, raw, err)
 	}
 	return n, nil
+}
+
+// envFloat parses a floating-point environment variable with a
+// fallback: ratio-shaped settings (the slow-call share) ride it.
+func envFloat(key string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: parse %s=%q: %w", key, raw, err)
+	}
+	return f, nil
 }
 
 // envJSON decodes a JSON-valued environment variable into a slice; an

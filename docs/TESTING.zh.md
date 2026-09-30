@@ -38,6 +38,8 @@
 | 第一个响应字节之后，loop 绝不重试 | `internal/retry`、`internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
 | 打开的 breaker 拒绝一切调用；half-open 恰放行一个 probe 并回收被弃的 | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`、`TestBreakerReclaimsAbandonedProbe` |
 | ratio 守卫按失败占比拒绝越来越多的调用，但绝不完全切断流量——每个强制放行间隔仍有一个调用通过 | `internal/circuit` | `TestRatioDenialTracksFailureShare`、`TestRatioForcePassAdmitsOnePerInterval` |
+| slow-call 熔断只在采样窗口的慢占比达标时开路（样本不足永不开路，故障算最强的慢证据），健康探测在清空后的窗口上关闭它 | `internal/circuit` | `TestSlowWindowNeedsSamples`、`TestSlowShareOpensTheBreaker`、`TestSlowProbeClosesOnAnEmptiedWindow` |
+| 健康的 attempt 越过慢阈值即上报为慢——每个策略都按成功级证据吸收；流式以首字节时刻度量 | `internal/circuit`、`internal/relay` | `TestConsecutiveAbsorbsSlowAsHealth`、`TestSlowBufferedAttemptReportsSlow`、`TestSlowStreamTTFTReportsSlow` |
 | 彻底宕掉的上游其恢复探测按翻倍阶梯拉开间隔；一次健康应答即忘记阶梯 | `cmd/breakwater` | `TestProbeBackoffLadder`、`TestRecoveryBackoffZeroKeepsFixedPace` |
 | 对账轮次不会活过自己的节拍；卡死的 store 在边界处中止该轮 | `internal/quota` | `TestStartReconcilerBoundsAWedgedRound` |
 | 断掉的流保留已交付字节，以一个错误事件加 `[DONE]` 收尾 | `internal/relay`、`internal/protocol` | `TestWriteAbortContract`、`TestWriteAbortAllCodes`、`TestMessagesRouteStreamAbortTerminatesHonestly` |

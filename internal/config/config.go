@@ -94,18 +94,31 @@ type Circuit struct {
 	// opens after a run of failures and re-admits one probe after the
 	// cooldown; "ratio" denies a rising share of calls computed from a
 	// rolling window of outcomes and always admits one call per
-	// forced-pass interval, so it never fully cuts traffic.
+	// forced-pass interval, so it never fully cuts traffic; "slow-call"
+	// runs the consecutive machine on degradation evidence — the share
+	// of slow completions in the window instead of error runs — for
+	// upstreams that keep answering while falling apart.
 	Strategy string
 	// FailThreshold drives the consecutive strategy only: the run of
 	// server faults that opens the breaker.
 	FailThreshold int
-	// Cooldown drives the consecutive strategy only: how long an open
-	// breaker waits before admitting one probe.
+	// Cooldown drives the consecutive and slow-call strategies: how
+	// long an open breaker waits before admitting one probe.
 	Cooldown time.Duration
 	// ProbeTimeout bounds a half-open probe of the consecutive
-	// strategy; an unanswered probe counts as a failure at the
-	// deadline.
+	// and slow-call strategies; an unanswered probe counts as a
+	// failure at the deadline.
 	ProbeTimeout time.Duration
+	// SlowRatio drives the slow-call strategy only: the share of slow
+	// completions in the window that opens the breaker (0.5 = half the
+	// window).
+	SlowRatio float64
+	// SlowCallThreshold classifies attempts as slow for the slow-call
+	// strategy: an attempt whose responsiveness (first byte for
+	// streams, full duration otherwise) exceeds it reports as slow.
+	// Zero disables the classification — attempts report fast however
+	// long they take.
+	SlowCallThreshold time.Duration
 }
 
 // Upstream is one OpenAI-compatible provider binding. List order across

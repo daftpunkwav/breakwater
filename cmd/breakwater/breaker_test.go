@@ -89,3 +89,31 @@ func TestBuildBreakerRatioStrategy(t *testing.T) {
 		t.Fatal("expected admission after Reset")
 	}
 }
+
+// TestBuildBreakerSlowCallStrategy: the slow-call strategy composes the
+// windowed three-state machine — a saturated window opens it (with the
+// state gauge following), and the cooldown admits one probe.
+func TestBuildBreakerSlowCallStrategy(t *testing.T) {
+	t.Parallel()
+	metrics := obs.NewMetrics()
+	breaker := buildBreaker(config.Circuit{
+		Enabled: true, Strategy: "slow-call", SlowRatio: 0.5,
+		Cooldown: 2 * time.Millisecond, ProbeTimeout: time.Second,
+	}, metrics)
+
+	for i := 0; i < 10; i++ {
+		perm, ok := breaker.Allow(context.Background(), "u")
+		if !ok {
+			t.Fatalf("grant %d denied during setup", i)
+		}
+		perm.Report(circuit.OutcomeSlow)
+	}
+	if got := breaker.StateOf(context.Background(), "u"); got != circuit.StateOpen {
+		t.Fatalf("state = %s, want open from slow evidence", got)
+	}
+
+	time.Sleep(5 * time.Millisecond) // the cooldown elapses
+	if perm, ok := breaker.Allow(context.Background(), "u"); !ok || perm == nil {
+		t.Fatal("half-open must admit the probe")
+	}
+}

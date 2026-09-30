@@ -66,6 +66,12 @@ type Executor struct {
 	// streamIdleTimeout bounds upstream silence inside a committed
 	// stream; zero disables the idle watchdog.
 	streamIdleTimeout time.Duration
+	// slowCallThreshold classifies healthy attempts as slow for the
+	// breaker's slow-call strategy: an attempt whose responsiveness
+	// (first byte for streams, full duration otherwise) exceeds it
+	// reports OutcomeSlow instead of OutcomeSuccess. Zero reports every
+	// healthy attempt as fast however long it took.
+	slowCallThreshold time.Duration
 }
 
 // Option customizes an Executor.
@@ -121,6 +127,16 @@ func WithStreamTimeout(d time.Duration) Option {
 // remains. Zero, the default, disables the watchdog.
 func WithStreamIdleTimeout(d time.Duration) Option {
 	return func(e *Executor) { e.streamIdleTimeout = d }
+}
+
+// WithSlowCallThreshold classifies healthy attempts as slow for the
+// breaker's slow-call strategy: past the threshold, a healthy attempt
+// reports OutcomeSlow — Success-grade health evidence the consecutive
+// and ratio strategies absorb as success, and the slow-call strategy
+// counts against the window's slow share. Zero, the default, reports
+// every healthy attempt as fast however long it took.
+func WithSlowCallThreshold(d time.Duration) Option {
+	return func(e *Executor) { e.slowCallThreshold = d }
 }
 
 // New builds an Executor. A nil budget disables the global in-flight
@@ -284,6 +300,11 @@ type requestRun struct {
 	// startedAt is the current attempt's first instant; the streaming
 	// path reads it for the time-to-first-byte observation.
 	startedAt time.Time
+	// responsiveness is how long the upstream took to prove itself on
+	// the current attempt: time to first byte for a stream, the full
+	// buffered duration otherwise. It feeds the slow-call
+	// classification; zero means no response arrived yet.
+	responsiveness time.Duration
 }
 
 // Execute runs the job. Exactly one HTTP response is written to
@@ -370,7 +391,15 @@ func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 
 	started := time.Now()
 	r.startedAt = started
+	r.responsiveness = 0
 	outcome, err := r.exchange(attemptCtx, cand, model)
+	// A healthy attempt that answered too slowly reports as slow —
+	// Success-grade health evidence every strategy absorbs as success,
+	// and the exact signal the slow-call strategy counts. The gateway
+	// cut is not reclassified: it proves nothing about responsiveness.
+	if outcome == circuit.OutcomeSuccess && r.exec.slowCallThreshold > 0 && r.responsiveness > r.exec.slowCallThreshold {
+		outcome = circuit.OutcomeSlow
+	}
 	if r.exec.observer != nil {
 		// A client walking away cancels the exchange; that is nobody's
 		// fault but the network's own and must not demote the upstream.

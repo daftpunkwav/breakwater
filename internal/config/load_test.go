@@ -21,6 +21,7 @@ var envVars = []string{
 	envStreamTimeout, envReconcileInterval, envIdentity,
 	envCacheEnabled, envCacheTTL, envCacheCapacity,
 	envCircuitEnabled, envCircuitStrategy, envCircuitThreshold, envCircuitCooldown, envCircuitProbe,
+	envCircuitSlowRatio, envCircuitSlowThresh,
 	envAccessLogPath, envAdminToken, envRouting,
 	envProbeInterval, envProbeTimeout, envProbeThreshold, envProbeBackoff,
 	envFallbacks, envContextLimits,
@@ -73,6 +74,7 @@ func TestLoadDefaults(t *testing.T) {
 			FailThreshold: 5,
 			Cooldown:      30 * time.Second,
 			ProbeTimeout:  5 * time.Second,
+			SlowRatio:     0.5,
 		},
 		Probe: Probe{
 			Interval:  30 * time.Second,
@@ -122,6 +124,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envCacheCapacity, "2048")
 	t.Setenv(envCircuitEnabled, "false")
 	t.Setenv(envCircuitStrategy, "ratio")
+	t.Setenv(envCircuitSlowRatio, "0.9")
+	t.Setenv(envCircuitSlowThresh, "8s")
 	t.Setenv(envCircuitThreshold, "9")
 	t.Setenv(envCircuitCooldown, "45s")
 	t.Setenv(envCircuitProbe, "3s")
@@ -180,7 +184,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.Cache != (Cache{Enabled: false, TTL: 30 * time.Second, Capacity: 2048}) {
 		t.Fatalf("cache = %+v", cfg.Cache)
 	}
-	if cfg.Circuit != (Circuit{Enabled: false, Strategy: "ratio", FailThreshold: 9, Cooldown: 45 * time.Second, ProbeTimeout: 3 * time.Second}) {
+	if cfg.Circuit != (Circuit{Enabled: false, Strategy: "ratio", FailThreshold: 9, Cooldown: 45 * time.Second, ProbeTimeout: 3 * time.Second, SlowRatio: 0.9, SlowCallThreshold: 8 * time.Second}) {
 		t.Fatalf("circuit = %+v", cfg.Circuit)
 	}
 	if cfg.Probe != (Probe{Interval: 45 * time.Second, Timeout: 7 * time.Second, Threshold: 3, BackoffMax: 4 * time.Minute}) {

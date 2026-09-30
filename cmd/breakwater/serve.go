@@ -326,6 +326,7 @@ func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *o
 		relay.WithMetrics(metrics),
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
 		relay.WithStreamIdleTimeout(cfg.Retry.StreamIdleTimeout),
+		relay.WithSlowCallThreshold(cfg.Circuit.SlowCallThreshold),
 		relay.WithUpstreamObserver(trackerObserver{tracker}),
 		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, rings, metrics, logger)),
 	)
@@ -447,6 +448,21 @@ func buildBreaker(cfg config.Circuit, metrics *obs.Metrics, opts ...circuit.Opti
 	if cfg.Strategy == "ratio" {
 		return circuit.NewRatioRegistry(circuit.RatioOnDenial(func(id string) {
 			metrics.CircuitDenied(id)
+		}))
+	}
+	if cfg.Strategy == "slow-call" {
+		return circuit.NewSlowRegistry(circuit.Config{
+			Cooldown:     cfg.Cooldown,
+			ProbeTimeout: cfg.ProbeTimeout,
+			SlowRatio:    cfg.SlowRatio,
+		}, circuit.SlowOnTransition(func(id string, _, to circuit.State) {
+			switch to {
+			case circuit.StateOpen:
+				metrics.CircuitOpened(id)
+			case circuit.StateHalfOpen:
+				metrics.CircuitHalfOpen(id)
+			}
+			metrics.CircuitState(id, stateValue(to))
 		}))
 	}
 	return circuit.NewRegistry(circuit.Config{
