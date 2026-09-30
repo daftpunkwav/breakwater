@@ -493,10 +493,20 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	// reconciler by listing tenants from the identity schema: the
 	// tables must exist before assembly. Apply the deploy schema —
 	// the same file first boot applies, idempotent by construction —
-	// statement by statement.
+	// statement by statement, after stripping the comment lines (a
+	// bare semicolon split would otherwise execute comment-only
+	// fragments).
 	schema, err := os.ReadFile(filepath.Join("..", "..", "deploy", "schema.sql"))
 	if err != nil {
 		t.Fatalf("read deploy schema: %v", err)
+	}
+	var cleaned strings.Builder
+	for _, line := range strings.Split(string(schema), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		cleaned.WriteString(line)
+		cleaned.WriteByte('\n')
 	}
 	connCtx, cancelConn := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelConn()
@@ -504,7 +514,7 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	for _, stmt := range strings.Split(string(schema), ";") {
+	for _, stmt := range strings.Split(cleaned.String(), ";") {
 		if strings.TrimSpace(stmt) == "" {
 			continue
 		}
