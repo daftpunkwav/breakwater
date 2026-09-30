@@ -114,3 +114,44 @@ func (s *driftingSource) readCount() int {
 	defer s.mu.Unlock()
 	return s.reads
 }
+
+// wedgedSource answers like a black-holed database: the read never
+// completes on its own and returns only when its context is cut.
+type wedgedSource struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (s *wedgedSource) TenantSnapshot(ctx context.Context, _ string, _ time.Time) (*Snapshot, error) {
+	s.mu.Lock()
+	s.attempts++
+	s.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (s *wedgedSource) attemptCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempts
+}
+
+// TestStartReconcilerBoundsAWedgedRound: a round stuck on a black-holed
+// store is cut at the round's time budget and the loop keeps scheduling
+// fresh rounds, instead of the first wedged read silencing the protocol
+// for the rest of the process's life.
+func TestStartReconcilerBoundsAWedgedRound(t *testing.T) {
+	t.Parallel()
+	source := &wedgedSource{}
+	rec := NewReconciler(source, []string{"t"}, newMemSnapshotStore())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The interval doubles as the round budget: each wedged round is cut
+	// at one interval and the next tick starts a fresh attempt.
+	StartReconciler(ctx, rec, 20*time.Millisecond, nil)
+
+	waitUntil(t, func() bool { return source.attemptCount() >= 3 },
+		"reconcile loop stopped scheduling rounds after a wedged read")
+	cancel()
+}

@@ -141,6 +141,13 @@ func balanceDrop(prev, snap *Snapshot) int64 { return prev.Balance - snap.Balanc
 // StartReconciler runs the reconcile loop until ctx is cancelled. Every
 // drift fires onDrift and is logged loudly: a non-zero drift means the
 // ledger identity broke in production.
+//
+// Each round runs under a context bounded to the interval itself: a
+// round must not outlive its own cadence. The store reads and writes
+// ride the round context, so a black-holed database aborts the round at
+// the bound and the loop reports the incomplete round instead of
+// wedging forever on a connection that will never answer. The next tick
+// starts a fresh round; nothing accumulates.
 func StartReconciler(ctx context.Context, reconciler *Reconciler, every time.Duration, onDrift func(drift TenantDrift)) {
 	go func() {
 		ticker := time.NewTicker(every)
@@ -150,7 +157,14 @@ func StartReconciler(ctx context.Context, reconciler *Reconciler, every time.Dur
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				checked, drifted, drifts, err := reconciler.ReconcileOnce(ctx)
+				roundCtx, cancel := context.WithTimeout(ctx, every)
+				checked, drifted, drifts, err := reconciler.ReconcileOnce(roundCtx)
+				cancel()
+				// A round cut by shutdown is not an incomplete round: the
+				// process is leaving, and warning about it would be noise.
+				if ctx.Err() != nil {
+					return
+				}
 				if err != nil {
 					// An incomplete round (some tenants failed) still
 					// carries the drifts of the tenants that did
