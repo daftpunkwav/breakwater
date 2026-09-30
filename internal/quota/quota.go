@@ -94,3 +94,12 @@ type Ledger interface {
 	// balance as its single source of truth between snapshots.
 	SetBalance(ctx context.Context, tenantID string, balance int64) error
 }
+
+// leaseAuditTTL bounds how long a terminal lease record is retained for
+// audit — a contract constant shared by every backend, enforced by
+// different means. The Redis ledger carries it as a key TTL set only on
+// the terminal transitions, so a RESERVED lease is never cut short
+// before the sweeper reaches it. The in-memory ledger has no per-record
+// expiry and drops terminal records by this same age during its sweep
+// instead, so its bound holds only while the sweeper runs.
+const leaseAuditTTL = time.Hour

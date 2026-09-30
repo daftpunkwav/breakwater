@@ -33,7 +33,7 @@ type batch struct {
 // through the fallback plan as batches exhaust. When no fallback is
 // left, extra attempts clamp to the last candidate of the last batch —
 // the standing rule for attempts beyond the candidate list.
-func (r *run) target(attempt int) (upstream.Upstream, string) {
+func (r *requestRun) target(attempt int) (upstream.Upstream, string) {
 	offset := attempt - r.batchStart
 	for offset >= len(r.batches[r.batchIndex].candidates) {
 		if !r.advance(attempt) {
@@ -51,7 +51,7 @@ func (r *run) target(attempt int) (upstream.Upstream, string) {
 // Resolver rejections (unknown model, disabled, all candidates
 // ineligible) skip that fallback: the chain is a preference list, not
 // a contract that every entry can serve.
-func (r *run) advance(attempt int) bool {
+func (r *requestRun) advance(attempt int) bool {
 	if r.job.Resolve == nil {
 		return false
 	}

@@ -249,7 +249,7 @@ func TestStashParsesRetryAfterHeader(t *testing.T) {
 		if tc.set {
 			resp.Header.Set("Retry-After", tc.header)
 		}
-		run := &run{exec: New(testPolicy(), nil)}
+		run := &requestRun{exec: New(testPolicy(), nil)}
 		_, err := run.stashUpstreamError(&stubUpstream{id: "u1"}, resp, []byte(`{}`))
 		statusErr := &retry.StatusError{}
 		if !errors.As(err, &statusErr) {
@@ -263,7 +263,7 @@ func TestStashParsesRetryAfterHeader(t *testing.T) {
 	// The HTTP-date form yields a positive hint.
 	resp := jsonResponse(t, http.StatusTooManyRequests, `{}`)
 	resp.Header.Set("Retry-After", time.Now().Add(2*time.Second).UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"))
-	run := &run{exec: New(testPolicy(), nil)}
+	run := &requestRun{exec: New(testPolicy(), nil)}
 	_, err := run.stashUpstreamError(&stubUpstream{id: "u1"}, resp, []byte(`{}`))
 	statusErr := &retry.StatusError{}
 	if !errors.As(err, &statusErr) || statusErr.RetryAfter == 0 {

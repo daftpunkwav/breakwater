@@ -44,6 +44,13 @@ type memLease struct {
 	terminalAt time.Time
 }
 
+// defaultLeaseTTL is the fallback reclaim horizon for a ledger built
+// without an explicit one. It only holds when the request budget stays
+// well inside it; the assembly computes the real value from the
+// configured request timeouts, because a horizon shorter than the
+// longest possible request refunds a request that really spent tokens.
+const defaultLeaseTTL = 10 * time.Minute
+
 // NewMemory builds the in-process ledger.
 func NewMemory() *Memory {
 	return &Memory{

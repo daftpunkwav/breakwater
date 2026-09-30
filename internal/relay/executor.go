@@ -227,9 +227,10 @@ type exchangeSnapshot struct {
 	body   []byte
 }
 
-// run holds one request's mutable state across attempts. Methods on it
-// are called only from the single goroutine executing the attempt loop.
-type run struct {
+// requestRun holds one client request's mutable state across the
+// attempt loop. Methods on it are called only from the single
+// goroutine executing the attempt loop.
+type requestRun struct {
 	exec *Executor
 	job  Job
 	// ctx is the client request context; finish reads it to tell a
@@ -253,7 +254,7 @@ type run struct {
 	terminal      *exchangeSnapshot
 	streamBytes   int64
 	// rotated is the status error whose failure the stash convicted
-	// down to its credential alone: the run's classifier layer calls
+	// down to its credential alone: the request's classifier layer calls
 	// it retryable so the loop hands the request to the next
 	// credential instead of ending it.
 	rotated *retry.StatusError
@@ -303,7 +304,7 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 	if wire == nil {
 		wire = protocol.WireFor("")
 	}
-	r := &run{
+	r := &requestRun{
 		exec: e, job: job, ctx: ctx, wire: wire,
 		batches:    []batch{{model: job.Model, candidates: job.Candidates}},
 		batchStart: 1,
@@ -321,7 +322,7 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 // another credential instead of ending it.
 type runClassifier struct {
 	inner retry.Classifier
-	run   *run
+	run   *requestRun
 }
 
 // Retryable implements Classifier, overriding the static table only
@@ -345,7 +346,7 @@ func (c runClassifier) DelayHint(err error) time.Duration {
 
 // attempt runs one upstream attempt: breaker grant, exchange, outcome
 // report. It is the AttemptFunc of the retry loop.
-func (r *run) attempt(attemptCtx context.Context, attempt int) error {
+func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 	r.attempts = attempt
 	cand, model := r.target(attempt)
 	if attempt > 1 {
@@ -408,7 +409,7 @@ func (r *run) attempt(attemptCtx context.Context, attempt int) error {
 // holds a credential ring, this request already excluded at least one
 // credential, and more alive credentials remain than the walk has
 // burned — so the pick is guaranteed to land on a fresh one.
-func (r *run) credentialRotates(cand upstream.Upstream) bool {
+func (r *requestRun) credentialRotates(cand upstream.Upstream) bool {
 	burned := r.excluded[cand.ID()]
 	if len(burned) == 0 {
 		return false
@@ -422,7 +423,7 @@ func (r *run) credentialRotates(cand upstream.Upstream) bool {
 
 // finish renders the client response for the loop's final error and
 // assembles the Result. Exactly one of the branches fires.
-func (r *run) finish(err error) Result {
+func (r *requestRun) finish(err error) Result {
 	job := r.job
 
 	switch {
@@ -496,7 +497,7 @@ func (r *run) finish(err error) Result {
 
 // intendedStatus maps the final error to the status the client would
 // have received, for the case where it disconnected first.
-func (r *run) intendedStatus(err error) int {
+func (r *requestRun) intendedStatus(err error) int {
 	switch {
 	case r.terminal != nil:
 		return r.terminal.status
@@ -511,13 +512,13 @@ func (r *run) intendedStatus(err error) int {
 
 // clientGone reports whether the client request context was cancelled —
 // the one failure that is nobody's fault but the network's own.
-func (r *run) clientGone() bool {
+func (r *requestRun) clientGone() bool {
 	return r.ctx != nil && errors.Is(r.ctx.Err(), context.Canceled)
 }
 
 // trace records one attempt in the access trail. It is called from the
 // single goroutine running the attempt loop.
-func (r *run) trace(upstream string, credentialIndex, status int) {
+func (r *requestRun) trace(upstream string, credentialIndex, status int) {
 	r.trail = append(r.trail, AttemptTrace{Upstream: upstream, CredentialIndex: credentialIndex, Status: status})
 }
 

@@ -1,10 +1,13 @@
 /**
  * @file limiter
- * @description Tenant-level rate limiting contracts: RPM and TPM token buckets.
+ * @description Tenant-level limiting contracts: RPM and TPM token
+ * buckets, plus the per-tenant concurrency ceiling.
  *
  * Responsibilities:
  * - Own time-window throughput protection: request-rate (RPM) and
  *   token-throughput (TPM) buckets per tenant
+ * - Own the per-tenant in-flight request ceiling (the concurrency
+ *   gate in concurrency.go and its pipeline stage)
  * - Nothing else: the monetary balance ledger belongs to the quota
  *   module; token estimation (prompt estimate + max_tokens clamp) is
  *   computed once by the pipeline layer and passed to both

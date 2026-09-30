@@ -100,10 +100,14 @@ const (
 	envRouting       = "BREAKWATER_ROUTING_STRATEGY"
 	envInsightsDSN   = "BREAKWATER_INSIGHTS_DSN"
 
-	envProbeInterval = "BREAKWATER_PROBE_INTERVAL"
-	envProbeTimeout  = "BREAKWATER_PROBE_TIMEOUT"
-	envProbePasses   = "BREAKWATER_PROBE_THRESHOLD"
-	envProbeBackoff  = "BREAKWATER_PROBE_BACKOFF_MAX"
+	// The active recovery loop's knobs (cmd/breakwater): these probe
+	// auto-disabled upstreams back into rotation. They are not the
+	// circuit breaker's own half-open probe, whose timeout is
+	// BREAKWATER_CIRCUIT_PROBE_TIMEOUT above.
+	envProbeInterval  = "BREAKWATER_PROBE_INTERVAL"
+	envProbeTimeout   = "BREAKWATER_PROBE_TIMEOUT"
+	envProbeThreshold = "BREAKWATER_PROBE_THRESHOLD"
+	envProbeBackoff   = "BREAKWATER_PROBE_BACKOFF_MAX"
 
 	envFallbacks     = "BREAKWATER_FALLBACKS"
 	envContextLimits = "BREAKWATER_CONTEXT_LIMITS"
@@ -347,7 +351,7 @@ func loadProbe(cfg *Config) error {
 	if cfg.Probe.Timeout, err = envDuration(envProbeTimeout, cfg.Probe.Timeout); err != nil {
 		return err
 	}
-	if cfg.Probe.Threshold, err = envInt(envProbePasses, cfg.Probe.Threshold); err != nil {
+	if cfg.Probe.Threshold, err = envInt(envProbeThreshold, cfg.Probe.Threshold); err != nil {
 		return err
 	}
 	if cfg.Probe.BackoffMax, err = envDuration(envProbeBackoff, cfg.Probe.BackoffMax); err != nil {
@@ -423,7 +427,7 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbeTimeout, envProbeInterval)
 	}
 	if cfg.Probe.Interval > 0 && cfg.Probe.Threshold < 1 {
-		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbePasses, envProbeInterval)
+		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbeThreshold, envProbeInterval)
 	}
 	for model, limit := range cfg.ContextLimits {
 		if model == "" {

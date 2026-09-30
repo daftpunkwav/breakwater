@@ -79,7 +79,7 @@ func probeFailCount(t *testing.T, metrics *obs.Metrics, id string) int {
 
 // runRecoveryPass drives one tick of the auto-disabled recovery body
 // with a fresh deadline.
-func runRecoveryPass(timeout, backoff time.Duration, sw *router.Switch, probes map[string]upstream.Upstream, book retryBook, metrics *obs.Metrics) {
+func runRecoveryPass(timeout, backoff time.Duration, sw *router.Switch, probes map[string]upstream.Upstream, book probeBook, metrics *obs.Metrics) {
 	recoverAutoDisabled(context.Background(), backoffInterval, timeout, backoff, 1,
 		sw, probes, book, metrics, discardLogger())
 }
@@ -96,7 +96,7 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 		t.Fatalf("auto disable: %v", err)
 	}
 	metrics := obs.NewMetrics()
-	book := retryBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
+	book := probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
 	probes := map[string]upstream.Upstream{"u1": adapter}
 
 	// First failure: probed, and the next attempt lands one interval
@@ -145,7 +145,7 @@ func TestRecoveryBackoffZeroKeepsFixedPace(t *testing.T) {
 		t.Fatalf("auto disable: %v", err)
 	}
 	metrics := obs.NewMetrics()
-	book := retryBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
+	book := probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
 	probes := map[string]upstream.Upstream{"u1": adapter}
 
 	for i := 0; i < 3; i++ {

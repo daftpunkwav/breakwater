@@ -112,7 +112,7 @@ type Reporter interface {
 type Admin struct {
 	token         string
 	balances      BalanceLookup
-	setter        BalanceWriter
+	setBalance    BalanceWriter
 	breakers      BreakerStates
 	breakerReset  BreakerReset
 	upstreamProbe UpstreamProbe
@@ -157,8 +157,8 @@ func WithInsights(s Reporter) AdminOption {
 
 // NewAdmin builds the admin handler. A nil lookup or writer omits the
 // corresponding endpoint.
-func NewAdmin(token string, balances BalanceLookup, setter BalanceWriter, breakers BreakerStates, opts ...AdminOption) *Admin {
-	a := &Admin{token: token, balances: balances, setter: setter, breakers: breakers}
+func NewAdmin(token string, balances BalanceLookup, setBalance BalanceWriter, breakers BreakerStates, opts ...AdminOption) *Admin {
+	a := &Admin{token: token, balances: balances, setBalance: setBalance, breakers: breakers}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -298,7 +298,7 @@ func (a *Admin) serveQuota(w http.ResponseWriter, r *http.Request, tenantID stri
 // serveQuotaTopUp handles PUT /admin/tenants/{id}/quota: the body is
 // {"balance": N} and becomes the tenant's balance verbatim.
 func (a *Admin) serveQuotaTopUp(w http.ResponseWriter, r *http.Request, tenantID string) {
-	if a.setter == nil {
+	if a.setBalance == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -319,7 +319,7 @@ func (a *Admin) serveQuotaTopUp(w http.ResponseWriter, r *http.Request, tenantID
 		return
 	}
 
-	err := a.setter(r, tenantID, *body.Balance)
+	err := a.setBalance(r, tenantID, *body.Balance)
 	if err != nil {
 		renderQuotaError(w, tenantID, err)
 		return

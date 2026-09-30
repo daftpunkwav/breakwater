@@ -108,14 +108,14 @@ func (s *PGStore) probeSchema(ctx context.Context) error {
 
 // Record accepts one finished request without blocking; capacity
 // pressure drops the record and counts the drop.
-func (s *PGStore) Record(r Record) {
+func (s *PGStore) Record(rec Record) {
 	s.mu.Lock()
 	if s.closed || len(s.queue) >= batchSize*maxQueuedBatches {
 		s.drops++
 		s.mu.Unlock()
 		return
 	}
-	s.queue = append(s.queue, r)
+	s.queue = append(s.queue, rec)
 	full := len(s.queue) >= batchSize
 	s.mu.Unlock()
 	if full {

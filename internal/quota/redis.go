@@ -198,7 +198,7 @@ func (r *Redis) Settle(ctx context.Context, leaseID string, usedTokens int64) er
 
 // Cancel implements Ledger.
 func (r *Redis) Cancel(ctx context.Context, leaseID string) error {
-	moved, err := r.terminate(ctx, leaseID, LeaseStateCancelled)
+	moved, err := r.release(ctx, leaseID, LeaseStateCancelled)
 	if err != nil {
 		return err
 	}
@@ -210,10 +210,10 @@ func (r *Redis) Cancel(ctx context.Context, leaseID string) error {
 	return nil
 }
 
-// terminate moves a RESERVED lease to a terminal state through the
+// release moves a RESERVED lease to a terminal state through the
 // release script; moved reports whether this call performed the
 // transition (false for unknown or already-terminal leases).
-func (r *Redis) terminate(ctx context.Context, leaseID string, state LeaseState) (bool, error) {
+func (r *Redis) release(ctx context.Context, leaseID string, state LeaseState) (bool, error) {
 	tenant, err := r.rdb.HGet(ctx, r.leaseKey(leaseID), "tenant").Result()
 	if errors.Is(err, redis.Nil) {
 		// The record is gone: terminal past its audit window, or never
@@ -297,22 +297,6 @@ func counterValue(cmd *redis.StringCmd) int64 {
 	return v
 }
 
-// defaultLeaseTTL is the fallback reclaim horizon for a ledger built
-// without an explicit one. It only holds when the request budget stays
-// well inside it; the assembly computes the real value from the
-// configured request timeouts, because a horizon shorter than the
-// longest possible request refunds a request that really spent tokens.
-const defaultLeaseTTL = 10 * time.Minute
-
-// leaseAuditTTL bounds how long a terminal lease record is retained for
-// audit. The two backends enforce the same window by different means:
-// here the record carries this as a key TTL, set only on the terminal
-// transitions, so a RESERVED lease is never cut short before the
-// sweeper reaches it. The in-memory ledger has no per-record expiry and
-// drops terminal records by this same age during its sweep instead, so
-// its bound holds only while the sweeper runs.
-const leaseAuditTTL = time.Hour
-
 // SweepOnce reclaims expired RESERVED leases through the release
 // script, which moves each one to EXPIRED and refunds its amount
 // exactly once. It returns how many leases were reclaimed.
@@ -327,7 +311,7 @@ func (r *Redis) SweepOnce(ctx context.Context, now time.Time, limit int) (int, e
 	}
 	expired := 0
 	for _, id := range ids {
-		moved, err := r.terminate(ctx, id, LeaseStateExpired)
+		moved, err := r.release(ctx, id, LeaseStateExpired)
 		if err != nil {
 			return expired, err
 		}

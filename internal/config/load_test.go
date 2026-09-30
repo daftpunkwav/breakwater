@@ -22,7 +22,7 @@ var envVars = []string{
 	envCacheEnabled, envCacheTTL, envCacheCapacity,
 	envCircuitEnabled, envCircuitStrategy, envCircuitThreshold, envCircuitCooldown, envCircuitProbe,
 	envAccessLogPath, envAdminToken, envRouting,
-	envProbeInterval, envProbeTimeout, envProbePasses, envProbeBackoff,
+	envProbeInterval, envProbeTimeout, envProbeThreshold, envProbeBackoff,
 	envFallbacks, envContextLimits,
 	envAllowUnauthenticated,
 }
@@ -128,7 +128,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envRouting, "latency")
 	t.Setenv(envProbeInterval, "45s")
 	t.Setenv(envProbeTimeout, "7s")
-	t.Setenv(envProbePasses, "3")
+	t.Setenv(envProbeThreshold, "3")
 	t.Setenv(envProbeBackoff, "4m")
 	t.Setenv(envFallbacks, `{"m1":["m2","m3"]}`)
 	t.Setenv(envContextLimits, `{"m1":128000,"m2":32000}`)

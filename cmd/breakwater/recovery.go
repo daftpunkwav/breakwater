@@ -50,7 +50,7 @@ func startRecovery(ctx context.Context, interval, timeout, backoff time.Duration
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		book := retryBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
+		book := probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
 		for {
 			select {
 			case <-ctx.Done():
@@ -63,11 +63,11 @@ func startRecovery(ctx context.Context, interval, timeout, backoff time.Duration
 	}()
 }
 
-// retryBook is the recovery loop's per-upstream bookkeeping: the
+// probeBook is the recovery loop's per-upstream bookkeeping: the
 // consecutive healthy passes toward the restore threshold, and the
 // failed-probe backoff schedule. Both live only inside the loop
 // goroutine; no locks needed.
-type retryBook struct {
+type probeBook struct {
 	passes  map[string]int
 	retries map[string]probeRetry
 }
@@ -110,7 +110,7 @@ func probeBackoff(base, ceiling time.Duration, fails int) time.Duration {
 // consecutive healthy answers lift the auto disable, one failing
 // answer resets the count. A manual operator disable stays untouched —
 // recovery only ever lifts the system's own decision.
-func recoverAutoDisabled(ctx context.Context, interval, timeout, backoff time.Duration, passes int, routingSwitch *router.Switch, probes map[string]upstream.Upstream, book retryBook, metrics *obs.Metrics, logger *slog.Logger) {
+func recoverAutoDisabled(ctx context.Context, interval, timeout, backoff time.Duration, passes int, routingSwitch *router.Switch, probes map[string]upstream.Upstream, book probeBook, metrics *obs.Metrics, logger *slog.Logger) {
 	now := time.Now()
 	for _, id := range routingSwitch.AutoDisabledIDs() {
 		target, ok := probes[id]

@@ -69,8 +69,8 @@ func TestRedisBackendFailuresSurface(t *testing.T) {
 	if err := r.Settle(ctx, "lease-1", 10); err == nil || !strings.Contains(err.Error(), "settle lease lookup") {
 		t.Fatalf("settle err = %v, want the wrapped lookup failure", err)
 	}
-	if _, err := r.terminate(ctx, "lease-1", LeaseStateExpired); err == nil || !strings.Contains(err.Error(), "lease lookup") {
-		t.Fatalf("terminate err = %v, want the wrapped lookup failure", err)
+	if _, err := r.release(ctx, "lease-1", LeaseStateExpired); err == nil || !strings.Contains(err.Error(), "lease lookup") {
+		t.Fatalf("release err = %v, want the wrapped lookup failure", err)
 	}
 	if err := r.Cancel(ctx, "lease-1"); err == nil || !strings.Contains(err.Error(), "lease lookup") {
 		t.Fatalf("cancel err = %v, want the wrapped lookup failure", err)

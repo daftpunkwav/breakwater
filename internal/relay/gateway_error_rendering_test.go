@@ -163,7 +163,7 @@ func TestClientDisconnectWithTerminalErrorReportsTerminalStatus(t *testing.T) {
 func TestIntendedStatusMapsEveryFailureClass(t *testing.T) {
 	t.Parallel()
 	statusErr := retry.NewStatusError(http.StatusTooManyRequests)
-	r := &run{
+	r := &requestRun{
 		terminal:      snapshot(http.StatusUnauthorized, http.Header{}, []byte(`{}`)),
 		lastFailed:    snapshot(http.StatusTooManyRequests, http.Header{}, []byte(`{}`)),
 		lastFailedErr: statusErr,

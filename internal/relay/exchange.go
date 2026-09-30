@@ -31,7 +31,7 @@ import (
 // outcome alongside the loop error. The model is the batch's
 // client-facing name — the fallback plan may have moved it off the
 // Job's original model.
-func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model string) (circuit.Outcome, error) {
+func (r *requestRun) exchange(attemptCtx context.Context, cand upstream.Upstream, model string) (circuit.Outcome, error) {
 	req := upstream.Request{
 		Model: model,
 		// The body still carries the Job's primary model name (it is the
@@ -120,7 +120,7 @@ func (r *run) exchange(attemptCtx context.Context, cand upstream.Upstream, model
 // exchangeBuffered handles a non-streaming exchange: the body is
 // buffered before anything reaches the client, so any failure here is
 // still retryable in principle.
-func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) (circuit.Outcome, error) {
+func (r *requestRun) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) (circuit.Outcome, error) {
 	body, readErr := readBounded(resp.Body, maxResponseBytes, contentLengthHint(resp.Header))
 	_ = resp.Body.Close()
 	if readErr != nil {
@@ -145,7 +145,7 @@ func (r *run) exchangeBuffered(cand upstream.Upstream, resp *upstream.Response) 
 // as retryable; after it, any failure terminates through the client
 // format's honest termination and is reported as committed (no
 // transparent retry).
-func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, lease *streamLease, model string) (circuit.Outcome, error) {
+func (r *requestRun) exchangeStream(cand upstream.Upstream, resp *upstream.Response, lease *streamLease, model string) (circuit.Outcome, error) {
 	// Commit: from here on the loop must never see a plain error. The
 	// forwarded headers carry upstream-controlled values, so each is
 	// set only when it is a legal header field value — the same rule
@@ -252,7 +252,7 @@ func (r *run) exchangeStream(cand upstream.Upstream, resp *upstream.Response, le
 // it instead of ending the request. When none is left — or the
 // upstream holds no ring — the verdict falls to the retryability
 // table exactly as before.
-func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response, body []byte) (circuit.Outcome, error) {
+func (r *requestRun) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response, body []byte) (circuit.Outcome, error) {
 	r.servedBy = cand.ID()
 	r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
 	statusErr := retry.NewStatusError(resp.StatusCode)
@@ -293,7 +293,7 @@ func (r *run) stashUpstreamError(cand upstream.Upstream, resp *upstream.Response
 // this request's next attempt on the same upstream picks a different
 // one. The list is the request's own verdict; a concurrent request
 // keeps using the credential until its own evidence convicts it.
-func (r *run) excludeCredential(upstreamID string, index int) {
+func (r *requestRun) excludeCredential(upstreamID string, index int) {
 	if r.excluded == nil {
 		r.excluded = map[string][]int{}
 	}
@@ -336,7 +336,7 @@ func transportOutcome(requestCtx context.Context, err error) circuit.Outcome {
 
 // ttftTimeoutError renders an expired time-to-first-byte budget as the
 // retryable timeout the attempt loop understands.
-func (r *run) ttftTimeoutError() error {
+func (r *requestRun) ttftTimeoutError() error {
 	return fmt.Errorf("time-to-first-byte exceeded %v: %w", r.exec.policy.AttemptTimeout, context.DeadlineExceeded)
 }
 
@@ -344,7 +344,7 @@ func (r *run) ttftTimeoutError() error {
 // first byte as the retryable timeout the attempt loop understands. A
 // deadline rather than a cancellation, so the loop may fail over to a
 // candidate whose own ceiling has not expired yet.
-func (r *run) ceilingTimeoutError() error {
+func (r *requestRun) ceilingTimeoutError() error {
 	return fmt.Errorf("stream ceiling %v exceeded before the first byte: %w", r.exec.streamTimeout, context.DeadlineExceeded)
 }
 

@@ -47,7 +47,7 @@ type streamLease struct {
 // beginStream derives the streaming forward context off the request
 // context and arms the two timers. The caller owns the lease until it
 // calls end.
-func (r *run) beginStream() (*streamLease, context.Context) {
+func (r *requestRun) beginStream() (*streamLease, context.Context) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	lease := &streamLease{cancel: cancel}
 	if d := r.exec.streamTimeout; d > 0 {
