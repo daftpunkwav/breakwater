@@ -7,6 +7,7 @@
 package limiter
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -119,5 +120,27 @@ func TestConcurrencyPerTenantIsolation(t *testing.T) {
 		t.Fatal("another tenant was blocked by the busy tenant's slots")
 	} else {
 		release()
+	}
+}
+
+// TestConcurrencyReleaseReclaimsEntry: a fully released identity leaves
+// no map entry behind, so the slot map tracks live state instead of
+// growing with every identity the process has ever served.
+func TestConcurrencyReleaseReclaimsEntry(t *testing.T) {
+	t.Parallel()
+	g := NewConcurrency()
+	for i := 0; i < 100; i++ {
+		id := fmt.Sprintf("tenant-%d", i)
+		release, ok := g.Acquire(id, 1)
+		if !ok {
+			t.Fatalf("acquire for %s failed", id)
+		}
+		release()
+	}
+	g.mu.Lock()
+	entries := len(g.inFlight)
+	g.mu.Unlock()
+	if entries != 0 {
+		t.Fatalf("slot map holds %d entries after all releases, want 0", entries)
 	}
 }

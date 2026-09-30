@@ -49,7 +49,15 @@ func (c *Concurrency) Acquire(tenantID string, max int64) (release func(), ok bo
 		defer c.mu.Unlock()
 		if !released {
 			released = true
-			c.inFlight[tenantID]--
+			// The guard above makes the decrement run once per acquire,
+			// so the count never falls below zero: reaching zero means
+			// the identity's last slot went back, and the entry goes with
+			// it — the map holds live state, not every identity ever seen.
+			if v := c.inFlight[tenantID] - 1; v > 0 {
+				c.inFlight[tenantID] = v
+			} else {
+				delete(c.inFlight, tenantID)
+			}
 		}
 	}, true
 }
