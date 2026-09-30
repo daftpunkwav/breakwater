@@ -24,7 +24,7 @@ failover 的熔断、有界重试、缓存击穿防护、基于 lease 的 quota 
 | `internal/auth`       | 身份：users、roles、分层 key limits（static/PostgreSQL store、进程内 LRU） |
 | `internal/limiter`    | RPM/TPM token 桶（in-memory + Redis Lua）、每 tenant 并发闸、429 阶段 |
 | `internal/quota`      | Lease 台账（in-memory + Redis Lua）、sweeper、402 阶段      |
-| `internal/cache`      | 精确匹配缓存、手写 singleflight、eligibility               |
+| `internal/cache`      | 带 TinyLFU 风格准入的精确匹配缓存、手写 singleflight、eligibility |
 | `internal/circuit`    | 同一 port 后的三种 breaker：三态连续失败状态机、窗口化 ratio 守卫、慢调用比例状态机（含无 breaker 运行用的 nop） |
 | `internal/retry`      | Attempt loop、预算、retryability 分类器                    |
 | `internal/router`     | 候选选择：static 优先级或实测延迟排序、breaker 预过滤、运行时运维开关 |

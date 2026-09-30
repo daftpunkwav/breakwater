@@ -26,7 +26,7 @@ tests, metrics and fault-injection experiments.
 | `internal/auth`       | Identity: users, roles, layered key limits (static/PostgreSQL stores, process-local LRU) |
 | `internal/limiter`    | RPM/TPM token buckets (in-memory + Redis Lua), per-tenant concurrency gate, 429 stages |
 | `internal/quota`      | Lease ledger (in-memory + Redis Lua), sweeper, 402 stage  |
-| `internal/cache`      | Exact-match cache, hand-written singleflight, eligibility |
+| `internal/cache`      | Exact-match cache with TinyLFU-style admission, hand-written singleflight, eligibility |
 | `internal/circuit`    | Breakers behind one port: three-state consecutive machine, windowed ratio guard, slow-call-ratio machine (plus a nop for breaker-less runs) |
 | `internal/retry`      | Attempt loop, budgets, retryability classifier            |
 | `internal/router`     | Candidate selection: static priority or measured-latency order, breaker pre-filtering, runtime operator switches |
