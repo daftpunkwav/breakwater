@@ -17,7 +17,8 @@ Binary map: [README.md](README.md).
 ## Checks
 
 - Format with `gofmt`. `go vet ./...` and `golangci-lint run ./...` pass.
-- `go test -race -count=1 -timeout 300s ./...` is the CI bar.
-- Statement coverage is at least 95% per package on the CI run, which
-  provides Redis and PostgreSQL. The taxonomy is
-  [../docs/TESTING.md](../docs/TESTING.md).
+- `make race` runs `go test -race -count=1 -timeout 300s ./...`.
+- CI runs `go test -race -cover -timeout 8m ./...` and requires 95%
+  statement coverage per package on that log. The taxonomy is
+  [../docs/TESTING.md](../docs/TESTING.md). The workflow pins are in
+  [../.github/AGENTS.md](../.github/AGENTS.md).

@@ -7,9 +7,9 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   single token estimate.
 - Stage placement: after the limiter, before the cache. Deny an
   estimate the balance cannot cover with 402 `insufficient_quota`.
-- `Memory` and `Redis` implement the same ledger semantics. A behavior
-  change updates both. Redis check, deduction, and lease insert are
-  one Lua call. Write money as integer strings.
+- `Memory` and `Redis` share reserve, settle, and release semantics. A
+  change to those paths updates both. Redis check, deduction, and lease
+  insert are one Lua call. Write money as integer strings.
 - A missing Redis balance key is denied. Do not create it on reserve.
 - Every balance movement has one counter movement: debit at reserve,
   refund at settle or release. `Consumed` is not part of that identity.
@@ -18,8 +18,12 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   expiry is a no-op.
 - Keep a terminal lease for `leaseAuditTTL` (1h), then purge it.
 - Report reconcile drift. Do not write a correction from drift.
-  `SetBalance` bumps the tenant epoch and the interval across that
-  bump is skipped. `EnsureBalance` uses `SETNX`.
+- `Redis.SetBalance` increments the tenant epoch. The reconciler skips
+  the interval that crosses that bump. `Memory.SetBalance` writes the
+  balance and has no epoch.
+- `EnsureBalance` creates a balance only when the tenant has none.
+  Redis uses `SETNX`. Memory checks its map. Neither call resets an
+  existing balance.
 - The middleware reserves before `next` and settles or cancels in a
   `context.WithoutCancel` defer.
 - `StartSweeper` waits for the first tick, then reclaims. Each pass

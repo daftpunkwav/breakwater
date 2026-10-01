@@ -19,7 +19,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Route map: [README.md](README.md).
   not adopt an `X-Request-Id`.
 - Mount admin on `/admin/` with no method in the pattern. The admin
   handler checks the method.
-- Guard `/admin/*` with the `BREAKWATER_ADMIN_TOKEN` bearer.
+- When `BREAKWATER_ADMIN_TOKEN` is non-empty, `/admin/*` requires that
+  bearer. Compare SHA-256 digests. An empty token allows every caller.
 - Admin JSON bodies reject unknown fields and trailing values with 400
   `invalid_request`.
 
@@ -38,8 +39,9 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Route map: [README.md](README.md).
   `context_window_exceeded` and does not walk fallbacks.
 - The fallback resolver applies tier authorization, then the context
   ceiling, then affinity. Omit a fallback the tenant cannot use.
-- Affinity may promote only an id `Candidates` already returned, and
-  only to the head.
+- Affinity may promote only an id `Candidates` already returned.
+  `applyAffinity` swaps that candidate with index 0. It does not
+  shift the others.
 - Readiness uses the injected probe. Log the failure detail. The body
   stays a fixed phrase.
 - `AdminStore` sentinel errors map to 404, 409, and 503.

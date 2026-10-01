@@ -7,8 +7,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Assembly map:
 
 - Configuration arrives only through `BREAKWATER_*` via `internal/config`.
   This binary has no CLI flags.
-- `main.go` loads config and calls `serve`. `serve` returns errors and
-  does not exit the process.
+- `main` calls `run`. `run` calls `config.Load`, then `serve`. `serve`
+  returns errors and does not exit the process.
 - Behavior stays in `internal/*`. This directory assembles the process
   and owns signals, exit codes, and the root logger.
 
@@ -54,9 +54,10 @@ store, governance is observation only.
   `BREAKWATER_PROBE_THRESHOLD` consecutive healthy probes.
   `BREAKWATER_PROBE_BACKOFF_MAX` spaces failed probes on a doubling
   ladder; a healthy probe clears the ladder.
-- Start the reconciler only when the Redis ledger, the PostgreSQL
-  snapshot store, a PostgreSQL identity, and a positive
-  `BREAKWATER_RECONCILE_INTERVAL` are all set.
+- Start the reconciler only when `snapshotSource` is the Redis ledger,
+  `identity.admin` is set, `BREAKWATER_POSTGRES_DSN` is set, and
+  `BREAKWATER_RECONCILE_INTERVAL` is positive. `startReconciler`
+  creates the snapshot store.
 - When a static identity set is configured, seed each tenant once
   through `EnsureBalance`. Do not reset a balance that already exists.
   A PostgreSQL identity does not seed.

@@ -7,9 +7,9 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   as the grant.
 - Binding order is fixed after construction. Switches, the tracker,
   and breaker state are runtime overlays.
-- An operator disable is lifted only by an operator. An auto-disable
-  is lifted only by the recovery prober in `cmd/breakwater`. An
-  operator enable clears both.
+- An operator disable is cleared only by an operator enable.
+- `AutoEnableUpstream` clears an auto-disable and leaves an operator
+  disable in place. An operator enable clears both maps.
 - Unknown names read as enabled. Setter calls for an unknown name
   return `ErrUnknownModel` or `ErrUnknownUpstream`.
 - `ErrDisabled` is an operator refusal. `ErrUnavailable` means the

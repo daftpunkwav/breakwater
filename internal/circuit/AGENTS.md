@@ -17,13 +17,18 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - `StateOf` may move open to half-open when the cooldown has elapsed.
   It does not take the probe slot. Only `Allow` does.
 - Breaker state is process-local.
-- `OutcomeSlow` counts as healthy for every strategy. The caller
-  classifies slowness. This package does not measure duration.
+- The caller classifies slowness and reports `OutcomeSlow`. This
+  package does not measure duration.
+- Consecutive and ratio strategies count `OutcomeSlow` as success.
+- Slow-call, while closed: `OutcomeSlow` and `OutcomeServerFault`
+  increment the slow count. A fast success increments only the total.
+  `OutcomeGatewayTerminated` increments nothing. Open when the window
+  holds at least `slowMinSamples` (10) and the slow share reaches
+  `SlowRatio`.
+- Slow-call, while half-open: `OutcomeServerFault` returns to open.
+  `OutcomeSlow` and a fast success close the machine and empty the
+  window.
 - Ratio strategy: a denial is an event in the window. Admit one call
-  per forced-pass interval. A window with no recent events admits
+  per `ratioForcePass` (1s). A window with no recent events admits
   every call. Publish denials on `breakwater_circuit_denied_total`.
   Leave the state gauge closed.
-- Slow-call strategy: open only when the window holds at least ten
-  samples and the slow share reaches the configured ratio. A server
-  fault counts as slow. A healthy probe closes the machine on an
-  emptied window.

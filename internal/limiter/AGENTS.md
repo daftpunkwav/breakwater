@@ -28,6 +28,9 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - Over-capacity concurrency returns 429 `concurrency_limit_exceeded`
   before any rate-limit reservation.
 - Post-call TPM correction calls `Refund` with the request context.
-  A cancelled context drops the refund. Do not detach that context.
+  `Redis.Refund` uses that context; a cancelled context fails the
+  script and the middleware discards the error. `Memory.Refund`
+  ignores the context and still returns tokens toward capacity. Do
+  not move the Redis refund onto a detached context.
 - Redis tests that need a real server require
   `BREAKWATER_TEST_REDIS_ADDR`. Unit tests use miniredis.

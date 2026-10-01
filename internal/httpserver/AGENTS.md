@@ -11,7 +11,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package row:
 - A nil handler returns an error. A non-positive `ShutdownGrace`
   becomes 10s. Configured gateway runs never hit that path:
   `internal/config` refuses a non-positive grace.
-- `ReadHeaderTimeout` is 10s. Leave `WriteTimeout` unset.
+- `ReadHeaderTimeout` is 10s. `ReadTimeout` is 30s. `IdleTimeout` is
+  120s. Leave `WriteTimeout` unset.
 - `ErrDrainTimeout` means requests were still in flight when the drain
   window expired. Callers log it and exit zero. Every other `Shutdown`
   error is a failure.

@@ -29,12 +29,15 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   refused, return 503 `upstream_saturated`.
 - Record every attempt on `Result.Trail`, finished or not: upstream,
   credential, and status.
-- Buffered bodies are capped at `maxResponseBytes` (32 MiB). The
-  stream commit point is the first byte written to the client.
+- `readBounded` fails the attempt when the body exceeds
+  `maxResponseBytes` (32 MiB). It does not truncate. The stream commit
+  point is the first byte written to the client.
 - A streaming attempt uses the attempt timeout until the first byte,
   then the optional stream ceiling and the optional idle watchdog.
   Each body read re-arms the idle watchdog.
-- `[DONE]` marks a finished SSE stream. Its absence marks a truncated
-  one.
+- `pumpStream` returns `errStreamTruncated` when it saw a data line
+  and never saw `[DONE]`. EOF with no data line is success.
+- `pumpTranscoded` returns `errStreamTruncated` when EOF arrives
+  without `[DONE]`.
 - A healthy attempt slower than the slow-call threshold is reported
   as `OutcomeSlow`.

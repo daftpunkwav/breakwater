@@ -16,9 +16,16 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - Translated streaming ingest sets `stream_options.include_usage` on
   the canonical request.
 - Translated object ids use the `resp_gw_` and `msg_gw_` prefixes.
-- `Code` is one closed set for the HTTP error envelope and the
-  in-stream contract. The Messages wire maps it onto its own
-  error-type vocabulary.
+- `protocol.Code` constants are the governance rejections
+  (`rate_limit_exceeded`, `insufficient_quota`, `model_not_allowed`)
+  and the in-stream codes (`upstream_reset`, `upstream_timeout`,
+  `budget_exhausted`). Handlers also pass literal codes to
+  `WriteError`, including `model_disabled`, `circuit_open`,
+  `model_not_found`, `context_window_exceeded`, `upstream_saturated`,
+  `upstream_unreachable`, `no_upstream`, and `invalid_request`.
+- Adding a `Code` constant updates `sse_test.go` and
+  `rejection_codes_test.go`. The Messages wire maps `Code` values onto
+  its own error-type vocabulary.
 - `WriteAbort` writes one error event (`error` type `gateway_error`)
   and then `data: [DONE]`. In-stream codes are `upstream_reset`,
   `upstream_timeout`, and `budget_exhausted`.
@@ -27,5 +34,3 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - `WriteError` is the gateway error envelope. Shared rejection codes
   include `rate_limit_exceeded`, `insufficient_quota`, and
   `model_not_allowed`.
-- Adding a `Code` updates the constants and the contract tests
-  (`sse_test.go`, `rejection_codes_test.go`).

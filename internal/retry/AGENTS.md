@@ -15,11 +15,15 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   requests in flight floored at a minimum. Do not add a shared backend.
 - Return `ErrCommitted` unchanged. Do not classify it and do not start
   another attempt.
-- Do not retry `context.Canceled`. Retry timeouts and connection-level
-  transport failures. Retry 429 and 5xx. Do not retry other 4xx.
-- A `Retry-After` hint replaces computed backoff only for the next
-  attempt on the same upstream. Callers strip it with `StripRetryAfter`
-  before a different candidate. `ParseRetryAfter` accepts an integer,
-  a fractional number, or an HTTP date, and caps the wait at 60s.
+- `DefaultClassifier.Retryable` rejects nil and `context.Canceled`.
+  It accepts `context.DeadlineExceeded`. A `StatusError` is accepted
+  only for 429 or status >= 500. Every other error is accepted,
+  including the relay's circuit-open and upstream-saturated sentinels.
+- A positive `DelayHint` waits `jitteredHint`: uniform on
+  `[hint, 1.5·hint)`, or the hint itself when half the hint is zero.
+  `ParseRetryAfter` accepts an integer, a fractional number, or an
+  HTTP date, and caps the hint at 60s.
+- `StripRetryAfter` clears a hint. The relay calls it when the next
+  attempt changes upstream id or rotates credential.
 - Computed backoff is full-jitter exponential, bounded by the
   configured ceiling.
