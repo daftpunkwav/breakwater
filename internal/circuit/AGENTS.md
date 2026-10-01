@@ -25,9 +25,11 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   `OutcomeGatewayTerminated` increments nothing. Open when the window
   holds at least `slowMinSamples` (10) and the slow share reaches
   `SlowRatio`.
-- Slow-call, while half-open: `OutcomeServerFault` returns to open.
-  `OutcomeSlow` and a fast success close the machine and empty the
-  window.
+- Slow-call, while half-open: `OutcomeGatewayTerminated` reclaims the
+  probe to open. A non-fault report past the probe deadline does the
+  same. `OutcomeServerFault` returns to open. Every other outcome,
+  including `OutcomeSlow`, `OutcomeClientFault`, and a fast success,
+  closes the machine and empties the window.
 - Ratio strategy: a denial is an event in the window. Admit one call
   per `ratioForcePass` (1s). A window with no recent events admits
   every call. Publish denials on `breakwater_circuit_denied_total`.

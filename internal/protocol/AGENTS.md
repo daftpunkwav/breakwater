@@ -16,21 +16,26 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - Translated streaming ingest sets `stream_options.include_usage` on
   the canonical request.
 - Translated object ids use the `resp_gw_` and `msg_gw_` prefixes.
-- `protocol.Code` constants are the governance rejections
-  (`rate_limit_exceeded`, `insufficient_quota`, `model_not_allowed`)
-  and the in-stream codes (`upstream_reset`, `upstream_timeout`,
-  `budget_exhausted`). Handlers also pass literal codes to
-  `WriteError`, including `model_disabled`, `circuit_open`,
-  `model_not_found`, `context_window_exceeded`, `upstream_saturated`,
+- `protocol.Code` governance constants, pinned by
+  `TestRejectionCodeValues`, are `rate_limit_exceeded`,
+  `insufficient_quota`, `model_not_allowed`, `missing_api_key`,
+  `invalid_api_key`, `identity_unavailable`,
+  `concurrency_limit_exceeded`, `quota_not_provisioned`, and
+  `governance_unavailable`. In-stream constants, pinned by
+  `TestWriteAbortAllCodes`, are `upstream_reset`, `upstream_timeout`,
+  and `budget_exhausted`.
+- A new governance constant updates `rejection_codes_test.go`. A new
+  in-stream constant updates `sse_test.go`. The Messages wire maps
+  `Code` values onto its own error-type vocabulary.
+- Handlers also pass literal codes to `WriteError`, including
+  `model_disabled`, `circuit_open`, `model_not_found`,
+  `context_window_exceeded`, `upstream_saturated`,
   `upstream_unreachable`, `no_upstream`, and `invalid_request`.
-- Adding a `Code` constant updates `sse_test.go` and
-  `rejection_codes_test.go`. The Messages wire maps `Code` values onto
-  its own error-type vocabulary.
 - `WriteAbort` writes one error event (`error` type `gateway_error`)
   and then `data: [DONE]`. In-stream codes are `upstream_reset`,
   `upstream_timeout`, and `budget_exhausted`.
 - SSE codecs do not set response headers and do not flush. Handlers do.
 - `MaxBodyBytes` is 4 MiB.
-- `WriteError` is the gateway error envelope. Shared rejection codes
-  include `rate_limit_exceeded`, `insufficient_quota`, and
-  `model_not_allowed`.
+- `WriteError` renders the HTTP error envelope. Governance stages
+  pass `protocol.Code` values. Other handlers may pass the literal
+  codes above.
