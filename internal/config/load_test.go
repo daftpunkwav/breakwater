@@ -131,6 +131,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envCircuitProbe, "3s")
 	t.Setenv(envRouting, "latency")
 	t.Setenv(envAffinity, "10m")
+	t.Setenv(envUpstreamMaxInFlight, "64")
 	t.Setenv(envProbeInterval, "45s")
 	t.Setenv(envProbeTimeout, "7s")
 	t.Setenv(envProbeThreshold, "3")
@@ -193,6 +194,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.Routing.Strategy != "latency" || cfg.Routing.AffinityTTL != 10*time.Minute {
 		t.Fatalf("routing = %+v", cfg.Routing)
+	}
+	if cfg.UpstreamMaxInFlight != 64 {
+		t.Fatalf("upstream max in flight = %d, want 64", cfg.UpstreamMaxInFlight)
 	}
 	if cfg.Fallbacks["m1"][0] != "m2" || cfg.Fallbacks["m1"][1] != "m3" || len(cfg.Fallbacks) != 1 {
 		t.Fatalf("fallbacks = %+v", cfg.Fallbacks)

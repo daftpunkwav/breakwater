@@ -64,6 +64,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"unknown routing strategy", envRouting, "cheapest", "static", false},
 		{"bad affinity ttl", envAffinity, "a while", "parse", false},
 		{"negative affinity ttl", envAffinity, "-1m", "must not be negative", false},
+		{"bad upstream max inflight", envUpstreamMaxInFlight, "dozens", "parse", false},
+		{"negative upstream max inflight", envUpstreamMaxInFlight, "-4", "must not be negative", false},
 		{"bad probe interval", envProbeInterval, "soon", "parse", false},
 		{"negative probe interval", envProbeInterval, "-1s", "must not be negative", false},
 		{"bad probe timeout", envProbeTimeout, "quickly", "parse", false},

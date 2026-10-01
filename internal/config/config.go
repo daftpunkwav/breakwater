@@ -38,9 +38,15 @@ type Config struct {
 	// ReconcileInterval paces the quota ledger reconciliation;
 	// zero disables the protocol.
 	ReconcileInterval time.Duration
-	Cache             Cache
-	Circuit           Circuit
-	Security          Security
+	// UpstreamMaxInFlight caps the in-flight exchanges every single
+	// upstream serves at once, protecting one saturated provider from
+	// collecting the whole gateway's queue as it slows down. An attempt
+	// refused by the ceiling fails over to the next candidate; zero
+	// (the default) leaves upstream concurrency unbounded.
+	UpstreamMaxInFlight int
+	Cache               Cache
+	Circuit             Circuit
+	Security            Security
 	// Probe configures the active recovery probing of upstreams.
 	Probe Probe
 	// Routing selects the candidate ordering policy of the router.

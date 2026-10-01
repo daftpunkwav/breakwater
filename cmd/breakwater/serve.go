@@ -328,6 +328,7 @@ func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *o
 		relay.WithStreamTimeout(cfg.Retry.StreamTimeout),
 		relay.WithStreamIdleTimeout(cfg.Retry.StreamIdleTimeout),
 		relay.WithSlowCallThreshold(cfg.Circuit.SlowCallThreshold),
+		relay.WithUpstreamBulkhead(limiter.NewConcurrency(), int64(cfg.UpstreamMaxInFlight)),
 		relay.WithUpstreamObserver(trackerObserver{tracker}),
 		relay.WithUpstreamFatalHook(autoDisableHook(routingSwitch, rings, metrics, logger)),
 	)

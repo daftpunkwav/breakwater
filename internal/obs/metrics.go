@@ -220,6 +220,8 @@ func NewMetrics() *Metrics {
 	reg("breakwater_retry_budget_exhausted_total", "Requests denied by the retry budget.", "counter", nil, nil)
 	reg("breakwater_upstream_failover_total", "Requests that failed over to another upstream.", "counter",
 		[]string{"from", "to"}, nil)
+	reg("breakwater_upstream_saturated_total", "Attempts refused by the per-upstream in-flight ceiling.", "counter",
+		[]string{"upstream"}, nil)
 
 	reg("breakwater_sse_stream_aborted_total", "Streams terminated through the error event contract.", "counter",
 		[]string{"upstream"}, nil)
@@ -424,6 +426,15 @@ func (m *Metrics) Failover(from, to string) {
 		return
 	}
 	m.inc("breakwater_upstream_failover_total", 1, from, to)
+}
+
+// UpstreamSaturated records an attempt refused by the per-upstream
+// in-flight ceiling.
+func (m *Metrics) UpstreamSaturated(upstream string) {
+	if m == nil {
+		return
+	}
+	m.inc("breakwater_upstream_saturated_total", 1, upstream)
 }
 
 // StreamAborted records a stream terminated through the error contract.

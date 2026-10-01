@@ -72,6 +72,21 @@ type Executor struct {
 	// reports OutcomeSlow instead of OutcomeSuccess. Zero reports every
 	// healthy attempt as fast however long it took.
 	slowCallThreshold time.Duration
+	// bulkhead caps the in-flight exchanges per upstream; nil (the
+	// default) leaves upstream concurrency unbounded. An attempt whose
+	// upstream is at the ceiling skips to the next candidate — a
+	// per-upstream ceiling is a capacity condition of one candidate,
+	// never a health verdict, so it feeds no breaker accounting and no
+	// performance tracking.
+	bulkhead    Bulkhead
+	bulkheadMax int64
+}
+
+// Bulkhead is the per-upstream slot gate: non-blocking, one slot per
+// in-flight exchange, the release idempotent. It is a port so the
+// relay stays decoupled from any particular counting implementation.
+type Bulkhead interface {
+	Acquire(id string, max int64) (release func(), ok bool)
 }
 
 // Option customizes an Executor.
@@ -137,6 +152,18 @@ func WithStreamIdleTimeout(d time.Duration) Option {
 // every healthy attempt as fast however long it took.
 func WithSlowCallThreshold(d time.Duration) Option {
 	return func(e *Executor) { e.slowCallThreshold = d }
+}
+
+// WithUpstreamBulkhead installs the per-upstream in-flight ceiling: an
+// attempt may start an exchange on an upstream only when its slot count
+// is below max, and the slot returns when the attempt ends whatever the
+// outcome. A nil gate or a max at or below zero keeps upstream
+// concurrency unbounded.
+func WithUpstreamBulkhead(gate Bulkhead, max int64) Option {
+	if gate == nil || max <= 0 {
+		return func(e *Executor) {}
+	}
+	return func(e *Executor) { e.bulkhead = gate; e.bulkheadMax = max }
 }
 
 // New builds an Executor. A nil budget disables the global in-flight
@@ -389,6 +416,21 @@ func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 		perm = p
 	}
 
+	// The per-upstream ceiling is a capacity condition, not a health
+	// one: a saturated candidate is skipped toward the next one and the
+	// refusal never reaches the breaker, the performance tracker or the
+	// trail as an exchange event. The slot returns when this attempt
+	// ends, however it ends.
+	if r.exec.bulkhead != nil {
+		release, ok := r.exec.bulkhead.Acquire(cand.ID(), r.exec.bulkheadMax)
+		if !ok {
+			r.exec.metrics.UpstreamSaturated(cand.ID())
+			r.trace(cand.ID(), -1, 0)
+			return fmt.Errorf("relay: upstream %s is at its in-flight ceiling: %w", cand.ID(), errUpstreamSaturated)
+		}
+		defer release()
+	}
+
 	started := time.Now()
 	r.startedAt = started
 	r.responsiveness = 0
@@ -501,6 +543,12 @@ func (r *requestRun) finish(err error) Result {
 		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
 			Trail: r.trail, ErrorCode: "circuit_open"}
 
+	case errors.Is(err, errUpstreamSaturated):
+		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "upstream_saturated",
+			"every upstream candidate for model "+job.Model+" is at its in-flight ceiling")
+		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
+			Trail: r.trail, ErrorCode: "upstream_saturated"}
+
 	case errors.Is(err, retry.ErrBudgetExhausted):
 		r.exec.metrics.RetryBudgetExhausted()
 		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
@@ -530,7 +578,7 @@ func (r *requestRun) intendedStatus(err error) int {
 	switch {
 	case r.terminal != nil:
 		return r.terminal.status
-	case errors.Is(err, errCircuitOpen), errors.Is(err, retry.ErrBudgetExhausted):
+	case errors.Is(err, errCircuitOpen), errors.Is(err, errUpstreamSaturated), errors.Is(err, retry.ErrBudgetExhausted):
 		return http.StatusServiceUnavailable
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
 		return r.lastFailed.status
@@ -555,6 +603,11 @@ func (r *requestRun) trace(upstream string, credentialIndex, status int) {
 // treats it as retryable so the next attempt may reach another
 // candidate.
 var errCircuitOpen = errors.New("relay: circuit open")
+
+// errUpstreamSaturated marks attempts refused by the per-upstream
+// in-flight ceiling; like a breaker denial it is retryable, so a
+// saturated candidate hands the request to the next one.
+var errUpstreamSaturated = errors.New("relay: upstream saturated")
 
 // readSeedHeadroom is one Read's worth of spare capacity kept past the
 // pre-sized hint, so a hint that matches the body never pushes the read

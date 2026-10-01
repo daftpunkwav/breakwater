@@ -115,6 +115,8 @@ const (
 
 	envFallbacks     = "BREAKWATER_FALLBACKS"
 	envContextLimits = "BREAKWATER_CONTEXT_LIMITS"
+
+	envUpstreamMaxInFlight = "BREAKWATER_UPSTREAM_MAX_INFLIGHT"
 )
 
 // Load reads the configuration from the environment and validates it.
@@ -379,7 +381,9 @@ func loadProbe(cfg *Config) error {
 
 // loadRouting parses the candidate-ordering knobs: the strategy is
 // read with the defaults, the affinity TTL here. Zero stays legal —
-// it is the disabled default.
+// it is the disabled default. The per-upstream in-flight ceiling is
+// parsed here too: like the ordering knobs it shapes what the relay's
+// attempt loop may reach, and it has no loader of its own.
 func loadRouting(cfg *Config) error {
 	var err error
 	if cfg.Routing.AffinityTTL, err = envDuration(envAffinity, cfg.Routing.AffinityTTL); err != nil {
@@ -387,6 +391,12 @@ func loadRouting(cfg *Config) error {
 	}
 	if cfg.Routing.AffinityTTL < 0 {
 		return fmt.Errorf("config: %s must not be negative", envAffinity)
+	}
+	if cfg.UpstreamMaxInFlight, err = envInt(envUpstreamMaxInFlight, cfg.UpstreamMaxInFlight); err != nil {
+		return err
+	}
+	if cfg.UpstreamMaxInFlight < 0 {
+		return fmt.Errorf("config: %s must not be negative", envUpstreamMaxInFlight)
 	}
 	return nil
 }
