@@ -16,7 +16,7 @@ ordering. Wire-format concerns belong to
 | --- | --- |
 | `routes.go` | `newRootHandler`: the explicit URL layout in one place; the whole mux is wrapped in an outer recovery stage so the non-inference routes also render a 500 instead of a killed connection |
 | `server.go` | `Server`/`Options`: the gateway facade; delegates the process lifecycle to `httpserver.Run` |
-| `inference.go` | `Inference`: one handler per client format — model authorization (defense in depth with the pipeline stage), router candidates, the context-window pre-filter (413 `context_window_exceeded`, fails open), the fallback resolver applying tier and context gates, relay execution and the settlement input |
+| `inference.go` | `Inference`: one handler per client format — model authorization (defense in depth with the pipeline stage), router candidates, the context-window pre-filter (413 `context_window_exceeded`, fails open), the fallback resolver applying tier, context and affinity gates, relay execution and the settlement input |
 | `admin.go` | The operations half of the admin surface: the bearer guard, quota read/top-up, breaker states and reset, the routing view, the model/upstream switches, the insights report |
 | `identityadmin.go` | The identity half: the `/admin/users` and `/admin/keys` subtrees; `AdminStore` sentinel errors map onto 404/409/503 |
 | `health.go` | Liveness and readiness; readiness gates on the injected probe — the fail-closed limiter's dependency — and keeps infrastructure details in the log, never in the body |

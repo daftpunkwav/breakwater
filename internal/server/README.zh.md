@@ -15,7 +15,7 @@
 | --- | --- |
 | `routes.go` | `newRootHandler`：把显式的 URL 布局集中在一处；整个 mux 外包一层 recovery，使非 inference 路由也能渲染 500 而不是被掐断连接 |
 | `server.go` | `Server`/`Options`：网关门面；进程生命周期委托给 `httpserver.Run` |
-| `inference.go` | `Inference`：每种 client format 一个 handler——模型授权（与 pipeline 阶段纵深防御）、router 候选、context-window 预过滤（413 `context_window_exceeded`，fail-open）、施加 tier 与 context 闸门的 fallback resolver、relay 执行与结算输入 |
+| `inference.go` | `Inference`：每种 client format 一个 handler——模型授权（与 pipeline 阶段纵深防御）、router 候选、context-window 预过滤（413 `context_window_exceeded`，fail-open）、施加 tier、context 与 affinity 闸门的 fallback resolver、relay 执行与结算输入 |
 | `admin.go` | admin 面 operations 半边：bearer 守卫、quota 读/充值、breaker 状态与重置、routing 视图、model/upstream 开关、insights 报告 |
 | `identityadmin.go` | identity 半边：`/admin/users` 与 `/admin/keys` 子树；`AdminStore` 哨兵错误映射为 404/409/503 |
 | `health.go` | liveness 与 readiness；readiness 以注入的探针为闸——即 fail-closed limiter 的依赖——基础设施细节只进日志，绝不进响应体 |

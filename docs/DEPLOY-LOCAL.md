@@ -160,6 +160,14 @@ tracker scores every attempt (client cancels excluded) and untried
 upstreams are explored first. Breakers and operator switches gate
 eligibility in both modes; the strategy only orders.
 
+Set `BREAKWATER_ROUTING_AFFINITY_TTL` to a positive duration to enable
+prompt-prefix affinity: the gateway remembers which upstream served
+which prompt prefixes and puts the one holding the longest match at
+the head of the candidate list, reusing its warm prompt cache. A
+conversation that keeps its system prompt and history therefore stays
+on one upstream instead of re-paying prefill elsewhere; failover,
+breakers and operator switches still apply in full.
+
 ## 7. Verify
 
     # one buffered call, any format

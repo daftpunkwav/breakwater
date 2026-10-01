@@ -141,6 +141,12 @@ insights 任一存在却无 `BREAKWATER_ADMIN_TOKEN`）。只要端口在你的�
 upstream 优先探索。两种模式下 breaker 与运维开关都把守 eligibility；策略
 只管排序。
 
+将 `BREAKWATER_ROUTING_AFFINITY_TTL` 设为正时长即可启用提示词前缀亲和：
+网关记住哪个 upstream 服务过哪些提示词前缀，并把持有最长匹配的那个放到
+候选列表头部，复用其温热的 prompt cache。保持系统提示词与历史不变的对话
+因此停留在同一个 upstream 上，不必在别处重付 prefill；failover、breaker
+与运维开关仍然全部生效。
+
 ## 7. 验证
 
     # 一次缓冲调用，任意格式
