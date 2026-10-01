@@ -12,7 +12,7 @@ upstream 上的 attempt loop、跨候选与 fallback 模型的 failover 顺序�
 
 | File | 职责 |
 | --- | --- |
-| `executor.go` | `Executor`、`Job`、`Result`：attempt loop 驱动器；`finish` 渲染三者之一——已交付的回复、最后一个上游错误的逐字节 passthrough、或网关信封；breaker 的许可与结果上报按 attempt 进行；`Result.Trail` 携带供访问日志使用的逐 attempt 记录 |
+| `executor.go` | `Executor`、`Job`、`Result`：attempt loop 驱动器；`finish` 渲染三者之一——已交付的回复、最后一个上游错误的逐字节 passthrough、或网关信封；breaker 的许可与结果上报按 attempt 进行；可选的 per-upstream in-flight 上限（`Bulkhead` port）会拒绝已达上限的上游的 attempt、跳到下一候选，且不进入 breaker 或性能跟踪；`Result.Trail` 携带供访问日志使用的逐 attempt 记录 |
 | `exchange.go` | 一次上游 attempt：buffered 模式（响应体受 `maxResponseBytes`（32 MiB）约束）与 streaming 模式（提交点是写向客户端的第一个字节；此后失败经错误事件契约终结）；credential 类失败会把该凭据排除出本次请求的剩余尝试——只要还有存活凭据，请求继续向下走而不是终止 |
 | `fallback.go` | fallback 计划：attempt loop 耗尽当前模型后经 `CandidateResolver` 惰性解析下一批；链是偏好列表而非契约——无法服务的模型直接跳过 |
 | `streamlease.go` | 流式 exchange 的每 attempt 计时器组：attempt timeout 约束 time-to-first-byte，可选的 stream ceiling 约束整个响应体，可选的 idle 看门狗约束上游静默——每次响应体读取都会重置它 |

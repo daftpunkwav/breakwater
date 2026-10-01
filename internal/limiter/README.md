@@ -26,7 +26,7 @@ semaphore by design.
 | `redis.go` | `Redis`: keys under `bw:limiter:` (or `<namespace>:bw:limiter:`), scripts embedded via `go:embed` |
 | `tokenbucket.lua` | Atomic refill-check-deduct; Redis clock; capacity 0 skips the dimension; 120s key expiry |
 | `refund.lua` | Refunds unconsumed tokens into the TPM bucket after a refill to now, never past capacity |
-| `concurrency.go` | `Concurrency`: hand-written counting semaphore with an idempotent release |
+| `concurrency.go` | `Concurrency`: hand-written counting semaphore with an idempotent release. The gateway instantiates it twice: once as the per-tenant gate driven by tier ceilings, once as the relay's per-upstream in-flight ceiling (`relay.WithUpstreamBulkhead`), which the relay consumes through its own `Bulkhead` port |
 | `middleware.go` | The 429 rate-limit stage: single body read, token estimate, fail-closed on backend error, refund-only post-call correction |
 | `concurrencymiddleware.go` | The 429 concurrency stage: `concurrency_limit_exceeded`, taken before any rate-limit reservation |
 

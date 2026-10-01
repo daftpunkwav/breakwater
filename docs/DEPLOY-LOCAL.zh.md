@@ -147,6 +147,12 @@ upstream 优先探索。两种模式下 breaker 与运维开关都把守 eligibi
 因此停留在同一个 upstream 上，不必在别处重付 prefill；failover、breaker
 与运维开关仍然全部生效。
 
+将 `BREAKWATER_UPSTREAM_MAX_INFLIGHT` 设为正整数即可限制单个 upstream
+同时服务的交换数。负载下变慢的 provider 会在上限处停止接收新工作，而不是
+聚拢整个网关的排队；被拒绝的 attempt 转向下一候选，只有候选全部饱和时才
+以 `503 upstream_saturated` 作答。这类拒绝是容量信号：不计入 breaker，
+也不计入延迟跟踪。
+
 ## 7. 验证
 
     # 一次缓冲调用，任意格式

@@ -22,7 +22,7 @@ model authorization → concurrency → limiter → quota → cache；超限请�
 | `redis.go` | `Redis`：`bw:limiter:`（或 `<namespace>:bw:limiter:`）下的 key，脚本经 `go:embed` 内嵌 |
 | `tokenbucket.lua` | 原子的补充-检查-扣减；Redis 时钟；容量 0 即跳过该维度；key 120s 过期 |
 | `refund.lua` | 先补充到当前时刻，再把未消耗的 token 退回 TPM 桶，绝不超过容量 |
-| `concurrency.go` | `Concurrency`：手写计数信号量，release 幂等 |
+| `concurrency.go` | `Concurrency`：手写计数信号量，release 幂等。网关实例化两份：一份作 tier 上限驱动的 per-tenant 闸门，一份作 relay 的 per-upstream in-flight 上限（`relay.WithUpstreamBulkhead`）——relay 经自己的 `Bulkhead` port 消费它 |
 | `middleware.go` | 429 限流阶段：单次 body 读取、token 估算、后端故障即 fail-closed、调用后只退不加 |
 | `concurrencymiddleware.go` | 429 并发阶段：`concurrency_limit_exceeded`，先于任何限流预留执行 |
 

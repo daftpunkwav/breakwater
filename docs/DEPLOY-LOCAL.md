@@ -168,6 +168,14 @@ conversation that keeps its system prompt and history therefore stays
 on one upstream instead of re-paying prefill elsewhere; failover,
 breakers and operator switches still apply in full.
 
+Set `BREAKWATER_UPSTREAM_MAX_INFLIGHT` to a positive count to bound
+how many exchanges one upstream may serve at once. A provider that
+slows under load stops collecting new work at the ceiling instead of
+amassing the whole gateway's queue; refused attempts move on to the
+next candidate, and only an all-saturated candidate list answers
+`503 upstream_saturated`. The refusals are capacity signals: they
+never count against the breaker or the latency tracker.
+
 ## 7. Verify
 
     # one buffered call, any format
