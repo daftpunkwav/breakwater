@@ -101,6 +101,7 @@ const (
 	envAccessLogPath = "BREAKWATER_ACCESS_LOG_PATH"
 	envAdminToken    = "BREAKWATER_ADMIN_TOKEN"
 	envRouting       = "BREAKWATER_ROUTING_STRATEGY"
+	envAffinity      = "BREAKWATER_ROUTING_AFFINITY_TTL"
 	envInsightsDSN   = "BREAKWATER_INSIGHTS_DSN"
 
 	// The active recovery loop's knobs (cmd/breakwater): these probe
@@ -211,6 +212,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := loadProbe(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadRouting(&cfg); err != nil {
 		return Config{}, err
 	}
 	if err := validate(&cfg); err != nil {
@@ -369,6 +373,20 @@ func loadProbe(cfg *Config) error {
 	}
 	if cfg.Probe.BackoffMax, err = envDuration(envProbeBackoff, cfg.Probe.BackoffMax); err != nil {
 		return err
+	}
+	return nil
+}
+
+// loadRouting parses the candidate-ordering knobs: the strategy is
+// read with the defaults, the affinity TTL here. Zero stays legal —
+// it is the disabled default.
+func loadRouting(cfg *Config) error {
+	var err error
+	if cfg.Routing.AffinityTTL, err = envDuration(envAffinity, cfg.Routing.AffinityTTL); err != nil {
+		return err
+	}
+	if cfg.Routing.AffinityTTL < 0 {
+		return fmt.Errorf("config: %s must not be negative", envAffinity)
 	}
 	return nil
 }

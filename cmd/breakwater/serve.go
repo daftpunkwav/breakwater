@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/daftpunkwav/breakwater/internal/affinity"
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/cache"
 	"github.com/daftpunkwav/breakwater/internal/circuit"
@@ -334,12 +335,18 @@ func assembleRoutingPlane(cfg config.Config, breaker circuit.Breaker, metrics *o
 	// One chain per client format, one route per chain. The fallback
 	// chains and the context ceilings ride on every format: both are
 	// model-level decisions, and the relay applies them per request.
+	// The affinity index joins them: one shared instance across the
+	// formats, since the prefixes it remembers belong to the upstreams,
+	// not to the client format that delivered them. A non-positive TTL
+	// yields nil and the handler keeps the router's order.
+	affinityIndex := affinity.NewIndex(cfg.Routing.AffinityTTL, time.Now)
 	inference := make(map[protocol.Format]http.Handler, len(formats))
 	for _, format := range formats {
 		inference[format] = inferenceChain(format, governance,
 			server.NewInference(format, priority, relayer,
 				server.WithFallbacks(cfg.Fallbacks),
-				server.WithContextLimits(cfg.ContextLimits)))
+				server.WithContextLimits(cfg.ContextLimits),
+				server.WithAffinity(affinityIndex)))
 	}
 
 	adminOpts := []server.AdminOption{

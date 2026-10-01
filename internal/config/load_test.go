@@ -130,6 +130,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envCircuitCooldown, "45s")
 	t.Setenv(envCircuitProbe, "3s")
 	t.Setenv(envRouting, "latency")
+	t.Setenv(envAffinity, "10m")
 	t.Setenv(envProbeInterval, "45s")
 	t.Setenv(envProbeTimeout, "7s")
 	t.Setenv(envProbeThreshold, "3")
@@ -190,7 +191,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.Probe != (Probe{Interval: 45 * time.Second, Timeout: 7 * time.Second, Threshold: 3, BackoffMax: 4 * time.Minute}) {
 		t.Fatalf("probe = %+v", cfg.Probe)
 	}
-	if cfg.Routing.Strategy != "latency" {
+	if cfg.Routing.Strategy != "latency" || cfg.Routing.AffinityTTL != 10*time.Minute {
 		t.Fatalf("routing = %+v", cfg.Routing)
 	}
 	if cfg.Fallbacks["m1"][0] != "m2" || cfg.Fallbacks["m1"][1] != "m3" || len(cfg.Fallbacks) != 1 {

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/daftpunkwav/breakwater/internal/affinity"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -49,6 +50,27 @@ func routeOfFormat(format protocol.Format) string {
 	}
 }
 
+// applyAffinity promotes the eligible upstream holding the longest
+// recorded prompt prefix to the head of the candidate list, in
+// place. A promotion overrides the strategy's head: cache warmth on
+// the matched upstream dominates the latency differences the
+// strategy measures, and the index only sees IDs the router already
+// cleared, so the promotion cannot resurrect an excluded upstream.
+// With no match (or the match already leading) the order stands and
+// the pick still records the head, seeding the next request.
+func (s *Inference) applyAffinity(model, prompt string, candidates []upstream.Upstream) {
+	if s.affinity == nil || len(candidates) < 2 {
+		return
+	}
+	ids := make([]string, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.ID()
+	}
+	if j := s.affinity.Pick(model, prompt, ids); j > 0 {
+		candidates[0], candidates[j] = candidates[j], candidates[0]
+	}
+}
+
 // Inference serves one client format's inference endpoint.
 type Inference struct {
 	format  protocol.Format
@@ -61,6 +83,10 @@ type Inference struct {
 	// token estimate; a model whose ceiling the request cannot fit
 	// loses every candidate up front.
 	contextLimits map[string]int64
+	// affinity, when non-nil, promotes the eligible upstream holding
+	// the longest recorded prompt prefix to the head of the candidate
+	// list, so repeat prefixes reuse the upstream's warm prompt cache.
+	affinity *affinity.Index
 }
 
 // InferenceOption customizes an Inference.
@@ -76,6 +102,12 @@ func WithFallbacks(m map[string][]string) InferenceOption {
 // default) disables the pre-filter.
 func WithContextLimits(m map[string]int64) InferenceOption {
 	return func(s *Inference) { s.contextLimits = m }
+}
+
+// WithAffinity installs the prompt-prefix index; nil (the default)
+// keeps the router's order untouched.
+func WithAffinity(x *affinity.Index) InferenceOption {
+	return func(s *Inference) { s.affinity = x }
 }
 
 // NewInference builds the endpoint handler for one client format.
@@ -150,10 +182,15 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// resolver applies every gate the primary passed — tier
 	// authorization first (a fallback must never serve a model the
 	// tenant is not entitled to, deny winning per the tier contract),
-	// then the context filter.
+	// then the context filter, then the affinity head.
 	var chain []string
 	if len(s.fallbacks) > 0 {
 		chain = s.fallbacks[carrier.Chat.Model]
+	}
+	var promptText string
+	if s.affinity != nil {
+		promptText = pipeline.PromptText(carrier.Chat)
+		s.applyAffinity(carrier.Chat.Model, promptText, candidates)
 	}
 	var resolve relay.CandidateResolver
 	if len(chain) > 0 {
@@ -165,7 +202,12 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if overContext(limits, model, inputTokens) {
 				return nil, router.ErrUnavailable
 			}
-			return priority.Candidates(ctx, model)
+			cands, err := priority.Candidates(ctx, model)
+			if err != nil {
+				return nil, err
+			}
+			s.applyAffinity(model, promptText, cands)
+			return cands, nil
 		}
 	}
 

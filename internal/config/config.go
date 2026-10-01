@@ -73,6 +73,13 @@ type Routing struct {
 	// (prefer the lowest measured upstream exchange latency). Health
 	// gating (breakers) and operator switches apply in both modes.
 	Strategy string
+	// AffinityTTL, when positive, enables prompt-prefix affinity: the
+	// gateway remembers which upstream served which prompt prefixes
+	// and promotes the one holding the longest match to the head of
+	// the candidate list, reusing its warm prompt cache. The value is
+	// how long a recorded prefix stays fresh; zero (the default)
+	// keeps the strategy order untouched.
+	AffinityTTL time.Duration
 }
 
 // Cache configures the exact-match response cache.

@@ -62,6 +62,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"bad circuit probe", envCircuitProbe, "soon", "parse", false},
 		{"zero circuit probe", envCircuitProbe, "0s", "must be positive", false},
 		{"unknown routing strategy", envRouting, "cheapest", "static", false},
+		{"bad affinity ttl", envAffinity, "a while", "parse", false},
+		{"negative affinity ttl", envAffinity, "-1m", "must not be negative", false},
 		{"bad probe interval", envProbeInterval, "soon", "parse", false},
 		{"negative probe interval", envProbeInterval, "-1s", "must not be negative", false},
 		{"bad probe timeout", envProbeTimeout, "quickly", "parse", false},
