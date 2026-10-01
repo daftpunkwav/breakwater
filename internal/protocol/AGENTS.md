@@ -29,8 +29,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   `Code` values onto its own error-type vocabulary.
 - Handlers also pass literal codes to `WriteError`, including
   `model_disabled`, `circuit_open`, `model_not_found`,
-  `context_window_exceeded`, `upstream_saturated`,
-  `upstream_unreachable`, `no_upstream`, and `invalid_request`.
+  `context_window_exceeded`, `upstream_unreachable`, `no_upstream`,
+  and `invalid_request`.
 - `WriteAbort` writes one error event (`error` type `gateway_error`)
   and then `data: [DONE]`. In-stream codes are `upstream_reset`,
   `upstream_timeout`, and `budget_exhausted`.

@@ -20,11 +20,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   fail-closed decision lives in the middleware, not in `Memory` or
   `Redis`.
 - The concurrency gate is a process-local counting semaphore with an
-  idempotent release. It is not a cluster-wide ceiling.
-- The gateway builds two gates from `Concurrency`: the per-tenant gate,
-  and the relay per-upstream in-flight ceiling
-  (`relay.WithUpstreamBulkhead`). The relay sees the second through its
-  `Bulkhead` port.
+  idempotent release. It is the per-tenant gate, not a cluster-wide
+  ceiling.
 - Over-capacity concurrency returns 429 `concurrency_limit_exceeded`
   before any rate-limit reservation.
 - Post-call TPM correction calls `Refund` with the request context.

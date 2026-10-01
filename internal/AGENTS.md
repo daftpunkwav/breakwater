@@ -70,7 +70,6 @@ observation record run once per client request.
 
 ## Package rules
 
-- [affinity/AGENTS.md](affinity/AGENTS.md)
 - [auth/AGENTS.md](auth/AGENTS.md)
 - [cache/AGENTS.md](cache/AGENTS.md)
 - [circuit/AGENTS.md](circuit/AGENTS.md)

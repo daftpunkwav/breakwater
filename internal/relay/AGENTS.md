@@ -24,9 +24,6 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   exchange. A request-scoped 403 is not fatal. Retire the credential
   first. Auto-disable the upstream only when its credential ring is
   empty.
-- A `Bulkhead` refusal skips to the next candidate. Do not report it
-  to the breaker or the performance tracker. When every candidate is
-  refused, return 503 `upstream_saturated`.
 - Record every attempt on `Result.Trail`, finished or not: upstream,
   credential, and status.
 - `readBounded` fails the attempt when the body exceeds

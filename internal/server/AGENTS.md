@@ -38,10 +38,7 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Route map: [README.md](README.md).
   A prompt over the primary model's ceiling returns 413
   `context_window_exceeded` and does not walk fallbacks.
 - The fallback resolver applies tier authorization, then the context
-  ceiling, then affinity. Omit a fallback the tenant cannot use.
-- Affinity may promote only an id `Candidates` already returned.
-  `applyAffinity` swaps that candidate with index 0. It does not
-  shift the others.
+  ceiling. Omit a fallback the tenant cannot use.
 - Readiness uses the injected probe. Log the failure detail. The body
   stays a fixed phrase.
 - `AdminStore` sentinel errors map to 404, 409, and 503.

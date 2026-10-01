@@ -18,7 +18,7 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - `DefaultClassifier.Retryable` rejects nil and `context.Canceled`.
   It accepts `context.DeadlineExceeded`. A `StatusError` is accepted
   only for 429 or status >= 500. Every other error is accepted,
-  including the relay's circuit-open and upstream-saturated sentinels.
+  including the relay's circuit-open sentinel.
 - A positive `DelayHint` waits `jitteredHint`: uniform on
   `[hint, 1.5·hint)`, or the hint itself when half the hint is zero.
   `ParseRetryAfter` accepts an integer, a fractional number, or an

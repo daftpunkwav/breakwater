@@ -34,8 +34,6 @@ A stage that reserves before `next` settles after `next` returns.
 - `EstimateTokens` is the only pre-call estimate. The TPM bucket and
   the quota lease both reserve against it. Clamp a declared
   `max_tokens` to the tenant per-request cap.
-- `PromptText` is the prompt text affinity hashes. Do not add a second
-  prompt serialization.
 - An auth-store outage is 503. Do not continue the chain.
 - Adopt a client `X-Request-Id` of 8–128 printable ASCII, or mint a
   `req-` id. Echo it on every inference response, including rejections.
