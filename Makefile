@@ -4,7 +4,7 @@
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: fmt vet lint test race cover build gateway mock up down clean
+.PHONY: fmt vet lint vuln test race cover build gateway mock up down clean
 
 fmt: ## Rewrite all Go sources into canonical format.
 	gofmt -w .
@@ -14,6 +14,9 @@ vet: ## Run the standard static analysis.
 
 lint: ## Run golangci-lint (same version as CI).
 	golangci-lint run ./...
+
+vuln: ## Scan for reachable known vulnerabilities (version pinned in go.mod).
+	go tool govulncheck ./...
 
 race: ## Run the full suite under the race detector (the CI bar).
 	go test -race -count=1 -timeout 300s ./...
