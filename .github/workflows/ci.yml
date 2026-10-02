@@ -1,5 +1,5 @@
 # CI gate: formatting, vetting, linting, the race detector, the
-# coverage floor and the deployment images.
+# coverage floor, the deployment images and the merge-title rule.
 name: ci
 
 on:
@@ -14,6 +14,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  title:
+    # Fast gate: the PR title becomes the squashed commit message on
+    # merge, so it must already satisfy the Conventional Commits rule
+    # the repo documents. Push events carry no title and skip this.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Check PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$TITLE" | grep -qE '^(feat|fix|docs|refactor|chore|test|perf)(\([^)]+\))?: .+'; then
+            echo "::error::PR title must be a Conventional Commit — type(scope): subject, with type one of feat|fix|docs|refactor|chore|test|perf. The title becomes the squash-merge commit message."
+            exit 1
+          fi
+
   verify:
     # Pinned until the ubuntu-latest → 26 migration settles; a runner
     # bump must never be a surprise in an unrelated diff.
@@ -136,3 +153,42 @@ jobs:
           tags: breakwater/mockllm:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A green image build does not prove the deployment story boots:
+      # env wiring, health gates and the governance pipeline only show
+      # up at runtime. Retag the images the steps above loaded and boot
+      # the compose stack read-only — the override file drops the host
+      # port publishes that would collide with this job's service
+      # containers — then walk the core paths: readiness, the 401
+      # rejection without credentials, and an authenticated completion
+      # through the full chain (auth, redis limiter and quota, mock
+      # upstream). The trap tears the stack down on any exit.
+      - name: Smoke the compose stack
+        run: |
+          docker tag breakwater/gateway:ci breakwater/gateway:dev
+          docker tag breakwater/mockllm:ci breakwater/mockllm:dev
+          compose="docker compose -f deploy/docker-compose.yml -f deploy/ci-compose.override.yml"
+          $compose up -d --no-build
+          trap '$compose down -v' EXIT
+          ready=0
+          for i in $(seq 1 24); do
+            if curl -fsS http://127.0.0.1:8080/readyz > /dev/null 2>&1; then ready=1; break; fi
+            sleep 5
+          done
+          if [ "$ready" != 1 ]; then
+            echo "::error::gateway never became ready"
+            $compose logs --tail 50
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:8080/healthz > /dev/null
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/v1/chat/completions \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"smoke","messages":[{"role":"user","content":"ping"}],"max_tokens":8}')
+          if [ "$code" != "401" ]; then
+            echo "::error::expected 401 without credentials, got $code"
+            exit 1
+          fi
+          curl -fsS -X POST http://127.0.0.1:8080/v1/chat/completions \
+            -H 'Authorization: Bearer bw-local-dev-key' \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"smoke","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' > /dev/null
