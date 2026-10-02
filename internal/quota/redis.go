@@ -301,10 +301,12 @@ func counterValue(cmd *redis.StringCmd) int64 {
 // script, which moves each one to EXPIRED and refunds its amount
 // exactly once. It returns how many leases were reclaimed.
 func (r *Redis) SweepOnce(ctx context.Context, now time.Time, limit int) (int, error) {
-	ids, err := r.rdb.ZRangeByScore(ctx, r.sweepKey(), &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   fmt.Sprintf("%d", now.UnixMilli()),
-		Count: int64(limit),
+	ids, err := r.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     r.sweepKey(),
+		Start:   "-inf",
+		Stop:    fmt.Sprintf("%d", now.UnixMilli()),
+		ByScore: true,
+		Count:   int64(limit),
 	}).Result()
 	if err != nil {
 		return 0, fmt.Errorf("quota: sweep scan: %w", err)
