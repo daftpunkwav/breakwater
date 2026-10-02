@@ -1,12 +1,12 @@
 # Multi-stage build for the mock upstream binary.
-# Pinned to the go.mod toolchain: an older cached 1.25-alpine would make
+# Pinned to the go.mod toolchain: an older cached 1.27-alpine would make
 # the build download a toolchain mid-build instead of failing the pin.
-FROM golang:1.25.13-alpine AS build
+FROM golang:1.27.1-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/mockllm ./cmd/mockllm
 
-FROM alpine:3.22
+FROM alpine:3.24
 WORKDIR /
 COPY --from=build /out/mockllm /mockllm
 USER nobody
