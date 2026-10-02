@@ -4,8 +4,10 @@
 # actions by commit SHA, Go modules and the go toolchain by go.mod —
 # and these entries are what keep those pins current without hand
 # edits. Updates arrive grouped so each weekly round is one reviewable
-# PR; Go majors stay UNGROUPED on purpose so a behavior-changing bump
-# (like the go-redis 9.x one) lands alone with its own verification.
+# PR; majors in BOTH ecosystems stay UNGROUPED on purpose so a
+# behavior-changing bump (the go-redis 9.x one, a future checkout
+# v8) lands alone with its own verification — a red major must never
+# hold a round of safe updates hostage.
 #
 # Cooldowns hold brand-new releases out of the automatic set for a few
 # days — the window where a compromised or yanked release does the
@@ -24,8 +26,12 @@ updates:
       - "dependencies"
       - "github-actions"
     groups:
-      actions:
-        patterns: ["*"]
+      # Minor and patch updates travel together; a major update (like
+      # a checkout major) matches no group and opens as its own PR.
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
