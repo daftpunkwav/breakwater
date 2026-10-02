@@ -1,0 +1,11 @@
+# CI-only overrides for the compose smoke step in
+# .github/workflows/ci.yml. The verify job already runs redis and
+# postgres service containers with 6379/5432 published on the runner
+# host, so the stack's own publishes for those ports must go. The
+# gateway's 8080 — the port the smoke curls — stays exactly as the
+# local stack defines it.
+services:
+  redis:
+    ports: !override []
+  postgres:
+    ports: !override []
