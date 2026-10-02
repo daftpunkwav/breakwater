@@ -1,18 +1,23 @@
 # Dependabot configuration.
 #
-# The github-actions entry is the important one: every "uses:" in the workflows is
-# pinned to a full commit SHA, and this is what keeps those pins current without
-# anyone hand-editing them. Tag-based refs (dtolnay/rust-toolchain@<version>,
-# taiki-e/install-action@<branch>) are intentionally left unpinned - pinning those
-# would freeze the toolchain and break the msrv/stable gates.
+# Everything version-shaped in this repo is pinned in-tree — workflow
+# actions by commit SHA, Go modules and the go toolchain by go.mod —
+# and these entries are what keep those pins current without hand
+# edits. Updates arrive grouped so each weekly round is one reviewable
+# PR; Go majors stay UNGROUPED on purpose so a behavior-changing bump
+# (like the go-redis 9.x one) lands alone with its own verification.
 #
-# Updates are grouped so the required-approval flow stays reviewable.
+# Cooldowns hold brand-new releases out of the automatic set for a few
+# days — the window where a compromised or yanked release does the
+# most damage — without changing what eventually gets proposed.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 5
     commit-message:
       prefix: "ci"
     labels:
@@ -25,11 +30,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps-go)"
     labels:
       - "dependencies"
       - "go"
     groups:
-      gomod:
-        patterns: ["*"]
+      # Minor and patch updates travel together; a major update matches
+      # no group and opens as its own PR.
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

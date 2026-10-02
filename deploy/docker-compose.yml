@@ -3,7 +3,7 @@
 # host remain the zero-config alternative for quick smoke runs.
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -13,7 +13,7 @@ services:
       retries: 5
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: breakwater
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-breakwater}
