@@ -123,6 +123,15 @@ jobs:
           done < /tmp/cover.txt
           exit $failed
 
+  deploy:
+    # Image builds and the compose smoke: separate from verify so the code
+    # gates and the deployment story run in parallel, and so this job never
+    # pays for a Go toolchain it does not use.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       # The compose deployment story builds these two images; a broken
       # Dockerfile must fail CI, not the next docker compose up. The
       # GHA cache keeps the module-download and build layers between
@@ -200,7 +209,7 @@ jobs:
     # so a cancelled run can never masquerade as green. Future jobs join the
     # needs list; the required-checks entry never changes.
     name: gate
-    needs: [title, verify]
+    needs: [title, verify, deploy]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -211,9 +220,10 @@ jobs:
         env:
           TITLE: ${{ needs.title.result }}
           VERIFY: ${{ needs.verify.result }}
+          DEPLOY: ${{ needs.deploy.result }}
         run: |
           set -euo pipefail
-          results="title=$TITLE verify=$VERIFY"
+          results="title=$TITLE verify=$VERIFY deploy=$DEPLOY"
           echo "$results"
           if grep -qE '=(failure|cancelled)' <<< "$results"; then
             echo "::error::one or more gates failed or were cancelled"
