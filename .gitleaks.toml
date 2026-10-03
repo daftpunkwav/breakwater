@@ -8,8 +8,10 @@
 useDefault = true
 
 [allowlist]
-description = "documented static local-dev key in the compose smoke steps"
+description = "documented static local-dev key in smoke steps and docs examples"
 rules = ["curl-auth-header"]
 paths = [
-  '''\.github/workflows/ci\.yml''',
+  '''\.github/workflows/''',
+  '''README(\.zh)?\.md''',
+  '''docs/''',
 ]
