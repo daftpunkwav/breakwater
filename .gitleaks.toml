@@ -1,0 +1,15 @@
+# gitleaks configuration. Extends the default rule set. One targeted
+# acceptance: the compose smoke steps in ci.yml authenticate with
+# bw-local-dev-key, the documented static local-development key the gateway
+# accepts outside production - not a secret. Scoped to the exact rule and
+# path so a real credential in the workflow stays loud.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "documented static local-dev key in the compose smoke steps"
+rules = ["curl-auth-header"]
+paths = [
+  '''\.github/workflows/ci\.yml''',
+]
