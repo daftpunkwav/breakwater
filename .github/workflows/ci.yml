@@ -75,10 +75,10 @@ jobs:
   verify:
     # Pinned until the ubuntu-latest → 26 migration settles; a runner
     # bump must never be a surprise in an unrelated diff.
+    # Tier 2: the guard already encodes the label, so approval alone
+    # governs - a labeled PR's new pushes keep running the full verify.
     needs: full-approval
-    if: >-
-      needs.full-approval.result == 'success' &&
-      (github.event_name != 'pull_request' || github.event.action == 'labeled')
+    if: needs.full-approval.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
