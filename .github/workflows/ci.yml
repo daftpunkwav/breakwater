@@ -4,6 +4,10 @@ name: ci
 
 on:
   push:
+    # Branch pushes would run the approval-gated tier unguarded (the
+    # guard bypasses non-PR events) - main is the only push worth the full
+    # suite; PR branches get their verdicts from the pull_request runs.
+    branches: [main]
   pull_request:
     # labeled / unlabeled carry the maintainer key that unlocks the
     # expensive tier-2 jobs (see the full-approval guard below).
