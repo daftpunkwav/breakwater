@@ -192,3 +192,31 @@ jobs:
             -H 'Authorization: Bearer bw-local-dev-key' \
             -H 'Content-Type: application/json' \
             -d '{"model":"smoke","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' > /dev/null
+
+  gate:
+    # Merge-time summary: branch protection requires this check. It always
+    # runs, passes when every job that ran succeeded (push events skip the
+    # title gate - that is fine) and fails on any failure or cancellation,
+    # so a cancelled run can never masquerade as green. Future jobs join the
+    # needs list; the required-checks entry never changes.
+    name: gate
+    needs: [title, verify]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Evaluate gate results
+        env:
+          TITLE: ${{ needs.title.result }}
+          VERIFY: ${{ needs.verify.result }}
+        run: |
+          set -euo pipefail
+          results="title=$TITLE verify=$VERIFY"
+          echo "$results"
+          if grep -qE '=(failure|cancelled)' <<< "$results"; then
+            echo "::error::one or more gates failed or were cancelled"
+            exit 1
+          fi
+          echo "all triggered gates passed"

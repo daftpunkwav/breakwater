@@ -1,0 +1,4 @@
+{
+  "$comment": "Banned dependencies. Keys are canonical Go module paths as `go list -m all` prints them; the checker scans the transitive graph, so a ban here blocks any path of arrival. Extend with a reason - a ban without one will be questioned at review.",
+  "go": {}
+}
