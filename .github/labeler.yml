@@ -23,4 +23,4 @@ docker:
       - any-glob-to-any-file:
           - "**/Dockerfile*"
           - "**/docker-compose*"
-          - "compose*"
+          - "**/compose*"
