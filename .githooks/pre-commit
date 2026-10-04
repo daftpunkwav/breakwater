@@ -7,8 +7,11 @@
 #
 # gofmt runs against the STAGED contents (git index), never the working
 # tree: an unstaged "fix" in the worktree must not make an unformatted
-# commit pass. Content is piped via stdin - gofmt reads stdin when given
-# no file argument - so no temp copies are materialized.
+# commit pass. Staged paths are read NUL-delimited (git diff -z) so
+# Git's quoting of exotic filenames cannot corrupt them, and each blob
+# is piped via stdin - gofmt reads stdin when given no file argument -
+# so no temp copies are materialized. A blob that cannot be read fails
+# the commit instead of passing unchecked.
 #
 # go vet has no stdin mode and analyzes whole packages, so it inspects
 # the working tree; it stays in the hook because it runs in about a
@@ -22,19 +25,28 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 go_files=()
-while IFS= read -r f; do [ -n "$f" ] && go_files+=("$f"); done < <(
-  git diff --cached --name-only --diff-filter=ACMR -- '*.go'
+# -z + read -d '': NUL-delimited paths, so Git's C-style quoting of
+# filenames with spaces, non-ASCII or newlines cannot corrupt the list.
+while IFS= read -r -d '' f; do go_files+=("$f"); done < <(
+  git diff --cached -z --name-only --diff-filter=ACMR -- '*.go'
 )
 
 if [ "${#go_files[@]}" -gt 0 ]; then
   for f in "${go_files[@]}"; do
     # gofmt exits non-zero when -d finds diffs (Go 1.27+) or on parse
     # errors; older versions exited 0 with a diff, so a non-empty report
-    # is what actually gates. Either way the output is the diagnostic.
-    report="$(git show ":$f" | gofmt -d 2>&1)" || true
+    # is what actually gates. The pipeline status is kept separately: a
+    # non-zero status with an EMPTY report means the plumbing failed -
+    # typically git show could not read the staged blob - and must fail
+    # the commit rather than pass the file silently unchecked.
+    rc=0
+    report="$(git show ":$f" | gofmt -d 2>&1)" || rc=$?
     if [ -n "$report" ]; then
       printf '%s\n' "$report" >&2
       echo "pre-commit: gofmt rejected $f - run 'gofmt -w $f' and restage" >&2
+      exit 1
+    elif [ "$rc" -ne 0 ]; then
+      echo "pre-commit: failed to read staged content of $f (exit $rc)" >&2
       exit 1
     fi
   done
