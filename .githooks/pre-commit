@@ -25,11 +25,18 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 go_files=()
-# -z + read -d '': NUL-delimited paths, so Git's C-style quoting of
-# filenames with spaces, non-ASCII or newlines cannot corrupt the list.
-while IFS= read -r -d '' f; do go_files+=("$f"); done < <(
-  git diff --cached -z --name-only --diff-filter=ACMR -- '*.go'
-)
+# The staged path list goes through a temp file rather than process
+# substitution: inside <(...) the producer's exit status is invisible to
+# this shell, so a failing git diff would silently skip every check.
+# -z keeps the paths NUL-delimited so Git's C-style quoting of filenames
+# with spaces, non-ASCII or newlines cannot corrupt the list.
+list="$(mktemp)"
+trap 'rm -f "$list"' EXIT
+if ! git diff --cached -z --name-only --diff-filter=ACMR -- '*.go' >"$list"; then
+  echo "pre-commit: failed to enumerate staged Go files" >&2
+  exit 1
+fi
+while IFS= read -r -d '' f; do go_files+=("$f"); done <"$list"
 
 if [ "${#go_files[@]}" -gt 0 ]; then
   for f in "${go_files[@]}"; do
