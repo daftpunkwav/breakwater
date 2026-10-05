@@ -93,13 +93,21 @@ func assertContains(t *testing.T, body string, wants ...string) {
 	}
 }
 
-func TestResponsesRouteStream(t *testing.T) {
-	t.Parallel()
-	rec := post(t, servedRoutes(t), "/v1/responses", "", `{"model":"m1","stream":true,"input":"hello"}`)
+// streamContract posts one streaming request against the served routes
+// and asserts the reply carries every event of the format's stream
+// contract.
+func streamContract(t *testing.T, path, body string, wants ...string) {
+	t.Helper()
+	rec := post(t, servedRoutes(t), path, "", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	assertContains(t, rec.Body.String(),
+	assertContains(t, rec.Body.String(), wants...)
+}
+
+func TestResponsesRouteStream(t *testing.T) {
+	t.Parallel()
+	streamContract(t, "/v1/responses", `{"model":"m1","stream":true,"input":"hello"}`,
 		"event: response.created",
 		"event: response.output_text.delta",
 		`"delta":"hi"`,
@@ -123,12 +131,8 @@ func TestMessagesRouteNonStream(t *testing.T) {
 
 func TestMessagesRouteStream(t *testing.T) {
 	t.Parallel()
-	rec := post(t, servedRoutes(t), "/v1/messages", "",
-		`{"model":"m1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	assertContains(t, rec.Body.String(),
+	streamContract(t, "/v1/messages",
+		`{"model":"m1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
 		"event: message_start",
 		"event: content_block_delta",
 		`"text":"hi"`,
