@@ -99,6 +99,9 @@ jobs:
           go test -race -cover -timeout 8m ./... | tee /tmp/cover.txt
         env:
           BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
+          # The credential pair belongs to the ephemeral postgres service
+          # container declared above; it is not a repository secret.
+          # checkov:skip=CKV_SECRET_4:throwaway credential of the ephemeral CI postgres service
           BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable
 
       # The coverage floor (>=95% per package) is a hard gate, parsed

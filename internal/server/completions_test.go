@@ -58,6 +58,7 @@ func testUpstreamHandler(t *testing.T) http.Handler {
 				`data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}` + "\n\n",
 				"data: [DONE]\n\n",
 			} {
+				// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 				if _, err := w.Write([]byte(chunk)); err != nil {
 					return
 				}

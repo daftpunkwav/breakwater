@@ -29,10 +29,10 @@ type testGate struct {
 
 func newTestGate() *testGate { return &testGate{n: make(map[string]int64)} }
 
-func (g *testGate) Acquire(id string, max int64) (func(), bool) {
+func (g *testGate) Acquire(id string, limit int64) (func(), bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.n[id] >= max {
+	if g.n[id] >= limit {
 		return nil, false
 	}
 	g.n[id]++

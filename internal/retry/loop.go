@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- this file draws only non-cryptographic backoff jitter; no key material comes from it
 	"math/rand/v2"
 	"time"
 )

@@ -73,6 +73,7 @@ func TestRootHandlerRegistersEveryFormatRoute(t *testing.T) {
 	t.Parallel()
 	labeled := func(name string) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 			_, _ = w.Write([]byte(name))
 		})
 	}

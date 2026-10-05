@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- this file draws only the non-cryptographic latency tie-break; no key material comes from it
 	"math/rand/v2"
 	"sort"
 

@@ -8,6 +8,7 @@ package router
 
 import (
 	"context"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- this test injects a deterministic RNG to pin latency tie-breaks; no key material comes from it
 	"math/rand/v2"
 	"testing"
 	"time"

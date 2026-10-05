@@ -114,16 +114,16 @@ func (a *admission) estimate(h uint64) int {
 }
 
 func (a *admission) estimateLocked(h uint64) int {
-	min := byte(maxNibble)
+	floor := byte(maxNibble)
 	for i := range a.rows {
-		if v := a.nibble(a.slot(h, i), a.rows[i]); v < min {
-			min = v
+		if v := a.nibble(a.slot(h, i), a.rows[i]); v < floor {
+			floor = v
 		}
 	}
 	if a.doorHas(h) {
-		min += estimateDoorBoo
+		floor += estimateDoorBoo
 	}
-	return int(min)
+	return int(floor)
 }
 
 // slot maps a key hash to one row's counter index. The mix must be a

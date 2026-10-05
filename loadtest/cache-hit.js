@@ -2,6 +2,9 @@
 // the hit-vs-fetch latency gap.
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... cache-hit.js
+//
+// __ENV is the k6 runtime's environment object, not a Node global.
+/* global __ENV */
 import http from 'k6/http';
 import { check } from 'k6';
 

@@ -198,7 +198,7 @@ func TestNewIndexRejectsDisabledTTL(t *testing.T) {
 	}
 }
 
-func TestConcurrentPicksStayConsistent(t *testing.T) {
+func TestConcurrentPicksStayConsistent(_ *testing.T) {
 	idx, _ := newTestIndex(time.Hour)
 	done := make(chan struct{})
 	for i := 0; i < 8; i++ {

@@ -224,7 +224,7 @@ func TestBreakerTransitionsAreObserved(t *testing.T) {
 	t.Parallel()
 	var transitions []string
 	b, advance := testRegistry(t, func(c *Config) { c.FailThreshold = 1 },
-		OnTransition(func(id string, from, to State) {
+		OnTransition(func(_ string, from, to State) {
 			transitions = append(transitions, string(from)+"->"+string(to))
 		}))
 	ctx := context.Background()

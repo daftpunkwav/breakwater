@@ -186,6 +186,14 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 // asked to wait out. One list, two consumers: neither can drift. The
 // values need no legality re-check here: the only writers store headers
 // already validated by the passthrough surfaces at capture time.
+//
+// The body is opaque upstream bytes and its media type is replayed with
+// it, so an upstream that answers text/html has this response rendered
+// as HTML. What keeps that from being a script-injection vector is the
+// gateway's own surface, not the escaping: it renders no HTML itself,
+// sets no cookie, and answers the inference routes on POST only. A
+// cookie-based session, or HTML served from this origin, would end
+// that.
 func replay(w http.ResponseWriter, entry Entry) {
 	header := w.Header()
 	for _, name := range protocol.PassthroughHeaderNames() {
@@ -194,6 +202,7 @@ func replay(w http.ResponseWriter, entry Entry) {
 		}
 	}
 	w.WriteHeader(entry.Status)
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- stored upstream payload replayed byte-for-byte; the gateway renders no HTML
 	_, _ = w.Write(entry.Body)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

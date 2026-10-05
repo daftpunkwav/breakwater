@@ -280,7 +280,7 @@ func TestSlowAbsorbedAndExpiredPaths(t *testing.T) {
 	var transitions []string
 	reg := NewSlowRegistry(Config{Cooldown: 30 * time.Second, ProbeTimeout: 5 * time.Second, SlowRatio: 0.5},
 		SlowClock(func() time.Time { return time.Unix(0, 0).Add(time.Duration(clockStep) * slowBucketSpan) }),
-		SlowOnTransition(func(id string, from, to State) {
+		SlowOnTransition(func(_ string, from, to State) {
 			transitions = append(transitions, string(from)+"->"+string(to))
 		}))
 	advance := func(n int) { clockStep += n }

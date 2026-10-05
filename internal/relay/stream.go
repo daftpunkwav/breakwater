@@ -168,6 +168,7 @@ func pumpStream(out http.ResponseWriter, body io.Reader) (protocol.Usage, bool, 
 			}
 			outBuf = append(outBuf[:0], trimmed...)
 			outBuf = append(outBuf, '\n')
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- SSE line forwarded byte-for-byte; the gateway renders no HTML
 			if _, writeErr := out.Write(outBuf); writeErr != nil {
 				return usage, usageKnown, total, writeErr
 			}

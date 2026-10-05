@@ -122,7 +122,7 @@ func (x *Index) Pick(model, prompt string, ids []string) int {
 	if x.sweptAt.IsZero() || now.Sub(x.sweptAt) >= x.ttl/2 || t.nodes >= maxNodes {
 		x.sweep(now)
 	}
-	chosen := t.match(chunks, ids, now, x.ttl)
+	chosen := t.match(chunks, ids, now)
 	if chosen < 0 {
 		chosen = 0
 	}
@@ -137,8 +137,9 @@ func (x *Index) Pick(model, prompt string, ids []string) int {
 // lowest router position at each depth. The walk stops at the first
 // depth whose node is missing or holds none of ids; the deepest hit
 // wins, so a longer shared prefix outranks the router's own
-// preference among shallower hits.
-func (t *trie) match(chunks []uint64, ids []string, now time.Time, ttl time.Duration) int {
+// preference among shallower hits. Node freshness is not judged here:
+// a node expires through Index.sweep, which the write path drives.
+func (t *trie) match(chunks []uint64, ids []string, now time.Time) int {
 	pos := make(map[string]int, len(ids))
 	for i, id := range ids {
 		pos[id] = i

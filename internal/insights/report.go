@@ -173,18 +173,30 @@ func timeline(ctx context.Context, q queryer, from, to time.Time) ([]SeriesPoint
 
 // dimension is the shared per-slice breakdown query; column is one of
 // the fixed dimension names this file calls it with, never user input.
-// The LIMIT 20 is the published contract: each breakdown carries at
-// most the top 20 rows by traffic, and a window with more slices than
-// that reports the busiest 20 without a truncation marker.
+// The dimension reaches the database as the bound $3 parameter and the
+// CASE picks the column, so the statement text is a compile-time
+// constant: no caller value is ever spliced into SQL syntax. The cast
+// pins the parameter type, so the CASE comparison resolves the same way
+// whatever the driver sends. A name outside the four branches selects
+// no column at all and every row falls into the '-' bucket, the same
+// placeholder an empty value gets. The LIMIT 20 is the published
+// contract: each breakdown carries at most the top 20 rows by traffic,
+// and a window with more slices than that reports the busiest 20
+// without a truncation marker.
 func dimension(ctx context.Context, q queryer, from, to time.Time, column string) ([]Dimension, error) {
 	rows, err := q.Query(ctx, `
-		SELECT COALESCE(NULLIF(`+column+`, ''), '-') AS name,
+		SELECT COALESCE(NULLIF(CASE $3::text
+		         WHEN 'tenant_id' THEN tenant_id
+		         WHEN 'key_id'    THEN key_id
+		         WHEN 'model'     THEN model
+		         WHEN 'upstream'  THEN upstream
+		       END, ''), '-') AS name,
 		       count(*),
 		       count(*) FILTER (WHERE status < 200 OR (status > 299 AND status <> 499)),
 		       COALESCE(sum(tokens), 0),
 		       percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)
 		FROM request_log WHERE time >= $1 AND time < $2
-		GROUP BY name ORDER BY count(*) DESC LIMIT 20`, from, to)
+		GROUP BY name ORDER BY count(*) DESC LIMIT 20`, from, to, column)
 	if err != nil {
 		return nil, err
 	}

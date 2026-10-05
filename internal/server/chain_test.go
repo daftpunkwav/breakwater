@@ -411,6 +411,7 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 				sawCancel <- struct{}{}
 				return
 			}
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- test fixture writes an opaque SSE frame; no HTML is rendered
 			_, err := fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"chunk %d \"}}]}\n\n", i)
 			if err != nil {
 				sawCancel <- struct{}{}

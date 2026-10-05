@@ -4,6 +4,9 @@
 //
 //   go run ./cmd/mockllm -addr 127.0.0.1:8090 -error-rate 0.5
 //   k6 run -e BASE_URL=... -e API_KEY=... retry-storm.js
+//
+// __ENV is the k6 runtime's environment object, not a Node global.
+/* global __ENV */
 import http from 'k6/http';
 import { check } from 'k6';
 

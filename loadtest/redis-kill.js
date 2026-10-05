@@ -5,6 +5,9 @@
 //   k6 run -e BASE_URL=... -e API_KEY=... redis-kill.js
 // Mid-run: docker stop $(docker ps -qf name=redis); restart it a few
 // seconds later. The gateway log and metrics show the story.
+//
+// __ENV is the k6 runtime's environment object, not a Node global.
+/* global __ENV */
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter } from 'k6/metrics';

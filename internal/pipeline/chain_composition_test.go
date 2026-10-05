@@ -31,7 +31,7 @@ func TestChainRunsFirstStageOutermost(t *testing.T) {
 		}
 	}
 
-	handler := Chain(marking("outer"), marking("inner"))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Chain(marking("outer"), marking("inner"))(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		order = append(order, "final")
 	}))
 

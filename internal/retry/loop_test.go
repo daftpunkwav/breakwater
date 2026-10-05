@@ -19,7 +19,7 @@ type countingClassifier struct {
 	retryable bool
 }
 
-func (c *countingClassifier) Retryable(err error) bool {
+func (c *countingClassifier) Retryable(_ error) bool {
 	c.calls++
 	return c.retryable
 }

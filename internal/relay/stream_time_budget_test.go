@@ -221,7 +221,7 @@ func TestStreamCeilingBeforeHeadersFailsOver(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}}
-	healthy := &stubUpstream{id: "healthy", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
+	healthy := &stubUpstream{id: "healthy", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
 		header := http.Header{}
 		header.Set("Content-Type", "text/event-stream")
 		return &upstream.Response{StatusCode: http.StatusOK, Header: header,

@@ -18,6 +18,7 @@ func TestMainExitsNonZeroOnBadConfiguration(t *testing.T) {
 		return
 	}
 
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command, go_subproc_rule-subproc -- the test binary re-executes itself with a fixed literal argument list
 	cmd := exec.Command(os.Args[0], "-test.run=TestMainExitsNonZeroOnBadConfiguration")
 	cmd.Env = append(os.Environ(),
 		"BE_MAIN=1",

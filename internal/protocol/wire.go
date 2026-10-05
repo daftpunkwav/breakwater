@@ -197,6 +197,14 @@ func ValidHeaderValue(v string) bool {
 // net/http panics on those, so the passthrough clamps instead. The
 // selected headers carry upstream-controlled values, so each one is
 // forwarded only when it is a legal header field value.
+//
+// The body is opaque upstream bytes and Content-Type travels with it,
+// so an upstream that answers text/html has this response rendered as
+// HTML. What keeps that from being a script-injection vector is the
+// gateway's own surface, not the escaping: it renders no HTML itself,
+// sets no cookie, and answers the inference routes on POST only. A
+// cookie-based session, or HTML served from this origin, would end
+// that.
 func renderExchangeBody(w http.ResponseWriter, status int, header http.Header, body []byte, names []string) {
 	if status < 100 || status > 599 {
 		status = http.StatusBadGateway
@@ -208,6 +216,7 @@ func renderExchangeBody(w http.ResponseWriter, status int, header http.Header, b
 		}
 	}
 	w.WriteHeader(status)
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- upstream response body forwarded byte-for-byte; the gateway renders no HTML
 	_, _ = w.Write(body)
 }
 

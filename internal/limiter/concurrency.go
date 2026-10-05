@@ -30,16 +30,16 @@ func NewConcurrency() *Concurrency {
 }
 
 // Acquire takes one slot for the identity when its in-flight count is
-// below max. The returned release function returns the slot and is
-// idempotent. max at or below zero admits unconditionally — the
+// below limit. The returned release function returns the slot and is
+// idempotent. A limit at or below zero admits unconditionally — the
 // ceiling is disabled.
-func (c *Concurrency) Acquire(tenantID string, max int64) (release func(), ok bool) {
-	if max <= 0 {
+func (c *Concurrency) Acquire(tenantID string, limit int64) (release func(), ok bool) {
+	if limit <= 0 {
 		return func() {}, true
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.inFlight[tenantID] >= max {
+	if c.inFlight[tenantID] >= limit {
 		return nil, false
 	}
 	c.inFlight[tenantID]++

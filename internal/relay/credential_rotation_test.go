@@ -51,6 +51,7 @@ func newKeyServer(t *testing.T, fail map[string]keyFailure) *keyServer {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(f.status)
+			// nosemgrep: go.lang.security.audit.xss.no-io-writestring-to-responsewriter.no-io-writestring-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 			_, _ = io.WriteString(w, f.body)
 			return
 		}

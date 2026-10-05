@@ -54,7 +54,7 @@ func TestRunStopsOnCancelledContext(t *testing.T) {
 }
 
 func TestRunSurfacesBusyPort(t *testing.T) {
-	blocker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	blocker := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	defer blocker.Close()
 
 	err := run(context.Background(), slog.New(slog.DiscardHandler),
@@ -73,9 +73,10 @@ func TestMainExitsNonZeroOnBusyPort(t *testing.T) {
 		return
 	}
 
-	blocker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	blocker := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	defer blocker.Close()
 
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command, go_subproc_rule-subproc -- the test binary re-executes itself with a fixed literal argument list
 	cmd := exec.Command(os.Args[0], "-test.run=TestMainExitsNonZeroOnBusyPort")
 	cmd.Env = append(os.Environ(),
 		"BE_MOCKLLM_MAIN=1",

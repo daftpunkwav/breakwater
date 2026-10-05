@@ -33,6 +33,7 @@ package circuit
 import (
 	"context"
 	"math"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- this file draws only the non-cryptographic deny probability; no key material comes from it
 	"math/rand/v2"
 	"sync"
 	"time"

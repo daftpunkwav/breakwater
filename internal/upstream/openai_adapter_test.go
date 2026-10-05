@@ -231,7 +231,7 @@ func TestForwardReturnsCompletedFailures(t *testing.T) {
 func TestForwardConnectionFailureIsErrorNotResponse(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	server.Close() // nothing listens anymore
 
 	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL})
@@ -256,7 +256,7 @@ func TestForwardHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	block := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-block
 	}))
 	defer server.Close()
@@ -419,7 +419,7 @@ func TestProbeWithoutURL(t *testing.T) {
 func TestProbeConnectionFailure(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	server.Close()
 
 	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: "http://127.0.0.1:1", ProbeURL: server.URL})
@@ -436,7 +436,7 @@ func TestProbeConnectionFailure(t *testing.T) {
 func TestProbeRejectsTruncatedBody(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Take over the connection and answer with a Content-Length
 		// larger than the bytes actually sent, then cut the connection.
 		conn, _, err := w.(http.Hijacker).Hijack()
@@ -525,7 +525,7 @@ func TestForwardRotatesCredentialRing(t *testing.T) {
 // caller classifies as a retryable transport failure.
 func TestForwardFailsWhenEveryCredentialRetired(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()

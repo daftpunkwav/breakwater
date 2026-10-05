@@ -28,6 +28,7 @@ type fakeQueryer struct {
 	queryErr   error
 	rowErr     error
 	lastSQL    string
+	lastArgs   []any
 }
 
 type scriptedSummaryRow struct {
@@ -58,8 +59,9 @@ func (r *summaryRow) Scan(dest ...any) error {
 // resultSets: the tuples each successive Query call returns; the
 // report runs the mix (when failures exist), the timeline and four
 // dimension queries in that order.
-func (f *fakeQueryer) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (f *fakeQueryer) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	f.lastSQL = sql
+	f.lastArgs = args
 	if f.queryErr != nil {
 		return nil, f.queryErr
 	}
@@ -274,6 +276,46 @@ func TestReportDimensionFolding(t *testing.T) {
 	// The dash placeholder marks unattributed rows.
 	if rep.ByTenant[1].Name != "-" {
 		t.Fatalf("placeholder = %q", rep.ByTenant[1].Name)
+	}
+}
+
+// TestDimensionKeepsOneStatementForEveryDimension pins the shape the
+// breakdown query must keep: the statement text is a compile-time
+// constant that never varies with the dimension, the dimension name
+// travels as the third bound argument, and each name selects its own
+// column. An interpolated identifier would make the text differ per
+// name; a swapped CASE branch would leave every name on the wrong
+// column while the text stayed identical.
+func TestDimensionKeepsOneStatementForEveryDimension(t *testing.T) {
+	t.Parallel()
+	from, to := time.Unix(0, 0).UTC(), time.Unix(3600, 0).UTC()
+	names := []string{"tenant_id", "key_id", "model", "upstream"}
+	var statement string
+	for i, name := range names {
+		q := summaryQueryer(0, 0)
+		if _, err := dimension(context.Background(), q, from, to, name); err != nil {
+			t.Fatalf("dimension(%s): %v", name, err)
+		}
+		if len(q.lastArgs) != 3 || q.lastArgs[2] != name {
+			t.Fatalf("dimension(%s) args = %v, want the name as the third bound argument", name, q.lastArgs)
+		}
+		if i == 0 {
+			statement = q.lastSQL
+			continue
+		}
+		if q.lastSQL != statement {
+			t.Fatalf("dimension(%s) rewrote the statement text; the name must not reach SQL syntax", name)
+		}
+	}
+	// Whitespace is folded first: the CASE pads its branches for alignment.
+	flat := strings.Join(strings.Fields(statement), " ")
+	if !strings.Contains(flat, "CASE $3::text") {
+		t.Fatalf("statement does not select its column through the bound parameter: %q", flat)
+	}
+	for _, name := range names {
+		if !strings.Contains(flat, "WHEN '"+name+"' THEN "+name) {
+			t.Fatalf("statement has no branch mapping %q to its own column: %q", name, flat)
+		}
 	}
 }
 

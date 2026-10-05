@@ -191,7 +191,7 @@ func TestFormatStagePinsFormat(t *testing.T) {
 
 	var seen protocol.Format
 	handler := FormatStage(protocol.FormatAnthropicMessages)(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
+		func(_ http.ResponseWriter, r *http.Request) {
 			seen = CarrierFrom(r.Context()).Format
 		}))
 
@@ -211,7 +211,7 @@ func TestFormatStageToleratesMissingCarrier(t *testing.T) {
 
 	served := false
 	handler := FormatStage(protocol.FormatOpenAIChat)(http.HandlerFunc(
-		func(w http.ResponseWriter, _ *http.Request) { served = true }))
+		func(_ http.ResponseWriter, _ *http.Request) { served = true }))
 
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil))
 	if !served {

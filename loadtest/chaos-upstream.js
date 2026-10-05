@@ -7,6 +7,9 @@
 // Run:
 //   k6 run -e BASE_URL=... -e API_KEY=... chaos-upstream.js
 // Mid-run, restart mockllm healthy (-error-rate 0) to watch recovery.
+//
+// __ENV is the k6 runtime's environment object, not a Node global.
+/* global __ENV */
 import http from 'k6/http';
 import { check } from 'k6';
 import { Trend } from 'k6/metrics';

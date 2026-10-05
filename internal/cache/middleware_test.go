@@ -38,6 +38,7 @@ func countingUpstream(t *testing.T, fetches *atomic.Int64, holdStart <-chan stru
 				`data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n",
 				"data: [DONE]\n\n",
 			} {
+				// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 				if _, err := w.Write([]byte(chunk)); err != nil {
 					return
 				}
@@ -49,6 +50,7 @@ func countingUpstream(t *testing.T, fetches *atomic.Int64, holdStart <-chan stru
 		fetches.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		// A broken client write ends the exchange; nothing to observe.
+		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- test fixture writes an opaque JSON body; no HTML is rendered
 		_, _ = fmt.Fprintf(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":%d}}`, fetches.Load())
 	})
 }
@@ -215,7 +217,7 @@ func TestCacheMiddlewareNeverNegativeCachesGatewayEnvelopes(t *testing.T) {
 	var fetches atomic.Int64
 	// A handler that dies before its first byte produces a response-less
 	// fetch: no status, nothing shareable, nothing cacheable.
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		fetches.Add(1)
 		_ = r // never write anything
 	})

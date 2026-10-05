@@ -268,7 +268,7 @@ func TestMemoryGateConcurrentUse(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func(_ int) {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {
 				key := "k" + string(rune('a'+j%32))

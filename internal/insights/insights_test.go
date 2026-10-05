@@ -23,7 +23,7 @@ type scriptedSink struct {
 	inserted atomic.Int64
 }
 
-func (s *scriptedSink) insert(ctx context.Context, batch []Record) {
+func (s *scriptedSink) insert(_ context.Context, batch []Record) {
 	s.inserted.Add(int64(len(batch)))
 }
 

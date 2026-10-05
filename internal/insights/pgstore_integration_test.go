@@ -104,12 +104,26 @@ func TestPGInsightsIntegration(t *testing.T) {
 	if len(rep.Timeline) == 0 {
 		t.Fatal("timeline empty")
 	}
+	// Each breakdown groups by its own column, and the four dimensions
+	// carry distinct values here: a CASE branch swapped onto the wrong
+	// column names the wrong busiest slice. That is the one property the
+	// scripted unit test cannot reach, because it never runs the
+	// statement — it only pins the text.
 	for _, dim := range []struct {
 		name string
 		rows []Dimension
-	}{{"tenant", rep.ByTenant}, {"key", rep.ByKey}, {"model", rep.ByModel}, {"upstream", rep.ByUpstream}} {
+		want string
+	}{
+		{"tenant", rep.ByTenant, "insights-int"},
+		{"key", rep.ByKey, "k1"},
+		{"model", rep.ByModel, "m1"},
+		{"upstream", rep.ByUpstream, "u1"},
+	} {
 		if len(dim.rows) == 0 {
 			t.Fatalf("%s breakdown empty", dim.name)
+		}
+		if dim.rows[0].Name != dim.want {
+			t.Fatalf("%s busiest slice = %q, want %q (%+v)", dim.name, dim.rows[0].Name, dim.want, dim.rows)
 		}
 	}
 }
