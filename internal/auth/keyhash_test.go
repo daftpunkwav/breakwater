@@ -1,28 +1,36 @@
 /**
  * @file keyhash_test
  * @description The API-key lookup hash's contract: HMAC-SHA256 keyed by
- * the deployment pepper, with the empty-pepper digests pinned to the
- * values deploy/seed.sql persists — the one guard against the Go and
- * SQL sides drifting into formats that cannot resolve each other.
+ * the deployment pepper, proven against the RFC 4231 vectors and pinned
+ * to the digests deploy/seed.sql actually inserts — the one guard
+ * against the Go and SQL sides drifting into formats that cannot
+ * resolve each other.
  */
 package auth
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"testing"
+)
 
-func TestSeedKeyHashMatchesHashKey(t *testing.T) {
-	// deploy/seed.sql inserts these digests for the loadtest keys,
-	// assuming BREAKWATER_KEY_PEPPER is unset at seed time.
-	cases := []struct {
-		raw  string
-		want string
-	}{
-		{"bw-local-t1", "dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088"},
-		{"bw-local-t2", "a544711afeb45d9c00135b1c18c3e05582f59bd78272137fd30fc204aed2fd76"},
+// TestHashKeyMatchesRFC4231 pins the construction to real HMAC-SHA256:
+// a lookalike digest (say sha256(pepper+raw)) fails these vectors.
+func TestHashKeyMatchesRFC4231(t *testing.T) {
+	if got := hashKey("Jefe", "what do ya want for nothing?"); got !=
+		"5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" {
+		t.Fatalf("hashKey(Jefe, ...) = %s, want the RFC 4231 test case 2 vector", got)
 	}
-	for _, tc := range cases {
-		if got := hashKey("", tc.raw); got != tc.want {
-			t.Errorf("hashKey(\"\", %q) = %s, want the seed.sql digest %s", tc.raw, got, tc.want)
-		}
+
+	key := string([]byte{
+		0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+		0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+		0x0b, 0x0b, 0x0b, 0x0b,
+	})
+	if got := hashKey(key, "Hi There"); got !=
+		"b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" {
+		t.Fatalf("hashKey(0x0b*20, ...) = %s, want the RFC 4231 test case 1 vector", got)
 	}
 }
 
@@ -39,5 +47,32 @@ func TestHashKeyPepperKeysTheDigest(t *testing.T) {
 	}
 	if hashKey("", raw) != plain {
 		t.Fatal("the empty pepper must stay stable across calls")
+	}
+}
+
+// TestSeedKeyHashMatchesHashKey reads the digests straight out of
+// deploy/seed.sql — literals duplicated here would let the SQL side
+// drift while this test stayed green.
+func TestSeedKeyHashMatchesHashKey(t *testing.T) {
+	sqlBytes, err := os.ReadFile(filepath.Join("..", "..", "deploy", "seed.sql"))
+	if err != nil {
+		t.Fatalf("read seed.sql: %v", err)
+	}
+	cases := []struct{ id, raw string }{
+		{"key-local-1", "bw-local-t1"},
+		{"key-local-2", "bw-local-t2"},
+	}
+	for _, tc := range cases {
+		// Each seed row: ('<id>', '<tenant>', '<64-hex digest>'),
+		// possibly wrapped across lines. The digests are the
+		// empty-pepper form the seed assumes.
+		re := regexp.MustCompile(`'` + tc.id + `',\s*'[^']*',\s*'([0-9a-f]{64})'`)
+		m := re.FindSubmatch(sqlBytes)
+		if m == nil {
+			t.Fatalf("seed.sql: no 64-hex key_hash digest found for %s", tc.id)
+		}
+		if got := hashKey("", tc.raw); string(m[1]) != got {
+			t.Errorf("seed.sql %s digest = %s, want hashKey(\"\", %q) = %s", tc.id, m[1], tc.raw, got)
+		}
 	}
 }
