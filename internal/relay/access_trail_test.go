@@ -20,29 +20,17 @@ import (
 // order, with their statuses.
 func TestTrailRecordsTheFailoverWalk(t *testing.T) {
 	t.Parallel()
-	rateLimited := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`), nil
-	}}
-	healthy := &stubUpstream{id: "fast", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{"ok":true}`), nil
-	}}
+	rateLimited := jsonStubUpstream(t, "slow", http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
+	healthy := jsonStubUpstream(t, "fast", http.StatusOK, `{"ok":true}`)
 	exec := New(testPolicy(), nil)
 	result := execute(t, exec, []upstream.Upstream{rateLimited, healthy}, false, `{}`)
 	if result.Status != http.StatusOK {
 		t.Fatalf("status = %d, want success on the second candidate", result.Status)
 	}
-	want := []AttemptTrace{
+	assertTrail(t, result.Trail, []AttemptTrace{
 		{Upstream: "slow", CredentialIndex: 0, Status: http.StatusTooManyRequests},
 		{Upstream: "fast", CredentialIndex: 0, Status: http.StatusOK},
-	}
-	if len(result.Trail) != len(want) {
-		t.Fatalf("trail = %v, want %v", result.Trail, want)
-	}
-	for i := range want {
-		if result.Trail[i] != want[i] {
-			t.Fatalf("trail[%d] = %+v, want %+v", i, result.Trail[i], want[i])
-		}
-	}
+	})
 }
 
 // TestTrailRecordsCredentialRotation: the ring walk inside one
@@ -50,10 +38,7 @@ func TestTrailRecordsTheFailoverWalk(t *testing.T) {
 // different credentials.
 func TestTrailRecordsCredentialRotation(t *testing.T) {
 	t.Parallel()
-	ks := newKeyServer(t, map[string]keyFailure{
-		"sk-bad": {status: http.StatusUnauthorized, body: `{"error":{"type":"authentication_error"}}`},
-	})
-	adapter := newRingUpstream(t, ks.server.URL, "sk-bad", "sk-good")
+	_, adapter := newUnauthorizedRing(t)
 	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(_ string, cred int, _ string) {
 		adapter.RetireCredential(cred)
 	}))
@@ -61,45 +46,39 @@ func TestTrailRecordsCredentialRotation(t *testing.T) {
 	if result.Status != http.StatusOK {
 		t.Fatalf("status = %d, want success on the second credential", result.Status)
 	}
-	want := []AttemptTrace{
+	assertTrail(t, result.Trail, []AttemptTrace{
 		{Upstream: "ring", CredentialIndex: 0, Status: http.StatusUnauthorized},
 		{Upstream: "ring", CredentialIndex: 1, Status: http.StatusOK},
-	}
-	if len(result.Trail) != len(want) {
-		t.Fatalf("trail = %v, want %v", result.Trail, want)
-	}
-	for i := range want {
-		if result.Trail[i] != want[i] {
-			t.Fatalf("trail[%d] = %+v, want %+v", i, result.Trail[i], want[i])
-		}
-	}
+	})
 }
 
 // TestTrailRecordsUncompletedAttempts: a breaker denial never
 // completed an exchange — its trace names the upstream with no status.
 func TestTrailRecordsUncompletedAttempts(t *testing.T) {
 	t.Parallel()
-	shut := &stubUpstream{id: "shut", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{"ok":true}`), nil
-	}}
-	healthy := &stubUpstream{id: "open", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{"ok":true}`), nil
-	}}
+	shut := jsonStubUpstream(t, "shut", http.StatusOK, `{"ok":true}`)
+	healthy := jsonStubUpstream(t, "open", http.StatusOK, `{"ok":true}`)
 	exec := New(testPolicy(), nil, WithBreaker(selectiveBreaker{deny: "shut"}))
 	result := execute(t, exec, []upstream.Upstream{shut, healthy}, false, `{}`)
 	if result.Status != http.StatusOK {
 		t.Fatalf("status = %d, want success on the second candidate", result.Status)
 	}
-	want := []AttemptTrace{
+	assertTrail(t, result.Trail, []AttemptTrace{
 		{Upstream: "shut", CredentialIndex: -1, Status: 0},
 		{Upstream: "open", CredentialIndex: 0, Status: http.StatusOK},
-	}
-	if len(result.Trail) != len(want) {
-		t.Fatalf("trail = %v, want %v", result.Trail, want)
+	})
+}
+
+// assertTrail pins the recorded attempt trail element for element:
+// same length, same upstream/credential/status sequence.
+func assertTrail(t *testing.T, got, want []AttemptTrace) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("trail = %v, want %v", got, want)
 	}
 	for i := range want {
-		if result.Trail[i] != want[i] {
-			t.Fatalf("trail[%d] = %+v, want %+v", i, result.Trail[i], want[i])
+		if got[i] != want[i] {
+			t.Fatalf("trail[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
 }

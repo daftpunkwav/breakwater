@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/redis/go-redis/v9"
@@ -82,14 +81,29 @@ func TestStartReconcilerStartup(t *testing.T) {
 // store-carrying shape buildGovernance arms governance stages with.
 func staticIdentity(t *testing.T) identityAssembly {
 	t.Helper()
-	identity, err := auth.NewStatic(auth.StaticConfig{
-		Tiers:   []auth.StaticTier{{ID: "free", MonthlyQuota: 100}},
-		Tenants: []auth.StaticTenant{{ID: "t", Name: "T", Tier: "free", Keys: []string{"k"}}},
-	})
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
+	identity := newSingleTenantIdentity(t)
 	return identityAssembly{store: identity, static: identity, close: func() {}}
+}
+
+// buildGovernanceWithInterval assembles the governance stages with the
+// given reconcile interval and returns what the assembly logged; the
+// governance backends close with the test.
+func buildGovernanceWithInterval(t *testing.T, interval time.Duration) string {
+	t.Helper()
+	gov, err := newGovernanceBackends(context.Background(), testConfig("127.0.0.1:0"))
+	if err != nil {
+		t.Fatalf("governance: %v", err)
+	}
+	t.Cleanup(gov.close)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	cfg := testConfig("127.0.0.1:0")
+	cfg.ReconcileInterval = interval
+	if _, err := buildGovernance(context.Background(), cfg, gov, obs.NewMetrics(), combinedSink{}, staticIdentity(t), logger); err != nil {
+		t.Fatalf("buildGovernance: %v", err)
+	}
+	return buf.String()
 }
 
 // TestBuildGovernanceWarnsWhenReconciliationCannotArm pins the only
@@ -99,21 +113,9 @@ func staticIdentity(t *testing.T) identityAssembly {
 // nothing quietly.
 func TestBuildGovernanceWarnsWhenReconciliationCannotArm(t *testing.T) {
 	t.Parallel()
-	gov, err := newGovernanceBackends(context.Background(), testConfig("127.0.0.1:0"))
-	if err != nil {
-		t.Fatalf("governance: %v", err)
-	}
-	defer gov.close()
-
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	cfg := testConfig("127.0.0.1:0")
-	cfg.ReconcileInterval = time.Minute
-	if _, err := buildGovernance(context.Background(), cfg, gov, obs.NewMetrics(), combinedSink{}, staticIdentity(t), logger); err != nil {
-		t.Fatalf("buildGovernance: %v", err)
-	}
-	if !strings.Contains(buf.String(), "quota reconciliation disabled") {
-		t.Fatalf("log = %q, want the reconciliation-disabled warning", buf.String())
+	logOutput := buildGovernanceWithInterval(t, time.Minute)
+	if !strings.Contains(logOutput, "quota reconciliation disabled") {
+		t.Fatalf("log = %q, want the reconciliation-disabled warning", logOutput)
 	}
 }
 
@@ -122,22 +124,10 @@ func TestBuildGovernanceWarnsWhenReconciliationCannotArm(t *testing.T) {
 // the deliberate default and must not warn.
 func TestBuildGovernanceStaysQuietWithoutAnInterval(t *testing.T) {
 	t.Parallel()
-	gov, err := newGovernanceBackends(context.Background(), testConfig("127.0.0.1:0"))
-	if err != nil {
-		t.Fatalf("governance: %v", err)
-	}
-	defer gov.close()
-
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	// The loaded default arms the interval (time.Minute); zero is the
 	// explicit "off" a deliberate memory-mode deployment runs with.
-	cfg := testConfig("127.0.0.1:0")
-	cfg.ReconcileInterval = 0
-	if _, err := buildGovernance(context.Background(), cfg, gov, obs.NewMetrics(), combinedSink{}, staticIdentity(t), logger); err != nil {
-		t.Fatalf("buildGovernance: %v", err)
-	}
-	if strings.Contains(buf.String(), "quota reconciliation disabled") {
-		t.Fatalf("log = %q, want no warning without a configured interval", buf.String())
+	logOutput := buildGovernanceWithInterval(t, 0)
+	if strings.Contains(logOutput, "quota reconciliation disabled") {
+		t.Fatalf("log = %q, want no warning without a configured interval", logOutput)
 	}
 }

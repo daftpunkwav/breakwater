@@ -350,6 +350,15 @@ func (a *Admin) serveBreakers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"breakers": states})
 }
 
+// isUnknownUpstreamErr reports whether err names "no such upstream" in
+// either sentinel vocabulary — this package's or the router's. Both
+// breaker reset and upstream probe must map the pair identically, so
+// the 404 cannot degrade into the 500 branch when a binding reports
+// the other package's sentinel.
+func isUnknownUpstreamErr(err error) bool {
+	return errors.Is(err, ErrUnknownUpstream) || errors.Is(err, router.ErrUnknownUpstream)
+}
+
 // serveBreakerReset handles POST /admin/breakers/{id}/reset: the
 // operator's "I fixed the upstream, let it through now". The
 // machine's own cooldown-and-probe path stays the automatic route.
@@ -361,10 +370,8 @@ func (a *Admin) serveBreakerReset(w http.ResponseWriter, r *http.Request, id str
 	switch err := a.breakerReset(r, id); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "state": string(circuit.StateClosed)})
-	case errors.Is(err, ErrUnknownUpstream), errors.Is(err, router.ErrUnknownUpstream):
-		// Both sentinel vocabularies name "no such upstream"; the mapping
-		// accepts either so the 404 cannot degrade into the 500 branch
-		// when a binding reports the other package's sentinel.
+	case isUnknownUpstreamErr(err):
+		// Either sentinel means "no such upstream": 404.
 		protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
 	default:
 		protocol.WriteError(w, http.StatusInternalServerError, "breaker_reset_failed", err.Error())
@@ -382,7 +389,7 @@ func (a *Admin) serveUpstreamProbe(w http.ResponseWriter, r *http.Request, id st
 	switch err := a.upstreamProbe(r, id); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "ok": true})
-	case errors.Is(err, ErrUnknownUpstream), errors.Is(err, router.ErrUnknownUpstream):
+	case isUnknownUpstreamErr(err):
 		// Either sentinel means "no such upstream": 404, never the 502
 		// of a genuine probe failure.
 		protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())

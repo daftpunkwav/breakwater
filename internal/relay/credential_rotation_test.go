@@ -91,10 +91,7 @@ func retireHook(adapter *upstream.OpenAI, reports *[]string) func(string, int, s
 // with the burned credential excluded — succeeds on the second one.
 func TestCredentialFailureRotatesWithinTheRequest(t *testing.T) {
 	t.Parallel()
-	ks := newKeyServer(t, map[string]keyFailure{
-		"sk-bad": {status: http.StatusUnauthorized, body: `{"error":{"type":"authentication_error"}}`},
-	})
-	adapter := newRingUpstream(t, ks.server.URL, "sk-bad", "sk-good")
+	ks, adapter := newUnauthorizedRing(t)
 
 	var reports []string
 	exec := New(testPolicy(), nil, WithUpstreamFatalHook(retireHook(adapter, &reports)))

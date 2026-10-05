@@ -8,12 +8,10 @@ package obs
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestLoggerDrainsEntries(t *testing.T) {
@@ -22,11 +20,7 @@ func TestLoggerDrainsEntries(t *testing.T) {
 	l := NewLogger(&out, 64)
 
 	l.Record(Entry{TenantID: "t1", Path: "/v1/chat/completions", Status: 200})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushWithTimeout(t, l)
 
 	line := strings.TrimSpace(out.String())
 	if line == "" {
@@ -52,11 +46,7 @@ func TestLoggerWritesAttemptTrail(t *testing.T) {
 		{Upstream: "up-1", Credential: 0, Status: 429},
 		{Upstream: "up-2", Credential: 1, Status: 200},
 	}})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushWithTimeout(t, l)
 
 	var entry Entry
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &entry); err != nil {
@@ -85,11 +75,7 @@ func TestLoggerDropsOldestUnderPressure(t *testing.T) {
 	// strictly increasing tail of the input ending at the newest
 	// (drop-oldest, FIFO); and at least one full capacity of the
 	// newest entries always survives.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushWithTimeout(t, l)
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) < 4 || len(lines) > total {
@@ -128,11 +114,7 @@ func TestLoggerConcurrentRecorders(t *testing.T) {
 	}
 	wg.Wait()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushWithTimeout(t, l)
 	if got := l.Written(); got != 400 {
 		t.Fatalf("written = %d, want 400", got)
 	}
@@ -145,9 +127,7 @@ func TestLoggerCloseDrains(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		l.Record(Entry{Status: i})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Close(ctx); err != nil {
+	if err := closeWithTimeout(t, l); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if got := l.Buffered(); got != 0 {
@@ -202,12 +182,10 @@ func TestCloseIsIdempotent(t *testing.T) {
 	l := NewLogger(&out, 8)
 
 	l.Record(Entry{TenantID: "t1", Status: 200})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Close(ctx); err != nil {
+	if err := closeWithTimeout(t, l); err != nil {
 		t.Fatalf("first close: %v", err)
 	}
-	if err := l.Close(ctx); err != nil {
+	if err := closeWithTimeout(t, l); err != nil {
 		t.Fatalf("second close must be a safe no-op: %v", err)
 	}
 	if !strings.Contains(out.String(), `"t1"`) {

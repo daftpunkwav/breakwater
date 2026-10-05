@@ -41,14 +41,9 @@ func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T
 	t.Parallel()
 	var fetches atomic.Int64
 	release := make(chan struct{})
-	flight := NewFlight()
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), flight, time.Minute, nil, time.Minute),
-	)(oversizedUpstream(&fetches, release))
+	handler, flight := cacheStageWithFlight(oversizedUpstream(&fetches, release))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 
 	ownerDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -109,33 +104,18 @@ func TestCacheMiddlewareWaiterSurvivesOwnerDisconnect(t *testing.T) {
 		<-release
 		// The owner's client is gone: nothing is written at all.
 	})
-	flight := NewFlight()
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), flight, time.Minute, nil, time.Minute),
-	)(upstream)
+	// The flight handle is not needed here: this test polls the fetch
+	// count, not the join.
+	handler, _ := cacheStageWithFlight(upstream)
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 	ownerCtx, cancelOwner := context.WithCancel(context.Background())
 	defer cancelOwner()
 
-	ownerDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req.WithContext(ownerCtx))
-		ownerDone <- rec
-	}()
+	ownerDone := serveAsync(handler, ownerCtx, body)
 	<-entered // the flight entry exists from here on
 
-	waiterDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		waiterDone <- rec
-	}()
+	waiterDone := serveAsync(handler, context.Background(), body)
 
 	// The shared fetch wait is the waiter's only blocking point; a
 	// stability window without a second upstream fetch proves it is
@@ -182,6 +162,46 @@ func awaitSharedWaiter(t *testing.T, flight *Flight, body string) {
 	t.Fatal("no waiter attached to the shared flight: the fetch ended before it joined")
 }
 
+// cacheStageWithFlight builds the full cache stage over the given
+// upstream — carrier, format and the cache middleware over a fresh
+// memory store — and returns the flight alongside, for tests that must
+// await a join on it (see awaitSharedWaiter).
+func cacheStageWithFlight(upstream http.Handler) (http.Handler, *Flight) {
+	flight := NewFlight()
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+		Middleware(NewMemory(), flight, time.Minute, nil, time.Minute),
+	)(upstream)
+	return handler, flight
+}
+
+// serveAsync posts body to the handler on its own goroutine under the
+// given request context and reports the recorder on the returned
+// channel: these exchanges are driven from outside the test body's
+// goroutine. Unlike fireRequest it sets no Content-Type, matching the
+// raw exchanges under test.
+func serveAsync(handler http.Handler, ctx context.Context, body string) <-chan *httptest.ResponseRecorder {
+	recs := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req.WithContext(ctx))
+		recs <- rec
+	}()
+	return recs
+}
+
+// abandonedStarter builds the chat request on its own cancellable
+// context, ready to be abandoned mid-flight; the caller owns the
+// cancel.
+func abandonedStarter(body string) (*http.Request, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req.WithContext(ctx), cancel
+}
+
 // TestCacheSharedFetchSurvivesTheStarterLeaving pins the ownership
 // rule of a shared fetch: the request that happens to start the flight
 // does not own it. A starter that walks away mid-fetch must not cancel
@@ -193,12 +213,7 @@ func TestCacheSharedFetchSurvivesTheStarterLeaving(t *testing.T) {
 	reached := make(chan struct{})
 	var reachedOnce sync.Once
 	release := make(chan struct{})
-	flight := NewFlight()
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), flight, time.Minute, nil, time.Minute),
-	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler, flight := cacheStageWithFlight(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fetches.Add(1)
 		// Idempotent: a second upstream call is a test failure the fetch
 		// count below reports, never a panic that aborts the binary.
@@ -215,13 +230,10 @@ func TestCacheSharedFetchSurvivesTheStarterLeaving(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"shared"}}]}`))
 	}))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 
 	// The starter abandons its own request as soon as the fetch starts.
-	starterCtx, cancelStarter := context.WithCancel(context.Background())
-	starter := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	starter.Header.Set("Content-Type", "application/json")
-	starter = starter.WithContext(starterCtx)
+	starter, cancelStarter := abandonedStarter(body)
 	starterRec := httptest.NewRecorder()
 	go handler.ServeHTTP(starterRec, starter)
 	<-reached
@@ -264,7 +276,7 @@ func TestCacheSharedFetchRendersTheStarterAnEnvelope(t *testing.T) {
 		// Produce no response at all: the handler simply returns.
 	}))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 	rec := make(chan *httptest.ResponseRecorder, 1)
 	go func() { rec <- fireRequest(handler, body) }()
 	started.Wait()
@@ -299,7 +311,7 @@ func TestCacheSharedFetchStaysInsideItsBudget(t *testing.T) {
 		<-r.Context().Done()
 	}))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 
 	starterDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() { starterDone <- fireRequest(handler, body) }()
@@ -376,11 +388,9 @@ func TestCacheStoresTheEntryTheLeavingStarterProduced(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warm"}}]}`))
 	}))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
-	starterCtx, cancelStarter := context.WithCancel(context.Background())
-	starter := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	starter.Header.Set("Content-Type", "application/json")
-	go handler.ServeHTTP(httptest.NewRecorder(), starter.WithContext(starterCtx))
+	body := cacheableChatBody
+	starter, cancelStarter := abandonedStarter(body)
+	go handler.ServeHTTP(httptest.NewRecorder(), starter)
 	<-reached
 	cancelStarter()
 	close(release)

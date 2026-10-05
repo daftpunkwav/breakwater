@@ -61,30 +61,41 @@ func TestTrackerFailurePenaltyDemotes(t *testing.T) {
 	}
 }
 
+// contendAgainst runs each body from four goroutines at once, 200
+// iterations per goroutine, and waits for all of them; under -race any
+// unsynchronized pass fails the test.
+func contendAgainst(bodies ...func()) {
+	var wg sync.WaitGroup
+	for _, body := range bodies {
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 200; j++ {
+					body()
+				}
+			}()
+		}
+	}
+	wg.Wait()
+}
+
 // TestTrackerConcurrentRecordAndScore: report goroutines and routing
 // readers run against each other; -race flags any unsynchronized pass.
 func TestTrackerConcurrentRecordAndScore(t *testing.T) {
 	t.Parallel()
 	tr := NewTracker()
 
-	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	contendAgainst(
+		func() {
 			for j := 0; j < 200; j++ {
 				tr.Record("u1", 10*time.Millisecond, j%3 == 0)
 			}
-		}()
-	}
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		},
+		func() {
 			for j := 0; j < 200; j++ {
 				_ = tr.Score("u1")
 			}
-		}()
-	}
-	wg.Wait()
+		},
+	)
 }

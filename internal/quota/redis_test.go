@@ -9,8 +9,6 @@ package quota
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,22 +16,26 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func newTestLedger(t *testing.T) (*Redis, *miniredis.Miniredis) {
+// newMiniredisClient starts miniredis and binds a client to it; both
+// are torn down when the test ends.
+func newMiniredisClient(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
+	return mr, client
+}
+
+func newTestLedger(t *testing.T) (*Redis, *miniredis.Miniredis) {
+	t.Helper()
+	mr, client := newMiniredisClient(t)
 	return NewRedis(client, "", 10*time.Minute), mr
 }
 
 func TestRedisReserveSettle(t *testing.T) {
 	t.Parallel()
-	r, _ := newTestLedger(t)
-	ctx := context.Background()
+	r, _, ctx := newSeededRedisLedger(t, 1000)
 
-	if err := r.SetBalance(ctx, "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	lease, err := r.Reserve(ctx, "t", 400)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
@@ -51,12 +53,8 @@ func TestRedisReserveSettle(t *testing.T) {
 
 func TestRedisInsufficientBalance(t *testing.T) {
 	t.Parallel()
-	r, _ := newTestLedger(t)
-	ctx := context.Background()
+	r, _, ctx := newSeededRedisLedger(t, 100)
 
-	if err := r.SetBalance(ctx, "t", 100); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	if _, err := r.Reserve(ctx, "t", 200); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("err = %v, want ErrInsufficientBalance", err)
 	}
@@ -74,12 +72,8 @@ func TestRedisInsufficientBalance(t *testing.T) {
 
 func TestRedisSweeperReclaimsAbandonedLeases(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestLedger(t)
-	ctx := context.Background()
+	r, mr, ctx := newSeededRedisLedger(t, 1000)
 
-	if err := r.SetBalance(ctx, "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	lease, err := r.Reserve(ctx, "t", 400)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
@@ -114,53 +108,10 @@ func TestRedisSweeperReclaimsAbandonedLeases(t *testing.T) {
 func TestRedisConcurrentDrainReconciles(t *testing.T) {
 	t.Parallel()
 	r, _ := newTestLedger(t)
-	ctx := context.Background()
 
-	const (
-		initial    = int64(1_000_000)
-		reserveAmt = int64(100)
-		workers    = 64
-		rounds     = 25
-	)
-	if err := r.SetBalance(ctx, "t", initial); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	var consumed atomic.Int64
-	var wg sync.WaitGroup
-	errs := make(chan error, workers*rounds)
-	for w := range workers {
-		wg.Add(1)
-		go func(worker int) {
-			defer wg.Done()
-			for round := range rounds {
-				lease, err := r.Reserve(ctx, "t", reserveAmt)
-				if err != nil {
-					errs <- err
-					continue
-				}
-				// Vary usage deterministically across the refund range.
-				used := int64((worker + round) % 101)
-				if err := r.Settle(ctx, lease.ID, used); err != nil {
-					errs <- err
-					continue
-				}
-				consumed.Add(used)
-			}
-		}(w)
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Fatalf("concurrent drain error: %v", err)
-	}
-
-	final, err := r.Balance(ctx, "t")
-	if err != nil {
-		t.Fatalf("balance: %v", err)
-	}
-	want := initial - consumed.Load()
-	if final != want {
+	const initial = int64(1_000_000)
+	consumed, final := runConcurrentDrain(t, r, initial, 100)
+	if want := initial - consumed; final != want {
 		t.Fatalf("reconciliation error: balance = %d, want %d (drift %d)",
 			final, want, final-want)
 	}
@@ -172,12 +123,8 @@ func TestRedisConcurrentDrainReconciles(t *testing.T) {
 // after expiry is a silent no-op.
 func TestRedisTerminalLeaseAuditWindowExpires(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestLedger(t)
-	ctx := context.Background()
+	r, mr, ctx := newSeededRedisLedger(t, 1000)
 
-	if err := r.SetBalance(ctx, "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	settled, err := r.Reserve(ctx, "t", 400)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
@@ -242,9 +189,7 @@ func TestRedisSweepDropsGhostEntries(t *testing.T) {
 // environment spend and refund the other's balance.
 func TestRedisNamespaceIsolatesDeployments(t *testing.T) {
 	t.Parallel()
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
+	mr, client := newMiniredisClient(t)
 	ctx := context.Background()
 
 	staging := NewRedis(client, "staging", 10*time.Minute)
@@ -270,12 +215,8 @@ func TestRedisNamespaceIsolatesDeployments(t *testing.T) {
 // refunds at most what the lease reserved.
 func TestRedisSettleClampsNegativeUsage(t *testing.T) {
 	t.Parallel()
-	r, _ := newTestLedger(t)
-	ctx := context.Background()
+	r, _, ctx := newSeededRedisLedger(t, 1000)
 
-	if err := r.SetBalance(ctx, "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	lease, err := r.Reserve(ctx, "t", 400)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)

@@ -9,7 +9,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,15 +17,10 @@ import (
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/cache"
-	"github.com/daftpunkwav/breakwater/internal/limiter"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/quota"
-	"github.com/daftpunkwav/breakwater/internal/relay"
-	"github.com/daftpunkwav/breakwater/internal/retry"
-	"github.com/daftpunkwav/breakwater/internal/router"
-	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
 func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
@@ -40,7 +34,7 @@ func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	identity, err := auth.NewStatic(auth.StaticConfig{
+	identity := mustIdentity(t, auth.StaticConfig{
 		Tiers: []auth.StaticTier{
 			{ID: "wide", RPM: 10, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"m1", "m2"}},
 			{ID: "narrow", RPM: 10, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"m1"}},
@@ -50,35 +44,13 @@ func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
 			{ID: "tn", Name: "Narrow", Tier: "narrow", Keys: []string{keyT2}},
 		},
 	})
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backend.URL})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
-	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "tw", 1_000_000); err != nil {
-		t.Fatalf("seed tw: %v", err)
-	}
-	if err := ledger.SetBalance(context.Background(), "tn", 1_000_000); err != nil {
-		t.Fatalf("seed tn: %v", err)
-	}
+	seedBalance(t, ledger, "tw", 1_000_000)
+	seedBalance(t, ledger, "tn", 1_000_000)
 
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.RequestIDStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		pipeline.AuthStage(identity),
-		pipeline.ModelAuthzStage(),
-		limiter.Middleware(limiter.NewMemory(), nil),
-		quota.Middleware(ledger, nil),
+	handler := pipeline.Chain(governanceStages(identity, ledger,
 		cache.Middleware(cache.NewMemory(), cache.NewFlight(), time.Minute, obs.NewMetrics(), time.Minute),
-	)(NewInference(protocol.FormatOpenAIChat, priority, relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))))
+	)...)(NewInference(protocol.FormatOpenAIChat, testRouter(t, backend.URL), singleAttemptRelay()))
 
 	// Cache-eligible body: explicitly deterministic parameters.
 	const body = `{"model":"m2","temperature":0,"messages":[{"role":"user","content":"hello"}]}`

@@ -37,11 +37,27 @@ func (f *fakeCopier) CopyFrom(context.Context, pgx.Identifier, []string, pgx.Cop
 	return f.rows, f.err
 }
 
+// newBufferStore builds a bare store: a bounded queue with no writer
+// loop, for driving Record and the copy path directly.
+func newBufferStore() *PGStore {
+	return &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+}
+
+// newWriterStore builds a store wired to a scripted sink with the
+// writer loop already running; the caller owns shutdown.
+func newWriterStore() (*PGStore, *scriptedSink) {
+	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	sink := &scriptedSink{}
+	s.insert = sink.insert
+	go s.writeLoop()
+	return s, sink
+}
+
 // TestCopyIntoDropsOnFailure: a failed batch increments the drop
 // counter by the batch size and never retries.
 func TestCopyIntoDropsOnFailure(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := newBufferStore()
 	batch := []Record{{Status: 200}, {Status: 502}}
 
 	copyInto(context.Background(), &fakeCopier{err: errors.New("copy failed")}, s, batch)
@@ -57,7 +73,7 @@ func TestCopyIntoDropsOnFailure(t *testing.T) {
 
 func TestRecordQueuesAndCountsDrops(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := newBufferStore()
 
 	for i := 0; i < batchSize*8; i++ {
 		s.Record(Record{Time: time.Now(), TenantID: "t1", Status: 200})
@@ -73,7 +89,7 @@ func TestRecordQueuesAndCountsDrops(t *testing.T) {
 // counted, never buffered into a dead writer.
 func TestRecordAfterCloseDrops(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := newBufferStore()
 	s.closed = true
 
 	s.Record(Record{Status: 200})
@@ -86,7 +102,7 @@ func TestRecordAfterCloseDrops(t *testing.T) {
 // without blocking, and a second signal is absorbed.
 func TestRecordWakesWriterOnFull(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := newBufferStore()
 
 	for i := 0; i < batchSize; i++ {
 		s.Record(Record{Status: 200})
@@ -109,10 +125,7 @@ func TestRecordWakesWriterOnFull(t *testing.T) {
 // the (scripted) sink and the loop exits.
 func TestWriteLoopFlushesOnClose(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
-	sink := &scriptedSink{}
-	s.insert = sink.insert
-	go s.writeLoop()
+	s, sink := newWriterStore()
 
 	for i := 0; i < batchSize+5; i++ {
 		s.Record(Record{Status: 200})
@@ -129,10 +142,7 @@ func TestWriteLoopFlushesOnClose(t *testing.T) {
 // without Close.
 func TestWriteLoopFlushesOnInterval(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
-	sink := &scriptedSink{}
-	s.insert = sink.insert
-	go s.writeLoop()
+	s, sink := newWriterStore()
 	defer func() {
 		close(s.stop)
 		<-s.done
@@ -197,10 +207,7 @@ func TestNewPGStoreRejectsInvalidDSN(t *testing.T) {
 // Close's own minus the pool close (a bare store has none).
 func TestRecordConcurrentWithClose(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
-	sink := &scriptedSink{}
-	s.insert = sink.insert
-	go s.writeLoop()
+	s, _ := newWriterStore()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -224,10 +231,7 @@ func TestRecordConcurrentWithClose(t *testing.T) {
 // helpers must not need a database.
 func TestCloseIsIdempotentAndCountsLateRecords(t *testing.T) {
 	t.Parallel()
-	s := &PGStore{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
-	sink := &scriptedSink{}
-	s.insert = sink.insert
-	go s.writeLoop()
+	s, sink := newWriterStore()
 
 	s.Record(Record{Status: 200})
 	s.Close()

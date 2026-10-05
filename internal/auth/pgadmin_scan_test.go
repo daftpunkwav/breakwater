@@ -66,14 +66,17 @@ func (r *adminRows) Scan(dest ...any) error {
 
 func (r *adminRows) Err() error { return r.err }
 
+// scanStamp is the fixed timestamp every listing tuple carries; the
+// mappings under test copy it through untouched.
+var scanStamp = time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
+
 // TestScanUsersFoldsViews: the view carries the identity, the role and
 // the parsed overrides document.
 func TestScanUsersFoldsViews(t *testing.T) {
 	t.Parallel()
-	when := time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
 	rows := &adminRows{tuples: [][]any{
-		{"u1", "Alice", "admin", "free", []byte(`{"rpm":10}`), when},
-		{"u2", "Bob", "user", "free", []byte(nil), when},
+		{"u1", "Alice", "admin", "free", []byte(`{"rpm":10}`), scanStamp},
+		{"u2", "Bob", "user", "free", []byte(nil), scanStamp},
 	}}
 
 	users, err := scanUsers(rows)
@@ -122,10 +125,9 @@ func TestScanUsersPropagatesErrors(t *testing.T) {
 // column and the overrides parse.
 func TestScanKeysFoldsViews(t *testing.T) {
 	t.Parallel()
-	when := time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
 	rows := &adminRows{tuples: [][]any{
-		{"k1", "laptop", "active", []byte(`{"rpm":5}`), when},
-		{"k2", "phone", "disabled", []byte(nil), when},
+		{"k1", "laptop", "active", []byte(`{"rpm":5}`), scanStamp},
+		{"k2", "phone", "disabled", []byte(nil), scanStamp},
 	}}
 
 	keys, err := scanKeys(rows)

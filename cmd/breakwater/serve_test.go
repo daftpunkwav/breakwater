@@ -24,7 +24,6 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
 	"github.com/daftpunkwav/breakwater/internal/obs"
-	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -93,11 +92,34 @@ func serveUntilReady(t *testing.T, ctx context.Context, cfg config.Config, liste
 	return done
 }
 
-// TestServeRunsAndStops pins the full assembled lifecycle: the gateway
-// comes up serving, and a cancelled parent context then ends serve
-// cleanly with a nil error.
-func TestServeRunsAndStops(t *testing.T) {
+// upstreamEnv renders the environment entry that arms exactly one mock
+// upstream with the given id, base URL and quoted model list, replacing
+// the base environment's own upstream table.
+func upstreamEnv(id, baseURL, models string) string {
+	return `BREAKWATER_UPSTREAMS=[{"id":"` + id + `","base_url":"` + baseURL + `","models":[` + models + `]}]`
+}
+
+// redisModeEnv switches the environment to the Redis-backed posture
+// against a fresh miniredis and layers the extra entries on top — they
+// win over the defaults the base environment carries.
+func redisModeEnv(t *testing.T, extra ...string) {
+	t.Helper()
+	mr := miniredis.RunT(t)
 	setEnv(t, baseEnv("127.0.0.1:0"))
+	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
+	t.Setenv("BREAKWATER_POSTGRES_DSN", "")
+	for _, entry := range extra {
+		key, value, _ := strings.Cut(entry, "=")
+		t.Setenv(key, value)
+	}
+}
+
+// startGateway loads the config from the current environment, binds an
+// ephemeral listener and hands it to serve in the background, waiting
+// for readiness. The caller owns the context and reads done after
+// cancelling it.
+func startGateway(t *testing.T, ctx context.Context) (addr string, done chan error) {
+	t.Helper()
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -106,13 +128,71 @@ func TestServeRunsAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind listener: %v", err)
 	}
+	// serve owns the listener and closes it on shutdown; this cleanup
+	// only covers the paths that never handed it over.
+	t.Cleanup(func() { _ = listener.Close() })
+	done = serveUntilReady(t, ctx, cfg, listener)
+	return listener.Addr().String(), done
+}
 
+// runGateway starts the assembled gateway from the current environment
+// on an ephemeral port and returns its address with a stop function:
+// stop cancels the serve context and fails the test when serve does
+// not end cleanly.
+func runGateway(t *testing.T) (addr string, stop func()) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	done := serveUntilReady(t, ctx, cfg, listener)
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("serve: %v", err)
+	addr, done := startGateway(t, ctx)
+	return addr, func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("serve: %v", err)
+		}
 	}
+}
+
+// newCompletionBackend spins up a mock upstream that counts its fetches
+// and answers every request with a canned two-token completion.
+func newCompletionBackend(t *testing.T) (backend *httptest.Server, hits *int) {
+	t.Helper()
+	hits = new(int)
+	backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		*hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}],` +
+			`"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	t.Cleanup(backend.Close)
+	return backend, hits
+}
+
+// postCompletion posts a chat-completions body to the gateway with the
+// tenant key as the bearer token and returns the response; its body is
+// closed with the test.
+func postCompletion(t *testing.T, addr, key, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/chat/completions",
+		strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+// TestServeRunsAndStops pins the full assembled lifecycle: the gateway
+// comes up serving, and a cancelled parent context then ends serve
+// cleanly with a nil error.
+func TestServeRunsAndStops(t *testing.T) {
+	setEnv(t, baseEnv("127.0.0.1:0"))
+	_, stop := runGateway(t)
+	stop()
 }
 
 // TestServeDrainTimeoutExitsCleanly pins the shutdown contract: a
@@ -137,30 +217,17 @@ func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
 	defer slow.Close()
 	defer close(release)
 
-	entries := baseEnv("127.0.0.1:0")
-	entries = append(entries,
-		`BREAKWATER_UPSTREAMS=[{"id":"slow","base_url":"`+slow.URL+`","models":["*"]}]`,
+	setEnv(t, append(baseEnv("127.0.0.1:0"),
+		upstreamEnv("slow", slow.URL, `"*"`),
 		"BREAKWATER_SHUTDOWN_GRACE=1ns", // any request still in flight outlives it
-	)
-	setEnv(t, entries)
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
+	))
 
 	// The listener stays bound and is handed to the server, so the
 	// failure under test is the drain and not a port collision with
 	// another package's test process.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("bind listener: %v", err)
-	}
-	addr := listener.Addr().String()
-	cfg.Server.Addr = addr
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := serveUntilReady(t, ctx, cfg, listener)
+	addr, done := startGateway(t, ctx)
 
 	// Hold a request open across the shutdown signal; the upstream's
 	// reached channel proves it is in flight before the cancel fires.
@@ -194,25 +261,9 @@ func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
 	reqCancel()
 }
 func TestServeRedisModeWithIdentity(t *testing.T) {
-	mr := miniredis.RunT(t)
-	setEnv(t, baseEnv("127.0.0.1:0"))
-	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
-	t.Setenv("BREAKWATER_POSTGRES_DSN", "")
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("bind listener: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := serveUntilReady(t, ctx, cfg, listener)
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("serve: %v", err)
-	}
+	redisModeEnv(t)
+	_, stop := runGateway(t)
+	stop()
 }
 
 // TestServeReconcilerNeedsReachableIdentity pins the reconciler's
@@ -221,14 +272,13 @@ func TestServeRedisModeWithIdentity(t *testing.T) {
 // unreachable one is a deployment failure surfaced at startup, not a
 // silently missing reconcile loop.
 func TestServeReconcilerNeedsReachableIdentity(t *testing.T) {
-	mr := miniredis.RunT(t)
-	setEnv(t, baseEnv("127.0.0.1:0"))
-	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
-	t.Setenv("BREAKWATER_POSTGRES_DSN", "postgres://breakwater:breakwater@127.0.0.1:1/db")
-	t.Setenv("BREAKWATER_RECONCILE_INTERVAL", "1m")
 	// The admin-token guard is not this test's subject: arm the surface
 	// so Load passes and the failure comes from the unreachable database.
-	t.Setenv("BREAKWATER_ADMIN_TOKEN", "test")
+	redisModeEnv(t,
+		"BREAKWATER_POSTGRES_DSN=postgres://breakwater:breakwater@127.0.0.1:1/db",
+		"BREAKWATER_RECONCILE_INTERVAL=1m",
+		"BREAKWATER_ADMIN_TOKEN=test",
+	)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -256,20 +306,8 @@ func TestServeWithoutIdentity(t *testing.T) {
 		"BREAKWATER_IDENTITY=",
 		"BREAKWATER_ALLOW_UNAUTHENTICATED=1",
 	})
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("bind listener: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := serveUntilReady(t, ctx, cfg, listener)
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("serve: %v", err)
-	}
+	_, stop := runGateway(t)
+	stop()
 }
 
 // runMustFail runs the assembly under the current environment and
@@ -453,15 +491,10 @@ func TestNewAccessLogDisabledAndEnabled(t *testing.T) {
 
 func TestSeedBalancesProvisionsTenants(t *testing.T) {
 	t.Parallel()
-	identity, err := auth.NewStatic(auth.StaticConfig{
+	ledger := seedProvisionedLedger(t, auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", RPM: 10, TPM: 1000, MaxTokens: 64, MonthlyQuota: 1000}},
 		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{"k1"}}},
 	})
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
-	ledger := quota.NewMemory()
-	seedBalances(context.Background(), identity, ledger, slog.New(slog.DiscardHandler))
 
 	bal, err := ledger.Balance(context.Background(), "t1")
 	if err != nil || bal != 1000 {
@@ -515,25 +548,11 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	}
 	_ = conn.Close(connCtx)
 
-	mr := miniredis.RunT(t)
-	setEnv(t, baseEnv("127.0.0.1:0"))
-	t.Setenv("BREAKWATER_REDIS_ADDR", mr.Addr())
-	t.Setenv("BREAKWATER_POSTGRES_DSN", dsn)
-	t.Setenv("BREAKWATER_RECONCILE_INTERVAL", "1m")
-	t.Setenv("BREAKWATER_ADMIN_TOKEN", "test")
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("bind listener: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := serveUntilReady(t, ctx, cfg, listener)
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("serve: %v", err)
-	}
+	redisModeEnv(t,
+		"BREAKWATER_POSTGRES_DSN="+dsn,
+		"BREAKWATER_RECONCILE_INTERVAL=1m",
+		"BREAKWATER_ADMIN_TOKEN=test",
+	)
+	_, stop := runGateway(t)
+	stop()
 }

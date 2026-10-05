@@ -17,13 +17,8 @@ import (
 // a half-open probe; the returned permission owns that probe.
 func openThenProbe(t *testing.T, b *Registry, advance func(time.Duration)) Permission {
 	t.Helper()
-	ctx := context.Background()
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second) // cooldown elapses
-	probe, ok := b.Allow(ctx, "u")
+	tripOpen(t, b, advance)
+	probe, ok := b.Allow(context.Background(), "u")
 	if !ok {
 		t.Fatal("half-open denied the probe")
 	}

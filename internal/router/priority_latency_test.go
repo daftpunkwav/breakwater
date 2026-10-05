@@ -12,7 +12,42 @@ import (
 	"math/rand/v2"
 	"testing"
 	"time"
+
+	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
+
+// buildPriority assembles the router, failing the test on a
+// construction error.
+func buildPriority(t *testing.T, bindings []Binding, opts ...PriorityOption) *Priority {
+	t.Helper()
+	priority, err := NewPriority(bindings, opts...)
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	return priority
+}
+
+// resolveCandidates lists the candidates for a model, failing the test
+// on a routing error.
+func resolveCandidates(t *testing.T, priority *Priority, model string) []upstream.Upstream {
+	t.Helper()
+	candidates, err := priority.Candidates(context.Background(), model)
+	if err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	return candidates
+}
+
+// twoBindingIDs resolves model m1 over two bindings in configured
+// order and returns the served candidate ids.
+func twoBindingIDs(t *testing.T, first, second string, opts ...PriorityOption) []string {
+	t.Helper()
+	priority := buildPriority(t, []Binding{
+		{Models: []string{"m1"}, Upstream: stubUp{id: first}},
+		{Models: []string{"m1"}, Upstream: stubUp{id: second}},
+	}, opts...)
+	return candidateIDs(resolveCandidates(t, priority, "m1"))
+}
 
 // twoUpstreamCandidates builds a router over two bindings in configured
 // order (slow-primary, fast-fallback) with the given measured
@@ -23,19 +58,8 @@ func twoUpstreamCandidates(t *testing.T, strategy Strategy, slowPrimary, fastFal
 	tr.Record("slow-primary", slowPrimary, false)
 	tr.Record("fast-fallback", fastFallback, false)
 
-	priority, err := NewPriority([]Binding{
-		{Models: []string{"m1"}, Upstream: stubUp{id: "slow-primary"}},
-		{Models: []string{"m1"}, Upstream: stubUp{id: "fast-fallback"}},
-	}, WithStrategy(strategy), WithTracker(tr))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-
-	candidates, err := priority.Candidates(context.Background(), "m1")
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
-	return candidateIDs(candidates)
+	return twoBindingIDs(t, "slow-primary", "fast-fallback",
+		WithStrategy(strategy), WithTracker(tr))
 }
 
 func TestCandidatesStaticKeepsBindingOrder(t *testing.T) {
@@ -62,19 +86,9 @@ func TestCandidatesLatencyUntriedFirst(t *testing.T) {
 	tr := NewTracker()
 	tr.Record("measured", 1*time.Millisecond, false)
 
-	priority, err := NewPriority([]Binding{
-		{Models: []string{"m1"}, Upstream: stubUp{id: "measured"}},
-		{Models: []string{"m1"}, Upstream: stubUp{id: "brand-new"}},
-	}, WithStrategy(StrategyLatency), WithTracker(tr))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-
-	candidates, err := priority.Candidates(context.Background(), "m1")
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
-	if got := candidateIDs(candidates); got[0] != "brand-new" {
+	got := twoBindingIDs(t, "measured", "brand-new",
+		WithStrategy(StrategyLatency), WithTracker(tr))
+	if got[0] != "brand-new" {
 		t.Fatalf("order = %v, want the untried upstream explored first", got)
 	}
 }
@@ -83,19 +97,8 @@ func TestCandidatesLatencyUntriedFirst(t *testing.T) {
 // an ordering preference only; missing data must not break routing.
 func TestCandidatesLatencyWithoutTrackerDegradesToStatic(t *testing.T) {
 	t.Parallel()
-	priority, err := NewPriority([]Binding{
-		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
-		{Models: []string{"m1"}, Upstream: stubUp{id: "u2"}},
-	}, WithStrategy(StrategyLatency))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-
-	candidates, err := priority.Candidates(context.Background(), "m1")
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
-	if got := candidateIDs(candidates); got[0] != "u1" || got[1] != "u2" {
+	got := twoBindingIDs(t, "u1", "u2", WithStrategy(StrategyLatency))
+	if got[0] != "u1" || got[1] != "u2" {
 		t.Fatalf("order = %v, want the configured order without a tracker", got)
 	}
 }
@@ -110,24 +113,16 @@ func TestCandidatesLatencyJittersNearTies(t *testing.T) {
 	tr.Record("b", 10*time.Millisecond, false)
 
 	build := func(seed uint64) *Priority {
-		priority, err := NewPriority([]Binding{
+		return buildPriority(t, []Binding{
 			{Models: []string{"m1"}, Upstream: stubUp{id: "a"}},
 			{Models: []string{"m1"}, Upstream: stubUp{id: "b"}},
 		}, WithStrategy(StrategyLatency), WithTracker(tr),
 			WithRandomSource(rand.New(rand.NewPCG(seed, seed))))
-		if err != nil {
-			t.Fatalf("router: %v", err)
-		}
-		return priority
 	}
 
 	leaders := map[string]bool{}
 	for _, seed := range []uint64{1, 2, 3, 4, 5, 6, 7, 8} {
-		candidates, err := build(seed).Candidates(context.Background(), "m1")
-		if err != nil {
-			t.Fatalf("candidates: %v", err)
-		}
-		got := candidateIDs(candidates)
+		got := candidateIDs(resolveCandidates(t, build(seed), "m1"))
 		leader, follow := got[0], got[1]
 		leaders[leader] = true
 		if leader == follow {
@@ -147,20 +142,13 @@ func TestCandidatesLatencyTieCutHonorsBuffer(t *testing.T) {
 	tr.Record("fast", 10*time.Millisecond, false)
 	tr.Record("slow", 20*time.Millisecond, false)
 
-	priority, err := NewPriority([]Binding{
+	priority := buildPriority(t, []Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "fast"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "slow"}},
 	}, WithStrategy(StrategyLatency), WithTracker(tr),
 		WithRandomSource(rand.New(rand.NewPCG(1, 1))))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 	for i := 0; i < 20; i++ {
-		candidates, err := priority.Candidates(context.Background(), "m1")
-		if err != nil {
-			t.Fatalf("candidates: %v", err)
-		}
-		if got := candidateIDs(candidates); got[0] != "fast" {
+		if got := candidateIDs(resolveCandidates(t, priority, "m1")); got[0] != "fast" {
 			t.Fatalf("order = %v; a candidate outside the tie buffer must never lead", got)
 		}
 	}

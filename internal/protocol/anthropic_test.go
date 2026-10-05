@@ -49,18 +49,8 @@ func TestIngestAnthropic(t *testing.T) {
 
 func TestIngestAnthropicStreamRequestsUsage(t *testing.T) {
 	t.Parallel()
-	result, err := Ingest(FormatAnthropicMessages, []byte(
-		`{"model":"m","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
-	if err != nil {
-		t.Fatalf("ingest: %v", err)
-	}
-	chat, err := ParseChatRequest(result.UpstreamBody)
-	if err != nil {
-		t.Fatalf("canonical body: %v", err)
-	}
-	if chat.StreamOptions == nil || !chat.StreamOptions.IncludeUsage {
-		t.Fatalf("canonical body = %s, want stream_options.include_usage", result.UpstreamBody)
-	}
+	requireIngestedStreamRequestsUsage(t, FormatAnthropicMessages,
+		`{"model":"m","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
 }
 
 func TestIngestAnthropicRequiresMaxTokens(t *testing.T) {
@@ -125,14 +115,23 @@ func TestAnthropicWireRenderError(t *testing.T) {
 	}
 }
 
-func TestAnthropicStreamSequence(t *testing.T) {
-	t.Parallel()
-	transcoder := WireFor(FormatAnthropicMessages).Stream()
+// startAnthropicStream opens the Anthropic stream transcoder over a
+// fresh recorder and emits the message_start preamble; it returns both
+// so the tests drive deltas and read the emitted frames.
+func startAnthropicStream(t *testing.T) (*httptest.ResponseRecorder, StreamTranscoder) {
+	t.Helper()
 	rec := httptest.NewRecorder()
-
+	transcoder := WireFor(FormatAnthropicMessages).Stream()
 	if err := transcoder.Start(rec, "m"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	return rec, transcoder
+}
+
+func TestAnthropicStreamSequence(t *testing.T) {
+	t.Parallel()
+	rec, transcoder := startAnthropicStream(t)
+
 	if err := transcoder.Delta(rec, []byte(`{"choices":[{"delta":{"role":"assistant"}}]}`)); err != nil {
 		t.Fatalf("role chunk: %v", err)
 	}
@@ -179,12 +178,8 @@ func TestAnthropicStreamSequence(t *testing.T) {
 // instead of degrading to end_turn.
 func TestAnthropicStreamFinishReasonOnCombinedFrame(t *testing.T) {
 	t.Parallel()
-	transcoder := WireFor(FormatAnthropicMessages).Stream()
-	rec := httptest.NewRecorder()
+	rec, transcoder := startAnthropicStream(t)
 
-	if err := transcoder.Start(rec, "m"); err != nil {
-		t.Fatalf("start: %v", err)
-	}
 	if err := transcoder.Delta(rec, []byte(`{"choices":[{"delta":{"content":"cut short"},"finish_reason":"length"}]}`)); err != nil {
 		t.Fatalf("delta: %v", err)
 	}
@@ -198,11 +193,7 @@ func TestAnthropicStreamFinishReasonOnCombinedFrame(t *testing.T) {
 
 func TestAnthropicStreamAbort(t *testing.T) {
 	t.Parallel()
-	transcoder := WireFor(FormatAnthropicMessages).Stream()
-	rec := httptest.NewRecorder()
-	if err := transcoder.Start(rec, "m"); err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	rec, transcoder := startAnthropicStream(t)
 	if err := transcoder.Abort(rec, CodeUpstreamTimeout, "deadline"); err != nil {
 		t.Fatalf("abort: %v", err)
 	}

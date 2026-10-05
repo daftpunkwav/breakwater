@@ -8,7 +8,6 @@
 package relay
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -23,10 +22,7 @@ func (neverRetry) Retryable(error) bool { return false }
 func TestWithClassifierOverridesRetryability(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	cand := &stubUpstream{id: "a", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		calls++
-		return jsonResponse(t, http.StatusInternalServerError, `{"error":{}}`), nil
-	}}
+	cand := countedStubUpstream(t, &calls, "a", http.StatusInternalServerError, `{}`)
 	exec := New(testPolicy(), nil, WithClassifier(neverRetry{}))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")

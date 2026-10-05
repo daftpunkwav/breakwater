@@ -38,6 +38,24 @@ func report(t *testing.T, reg *SlowRegistry, id string, outcome Outcome) {
 	p.Report(outcome)
 }
 
+// reportSlow reports n slow completions, one per call.
+func reportSlow(t *testing.T, reg *SlowRegistry, id string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		report(t, reg, id, OutcomeSlow)
+	}
+}
+
+// saturateWindow advances a bucket per slow call until the window holds
+// slowMinSamples samples, which opens a breaker at the 0.5 ratio.
+func saturateWindow(t *testing.T, reg *SlowRegistry, id string, advance func(int)) {
+	t.Helper()
+	for i := 0; i < slowMinSamples; i++ {
+		advance(1)
+		report(t, reg, id, OutcomeSlow)
+	}
+}
+
 // TestSlowWindowNeedsSamples: fewer samples than the minimum never
 // open the breaker, however slow they are.
 func TestSlowWindowNeedsSamples(t *testing.T) {
@@ -45,9 +63,7 @@ func TestSlowWindowNeedsSamples(t *testing.T) {
 	reg, _, _ := newSlowFixture(t, 0.5)
 	const id = "u1"
 
-	for i := 0; i < slowMinSamples-1; i++ {
-		report(t, reg, id, OutcomeSlow)
-	}
+	reportSlow(t, reg, id, slowMinSamples-1)
 	if state := reg.StateOf(context.Background(), id); state != StateClosed {
 		t.Fatalf("state = %s, want closed below the sample minimum", state)
 	}
@@ -101,10 +117,7 @@ func TestSlowProbeClosesOnAnEmptiedWindow(t *testing.T) {
 	reg, advance, _ := newSlowFixture(t, 0.5)
 	const id = "u1"
 
-	for i := 0; i < slowMinSamples; i++ {
-		advance(1)
-		report(t, reg, id, OutcomeSlow)
-	}
+	saturateWindow(t, reg, id, advance)
 	if state := reg.StateOf(context.Background(), id); state != StateOpen {
 		t.Fatalf("state = %s, want open before the probe", state)
 	}
@@ -121,9 +134,7 @@ func TestSlowProbeClosesOnAnEmptiedWindow(t *testing.T) {
 	// The window was emptied by the close: slow calls from the previous
 	// episode are gone, so the fresh evidence starts from zero and the
 	// breaker stays closed.
-	for i := 0; i < slowMinSamples-1; i++ {
-		report(t, reg, id, OutcomeSlow)
-	}
+	reportSlow(t, reg, id, slowMinSamples-1)
 	if state := reg.StateOf(context.Background(), id); state != StateClosed {
 		t.Fatalf("state = %s, want closed: old evidence must not outlive the close", state)
 	}
@@ -136,10 +147,7 @@ func TestSlowProbeFaultReopens(t *testing.T) {
 	reg, advance, _ := newSlowFixture(t, 0.5)
 	const id = "u1"
 
-	for i := 0; i < slowMinSamples; i++ {
-		advance(1)
-		report(t, reg, id, OutcomeSlow)
-	}
+	saturateWindow(t, reg, id, advance)
 	advance(120) // the cooldown elapses
 	p, ok := reg.Allow(context.Background(), id)
 	if !ok {
@@ -162,10 +170,7 @@ func TestSlowReadsNeverAllocateTheProbe(t *testing.T) {
 	reg, advance, _ := newSlowFixture(t, 0.5)
 	const id = "u1"
 
-	for i := 0; i < slowMinSamples; i++ {
-		advance(1)
-		report(t, reg, id, OutcomeSlow)
-	}
+	saturateWindow(t, reg, id, advance)
 	advance(120) // the cooldown elapses
 	if state := reg.StateOf(context.Background(), id); state != StateHalfOpen {
 		t.Fatalf("state = %s, want the lazy half-open", state)
@@ -204,10 +209,7 @@ func TestSlowResetEmptiesEverything(t *testing.T) {
 	reg, advance, _ := newSlowFixture(t, 0.5)
 	const id = "u1"
 
-	for i := 0; i < slowMinSamples; i++ {
-		advance(1)
-		report(t, reg, id, OutcomeSlow)
-	}
+	saturateWindow(t, reg, id, advance)
 	if state := reg.StateOf(context.Background(), id); state != StateOpen {
 		t.Fatalf("state = %s, want open before the reset", state)
 	}
@@ -299,10 +301,7 @@ func TestSlowAbsorbedAndExpiredPaths(t *testing.T) {
 
 	// Saturate the window; the open transition fires the observer.
 	advance(1)
-	for i := 0; i < slowMinSamples; i++ {
-		advance(1)
-		report(t, reg, id, OutcomeSlow)
-	}
+	saturateWindow(t, reg, id, advance)
 	if state := reg.StateOf(context.Background(), id); state != StateOpen {
 		t.Fatalf("state = %s, want open", state)
 	}

@@ -57,14 +57,22 @@ func chatHandler(t *testing.T, candidates []upstream.Upstream) http.Handler {
 	return NewInference(protocol.FormatOpenAIChat, stubRouter{candidates: candidates}, relayer)
 }
 
+// postWithCarrier fires one POST with the carrier attached to its
+// context and returns the recorder.
+func postWithCarrier(t *testing.T, handler http.Handler, carrier *pipeline.Carrier, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req = req.WithContext(pipeline.WithCarrier(req.Context(), carrier))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
 func TestInferenceWithoutCarrierRendersMisconfigured(t *testing.T) {
 	t.Parallel()
 	handler := NewInference(protocol.FormatOpenAIChat, stubRouter{}, relay.New(retry.Policy{MaxAttempts: 1}, nil))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"m1","messages":[]}`))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := postWithCarrier(t, handler, nil, `{"model":"m1","messages":[]}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
@@ -78,11 +86,7 @@ func TestInferenceRejectsMissingModel(t *testing.T) {
 	handler := chatHandler(t, []upstream.Upstream{usageLessUpstream{}})
 	carrier := &pipeline.Carrier{Format: protocol.FormatOpenAIChat}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
-	req = req.WithContext(pipeline.WithCarrier(req.Context(), carrier))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := postWithCarrier(t, handler, carrier, `{"messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
@@ -104,11 +108,7 @@ func TestInferenceDeniesModelOutsideTier(t *testing.T) {
 		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"m1"}}},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"m2","messages":[{"role":"user","content":"hi"}]}`))
-	req = req.WithContext(pipeline.WithCarrier(req.Context(), carrier))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := postWithCarrier(t, handler, carrier, `{"model":"m2","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "model_not_allowed") {
 		t.Fatalf("status = %d body = %s, want 403 model_not_allowed", rec.Code, rec.Body.String())
 	}
@@ -122,11 +122,7 @@ func TestInferenceSettlesByReservationWithoutUsage(t *testing.T) {
 	carrier := &pipeline.Carrier{Format: protocol.FormatOpenAIChat, Tokens: 51}
 	handler := chatHandler(t, []upstream.Upstream{usageLessUpstream{}})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hello"}]}`))
-	req = req.WithContext(pipeline.WithCarrier(req.Context(), carrier))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := postWithCarrier(t, handler, carrier, `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
 	}

@@ -15,12 +15,9 @@ import (
 func TestCandidatesDisabledModelIsErrDisabled(t *testing.T) {
 	t.Parallel()
 	sw := NewSwitch([]string{"m1"}, []string{"u1"})
-	priority, err := NewPriority([]Binding{
+	priority := buildPriority(t, []Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 	}, WithSwitch(sw))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 
 	if err := sw.SetModel("m1", false); err != nil {
 		t.Fatalf("disable: %v", err)
@@ -41,21 +38,15 @@ func TestCandidatesDisabledModelIsErrDisabled(t *testing.T) {
 func TestCandidatesSkipDisabledUpstreams(t *testing.T) {
 	t.Parallel()
 	sw := NewSwitch([]string{"m1"}, []string{"u1", "u2"})
-	priority, err := NewPriority([]Binding{
+	priority := buildPriority(t, []Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u2"}},
 	}, WithSwitch(sw))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 
 	if err := sw.SetUpstream("u1", false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	candidates, err := priority.Candidates(context.Background(), "m1")
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
+	candidates := resolveCandidates(t, priority, "m1")
 	if len(candidates) != 1 || candidates[0].ID() != "u2" {
 		t.Fatalf("candidates = %v, want only u2", candidateIDs(candidates))
 	}
@@ -73,12 +64,9 @@ func TestCandidatesSkipDisabledUpstreams(t *testing.T) {
 func TestCandidatesDisabledWildcardModel(t *testing.T) {
 	t.Parallel()
 	sw := NewSwitch([]string{"any"}, []string{"u1"})
-	priority, err := NewPriority([]Binding{
+	priority := buildPriority(t, []Binding{
 		{Models: []string{"*"}, Upstream: stubUp{id: "u1"}},
 	}, WithSwitch(sw))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 
 	// The wildcard's client-facing alias is the requested name itself;
 	// disabling it gates every model this upstream would serve.

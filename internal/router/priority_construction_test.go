@@ -43,19 +43,12 @@ func TestNewPriorityRejectsEmptyModels(t *testing.T) {
 // breaker.
 func TestWithBreakerNilDisablesPrefilter(t *testing.T) {
 	t.Parallel()
-	priority, err := NewPriority([]Binding{
+	priority := buildPriority(t, []Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}},
 		{Models: []string{"*"}, Upstream: stubUp{id: "u2"}},
 	}, WithBreaker(nil))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 
-	candidates, err := priority.Candidates(context.Background(), "m1")
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
-	if len(candidates) != 2 {
+	if candidates := resolveCandidates(t, priority, "m1"); len(candidates) != 2 {
 		t.Fatalf("candidates = %v, want both upstreams", candidateIDs(candidates))
 	}
 }
@@ -69,14 +62,11 @@ func TestCandidatesCombinesExactAndWildcard(t *testing.T) {
 	primary := stubUp{id: "exact-primary"}
 	generalist := stubUp{id: "wildcard"}
 	exactFallback := stubUp{id: "exact-fallback"}
-	priority, err := NewPriority([]Binding{
+	priority := buildPriority(t, []Binding{
 		{Models: []string{"m1"}, Upstream: primary},
 		{Models: []string{"*"}, Upstream: generalist},
 		{Models: []string{"m1", "m2"}, Upstream: exactFallback},
 	})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
 
 	candidates, err := priority.Candidates(context.Background(), "m1")
 	if err != nil {
@@ -107,12 +97,9 @@ func TestCandidatesCombinesExactAndWildcard(t *testing.T) {
 // the error carries the requested model, and it is not ErrUnavailable.
 func TestCandidatesErrorNamesTheModel(t *testing.T) {
 	t.Parallel()
-	priority, err := NewPriority([]Binding{{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
+	priority := buildPriority(t, []Binding{{Models: []string{"m1"}, Upstream: stubUp{id: "u1"}}})
 
-	_, err = priority.Candidates(context.Background(), "m2")
+	_, err := priority.Candidates(context.Background(), "m2")
 	if err == nil {
 		t.Fatal("unbound model resolved")
 	}

@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -29,15 +28,9 @@ func stallingStream(ctx context.Context, stall time.Duration, resume io.Reader) 
 	pr, pw := io.Pipe()
 	go func() {
 		_, _ = fmt.Fprint(pw, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
-		timer := time.NewTimer(stall)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			pw.CloseWithError(ctx.Err())
+		if !waitOrDie(ctx, pw, stall) {
 			return
 		}
-		timer.Stop()
 		if resume != nil {
 			_, _ = io.Copy(pw, resume)
 		}
@@ -82,15 +75,9 @@ func (p *recordingPermission) Report(o circuit.Outcome) {
 func TestIdleWatchdogCutsSilentStream(t *testing.T) {
 	t.Parallel()
 	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
 		// Stalls long past the idle window; the stream ceiling would
 		// only fire much later, so the cut must be the idle one.
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(stallingStream(ctx, 10*time.Second, nil)),
-		}, nil
+		return sseResponse(stallingStream(ctx, 10*time.Second, nil)), nil
 	}}
 	breaker := &recordingBreaker{}
 	exec := New(retry.Policy{MaxAttempts: 1}, nil,
@@ -143,13 +130,7 @@ func TestIdleWatchdogHeldOffByActivity(t *testing.T) {
 func TestIdleWatchdogDisabledByDefault(t *testing.T) {
 	t.Parallel()
 	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(stallingStream(ctx, time.Minute, nil)),
-		}, nil
+		return sseResponse(stallingStream(ctx, time.Minute, nil)), nil
 	}}
 	breaker := &recordingBreaker{}
 	exec := New(retry.Policy{MaxAttempts: 1}, nil,
