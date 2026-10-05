@@ -61,9 +61,10 @@ func TestTrackerFailurePenaltyDemotes(t *testing.T) {
 	}
 }
 
-// contendAgainst runs each body from four goroutines at once, 200
-// iterations per goroutine, and waits for all of them; under -race any
-// unsynchronized pass fails the test.
+// contendAgainst runs each body from four goroutines at once and
+// waits for all of them; each body carries its own iteration loop, so
+// four workers means four concurrent copies of the whole workload.
+// Under -race any unsynchronized pass fails the test.
 func contendAgainst(bodies ...func()) {
 	var wg sync.WaitGroup
 	for _, body := range bodies {
@@ -71,9 +72,7 @@ func contendAgainst(bodies ...func()) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for j := 0; j < 200; j++ {
-					body()
-				}
+				body()
 			}()
 		}
 	}

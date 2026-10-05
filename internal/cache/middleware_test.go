@@ -94,6 +94,7 @@ func errUpstream(fetches *atomic.Int64, status int, body, retryAfter string) htt
 			w.Header().Set("Retry-After", retryAfter)
 		}
 		w.WriteHeader(status)
+		// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 		_, _ = w.Write([]byte(body))
 	})
 }

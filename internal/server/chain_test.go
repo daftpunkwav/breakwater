@@ -343,7 +343,7 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 
 	sawCancel := make(chan struct{}, 1)
 	backend := endlessStreamBackend(t, sawCancel)
-	ledger := seededLedger(t, "t1", initial)
+	ledger := &settleWitness{Ledger: seededLedger(t, "t1", initial)}
 	handler := buildChain(t, backend.URL, ledger)
 
 	// Read the head of the stream, then walk away mid-flight.
@@ -355,6 +355,12 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 
 	awaitUpstreamCancel(t, sawCancel)
 	awaitSettlement(t, ledger, "t1", initial, reservation)
+	// The balance move alone cannot distinguish a usage settlement from
+	// an abandoned open lease (the reservation already deducted it), so
+	// the Settle call itself is the evidence this test exists to pin.
+	if ledger.settles.Load() == 0 {
+		t.Fatal("no Settle call succeeded: the lease never settled by usage")
+	}
 }
 
 // endlessStreamBackend serves an SSE stream that never ends on its own;
@@ -396,9 +402,27 @@ func awaitUpstreamCancel(t *testing.T, sawCancel <-chan struct{}) {
 	}
 }
 
+// settleWitness wraps a ledger and counts the Settle calls that ended
+// successfully, so a test can prove settlement ran instead of inferring
+// it from a balance the reservation alone already explains.
+type settleWitness struct {
+	quota.Ledger
+	settles atomic.Int64
+}
+
+func (w *settleWitness) Settle(ctx context.Context, leaseID string, usedTokens int64) error {
+	err := w.Ledger.Settle(ctx, leaseID, usedTokens)
+	if err == nil {
+		w.settles.Add(1)
+	}
+	return err
+}
+
 // awaitSettlement polls until the lease settles below the initial
 // balance: anything below proves tokens were consumed, the floor proves
 // the disconnected request was never surcharged past the reservation.
+// The balance alone cannot prove settlement — the reservation itself
+// already deducts it — so pair this helper with the witness's count.
 func awaitSettlement(t *testing.T, ledger quota.Ledger, tenantID string, initial, reservation int64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

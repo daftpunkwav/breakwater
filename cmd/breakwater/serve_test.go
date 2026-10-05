@@ -117,7 +117,10 @@ func redisModeEnv(t *testing.T, extra ...string) {
 // startGateway loads the config from the current environment, binds an
 // ephemeral listener and hands it to serve in the background, waiting
 // for readiness. The caller owns the context and reads done after
-// cancelling it.
+// cancelling it; serve owns the listener and closes it on shutdown, so
+// the context's cancellation (registered as a cleanup by the callers
+// before startGateway runs) is also what releases the port on every
+// exit path, readiness failure included.
 func startGateway(t *testing.T, ctx context.Context) (addr string, done chan error) {
 	t.Helper()
 	cfg, err := config.Load()
@@ -128,9 +131,6 @@ func startGateway(t *testing.T, ctx context.Context) (addr string, done chan err
 	if err != nil {
 		t.Fatalf("bind listener: %v", err)
 	}
-	// serve owns the listener and closes it on shutdown; this cleanup
-	// only covers the paths that never handed it over.
-	t.Cleanup(func() { _ = listener.Close() })
 	done = serveUntilReady(t, ctx, cfg, listener)
 	return listener.Addr().String(), done
 }
@@ -142,6 +142,9 @@ func startGateway(t *testing.T, ctx context.Context) (addr string, done chan err
 func runGateway(t *testing.T) (addr string, stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
+	// Registered before startGateway: a readiness failure must cancel
+	// serve so it shuts down and releases the listener.
+	t.Cleanup(cancel)
 	addr, done := startGateway(t, ctx)
 	return addr, func() {
 		cancel()

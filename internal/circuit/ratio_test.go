@@ -68,8 +68,7 @@ func expectAdmitted(t *testing.T, reg *RatioRegistry, id, msg string) Permission
 // with msg if the guard admits.
 func expectDenied(t *testing.T, reg *RatioRegistry, id, msg string) {
 	t.Helper()
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
+	if p, ok := reg.Allow(context.Background(), id); ok || p != nil {
 		t.Fatal(msg)
 	}
 }
