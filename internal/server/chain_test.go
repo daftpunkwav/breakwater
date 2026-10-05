@@ -354,13 +354,19 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 	_ = resp.Body.Close()
 
 	awaitUpstreamCancel(t, sawCancel)
-	awaitSettlement(t, ledger, "t1", initial, reservation)
 	// The balance move alone cannot distinguish a usage settlement from
 	// an abandoned open lease (the reservation already deducted it), so
 	// the Settle call itself is the evidence this test exists to pin.
-	if ledger.settles.Load() == 0 {
-		t.Fatal("no Settle call succeeded: the lease never settled by usage")
+	// The correction lands asynchronously after next() returns, so poll
+	// for it instead of reading the witness once.
+	deadline := time.Now().Add(5 * time.Second)
+	for ledger.settles.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no Settle call succeeded: the lease never settled by usage")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	awaitSettlement(t, ledger, "t1", initial, reservation)
 }
 
 // endlessStreamBackend serves an SSE stream that never ends on its own;
