@@ -65,9 +65,9 @@ services reads lower, because whole SQL paths sit behind
 
 | Package | Local, no databases | With both services |
 | ------- | ------------------- | ------------------ |
-| `internal/auth` | 90.3% | ~99% |
-| `internal/insights` | 87.2% | ~99% |
-| `cmd/breakwater` | 92.3% | ~96% |
+| `internal/auth` | 90.7% | ~96% |
+| `internal/insights` | 87.3% | ~98% |
+| `cmd/breakwater` | 94.0% | ~96% |
 
 Every other package reads ≥95% locally, without any service. What
 remains uncovered in `cmd/breakwater` even with both databases is a set

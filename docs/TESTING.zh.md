@@ -60,9 +60,9 @@ PostgreSQL，因此数据库门控的集成测试在那里运行——这正是�
 
 | 包 | 本地、无数据库 | 双服务齐备 |
 | ------- | ------------------- | ------------------ |
-| `internal/auth` | 90.3% | ~99% |
-| `internal/insights` | 87.2% | ~99% |
-| `cmd/breakwater` | 92.3% | ~96% |
+| `internal/auth` | 90.7% | ~96% |
+| `internal/insights` | 87.3% | ~98% |
+| `cmd/breakwater` | 94.0% | ~96% |
 
 其余所有包在本地、无任何服务的情况下即 ≥95%。即便双数据库齐备，
 `cmd/breakwater` 未覆盖的仍是一组防御性 error return——任何合法配置都无法
