@@ -54,16 +54,30 @@ func TestAutoDisableHookTransitionsOnce(t *testing.T) {
 }
 
 // assertMetricLine renders the registry and checks the exposition
-// carries metric's line with exactly the wanted sample value.
+// carries metric's line with exactly the wanted sample value: the
+// rendered number is parsed off the line and compared, so "10" cannot
+// satisfy a check for "1" the way a substring match would.
 func assertMetricLine(t *testing.T, metrics *obs.Metrics, metric string, want int) {
 	t.Helper()
 	var out strings.Builder
 	if err := metrics.Render(&out); err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	if !strings.Contains(out.String(), metric+strconv.Itoa(want)) {
-		t.Fatalf("exposition missing %s%d:\n%s", metric, want, out.String())
+	for _, line := range strings.Split(out.String(), "\n") {
+		raw, ok := strings.CutPrefix(line, metric)
+		if !ok {
+			continue
+		}
+		got, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			t.Fatalf("sample %q does not carry a number:\n%s", line, out.String())
+		}
+		if got != float64(want) {
+			t.Fatalf("%s sample = %g, want %d:\n%s", metric, got, want, out.String())
+		}
+		return
 	}
+	t.Fatalf("exposition missing %s%d:\n%s", metric, want, out.String())
 }
 
 // assertAutoDisabledCount renders the registry and checks the

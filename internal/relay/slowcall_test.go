@@ -52,17 +52,18 @@ func (b *outcomeRecorder) last() circuit.Outcome {
 }
 
 // bufferedAttemptOutcome drives one buffered attempt through an
-// executor with the given slow-call threshold (0 disables the
-// classification) over an upstream that sleeps delay before answering
-// an OK; the returned outcome is what the breaker received.
-func bufferedAttemptOutcome(t *testing.T, delay, threshold time.Duration) circuit.Outcome {
+// executor over an upstream that sleeps delay before answering an OK;
+// opts customize the executor (typically WithSlowCallThreshold, whose
+// omission exercises the zero default). The returned outcome is what
+// the breaker received.
+func bufferedAttemptOutcome(t *testing.T, delay time.Duration, opts ...Option) circuit.Outcome {
 	t.Helper()
 	br := &outcomeRecorder{}
 	up := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
 		time.Sleep(delay)
 		return jsonResponse(t, http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
 	}}
-	exec := New(testPolicy(), nil, WithBreaker(br), WithSlowCallThreshold(threshold))
+	exec := New(testPolicy(), nil, append([]Option{WithBreaker(br)}, opts...)...)
 
 	execute(t, exec, []upstream.Upstream{up}, false, `{"model":"m","messages":[]}`)
 	return br.last()
@@ -72,7 +73,7 @@ func bufferedAttemptOutcome(t *testing.T, delay, threshold time.Duration) circui
 // threshold reports OutcomeSlow to the breaker.
 func TestSlowBufferedAttemptReportsSlow(t *testing.T) {
 	t.Parallel()
-	if got := bufferedAttemptOutcome(t, 80*time.Millisecond, 20*time.Millisecond); got != circuit.OutcomeSlow {
+	if got := bufferedAttemptOutcome(t, 80*time.Millisecond, WithSlowCallThreshold(20*time.Millisecond)); got != circuit.OutcomeSlow {
 		t.Fatalf("reported outcome = %v, want slow", got)
 	}
 }
@@ -81,7 +82,7 @@ func TestSlowBufferedAttemptReportsSlow(t *testing.T) {
 // reports as success.
 func TestFastBufferedAttemptStaysSuccess(t *testing.T) {
 	t.Parallel()
-	if got := bufferedAttemptOutcome(t, 5*time.Millisecond, 20*time.Millisecond); got != circuit.OutcomeSuccess {
+	if got := bufferedAttemptOutcome(t, 5*time.Millisecond, WithSlowCallThreshold(20*time.Millisecond)); got != circuit.OutcomeSuccess {
 		t.Fatalf("reported outcome = %v, want success", got)
 	}
 }
@@ -91,7 +92,7 @@ func TestFastBufferedAttemptStaysSuccess(t *testing.T) {
 // opt-in.
 func TestNoThresholdNeverReclassifies(t *testing.T) {
 	t.Parallel()
-	if got := bufferedAttemptOutcome(t, 80*time.Millisecond, 0); got != circuit.OutcomeSuccess {
+	if got := bufferedAttemptOutcome(t, 80*time.Millisecond); got != circuit.OutcomeSuccess {
 		t.Fatalf("reported outcome = %v, want success without a threshold", got)
 	}
 }
