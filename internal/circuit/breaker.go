@@ -127,8 +127,7 @@ func (b *Registry) Allow(_ context.Context, upstreamID string) (Permission, bool
 	defer b.mu.Unlock()
 	s := b.stateOf(upstreamID)
 	return b.gov.allow(&s.machine,
-		func(grant *probeGrant) Permission { return &granted{s: s, breaker: b, grant: grant} },
-		func() { s.failures = 0 })
+		func(grant *probeGrant) Permission { return &granted{s: s, breaker: b, grant: grant} })
 }
 
 // StateOf implements Breaker. Reading state performs lazy transitions
@@ -138,7 +137,7 @@ func (b *Registry) StateOf(_ context.Context, upstreamID string) State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s := b.stateOf(upstreamID)
-	return b.gov.observe(&s.machine, func() { s.failures = 0 })
+	return b.gov.observe(&s.machine)
 }
 
 // Reset implements Breaker: an operator forcing the breaker closed.
@@ -215,13 +214,13 @@ func (g *granted) Report(outcome Outcome) {
 			// A probe the gateway itself truncated proves nothing about
 			// the upstream: back to open with a fresh cooldown, exactly
 			// like an expired probe, instead of closing on no evidence.
-			b.gov.reclaim(&s.machine, now, nil)
+			b.gov.reclaim(&s.machine, now)
 			return
 		}
 		if now.After(s.probe.deadline) && (outcome == OutcomeSuccess || outcome == OutcomeSlow) {
 			// A success reported after its own deadline is unreliable;
 			// treat the probe as timed out.
-			b.gov.reclaim(&s.machine, now, nil)
+			b.gov.reclaim(&s.machine, now)
 			return
 		}
 		s.probe = nil

@@ -128,8 +128,7 @@ func (s *SlowRegistry) Allow(_ context.Context, upstreamID string) (Permission, 
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
 	return s.gov.allow(&st.machine,
-		func(grant *probeGrant) Permission { return &slowPermission{s: s, st: st, grant: grant} },
-		st.clearWindow)
+		func(grant *probeGrant) Permission { return &slowPermission{s: s, st: st, grant: grant} })
 }
 
 // StateOf implements Breaker: reading performs the lazy transitions
@@ -139,7 +138,7 @@ func (s *SlowRegistry) StateOf(_ context.Context, upstreamID string) State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
-	return s.gov.observe(&st.machine, st.clearWindow)
+	return s.gov.observe(&st.machine)
 }
 
 // Reset implements Breaker: an operator forcing the breaker closed. The
@@ -259,13 +258,13 @@ func (p *slowPermission) Report(outcome Outcome) {
 			return
 		}
 		if outcome == OutcomeGatewayTerminated {
-			s.gov.reclaim(&st.machine, now, nil)
+			s.gov.reclaim(&st.machine, now)
 			return
 		}
 		if now.After(st.probe.deadline) && outcome != OutcomeServerFault {
 			// A healthy probe reported past its own deadline is
 			// unreliable; treat it as timed out.
-			s.gov.reclaim(&st.machine, now, nil)
+			s.gov.reclaim(&st.machine, now)
 			return
 		}
 		st.probe = nil

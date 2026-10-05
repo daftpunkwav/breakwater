@@ -56,9 +56,10 @@ type governor struct {
 }
 
 // allow applies the shared admission rule to one call. admit builds the
-// strategy's permission; grant is nil outside half-open. onClosed is
-// the strategy's own cleanup on entering closed (see enter).
-func (g *governor) allow(m *machine, admit func(*probeGrant) Permission, onClosed func()) (Permission, bool) {
+// strategy's permission; grant is nil outside half-open. The strategy's
+// closed-entry cleanup never runs here: admission lands on half-open at
+// the furthest, never on closed.
+func (g *governor) allow(m *machine, admit func(*probeGrant) Permission) (Permission, bool) {
 	now := g.now()
 	switch m.name {
 	case StateClosed:
@@ -70,7 +71,7 @@ func (g *governor) allow(m *machine, admit func(*probeGrant) Permission, onClose
 		}
 		// Cooldown elapsed: the breaker transitions to half-open and
 		// this call becomes the probe.
-		g.enter(m, StateHalfOpen, onClosed)
+		g.enter(m, StateHalfOpen, nil)
 		grant := &probeGrant{deadline: now.Add(g.probeTimeout)}
 		m.probe = grant
 		return admit(grant), true
@@ -81,7 +82,7 @@ func (g *governor) allow(m *machine, admit func(*probeGrant) Permission, onClose
 		// must not inherit the slot the dead probe held.
 		if m.probe != nil {
 			if now.After(m.probe.deadline) {
-				g.reclaim(m, now, onClosed)
+				g.reclaim(m, now)
 			}
 			// Another probe is outstanding: denied, never queued.
 			return nil, false
@@ -97,18 +98,18 @@ func (g *governor) allow(m *machine, admit func(*probeGrant) Permission, onClose
 // cooldown elapsed moves to half-open, an expired probe is reclaimed —
 // so a router's pre-filter never sees stale positions. A read never
 // allocates the probe slot, so a read followed by the attempt still
-// finds the slot free.
-func (g *governor) observe(m *machine, onClosed func()) State {
+// finds the slot free, and never lands on closed.
+func (g *governor) observe(m *machine) State {
 	now := g.now()
 	switch m.name {
 	case StateOpen:
 		if now.Sub(m.openedAt) >= g.cooldown {
-			g.enter(m, StateHalfOpen, onClosed)
+			g.enter(m, StateHalfOpen, nil)
 			return StateHalfOpen
 		}
 	case StateHalfOpen:
 		if m.probe != nil && now.After(m.probe.deadline) {
-			g.reclaim(m, now, onClosed)
+			g.reclaim(m, now)
 		}
 	}
 	return m.name
@@ -141,9 +142,10 @@ func (g *governor) enter(m *machine, to State, onClosed func()) {
 
 // reclaim absorbs an abandoned or expired probe as a server fault,
 // moving half-open back to open with a fresh cooldown stamped from the
-// observation moment.
-func (g *governor) reclaim(m *machine, now time.Time, onClosed func()) {
+// observation moment. The strategy's closed-entry cleanup never runs
+// here: the machine lands on open, never on closed.
+func (g *governor) reclaim(m *machine, now time.Time) {
 	m.probe = nil
-	g.enter(m, StateOpen, onClosed)
+	g.enter(m, StateOpen, nil)
 	m.openedAt = now
 }
