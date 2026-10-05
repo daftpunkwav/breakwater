@@ -78,6 +78,13 @@ configuration, so their error branches exist for a future where they are
 constructed some other way. Those are disclosed rather than faked with
 tests that would pass regardless.
 
+Pointing the DSN at an empty database needs one thing first: apply
+`deploy/schema.sql` to it. Three packages' tests apply that file
+themselves — from five call sites — and `go test` runs packages
+concurrently, so two of them can pass the same `IF NOT EXISTS` check and
+the loser's create fails on a duplicate catalog key. The CI job applies
+the schema once before the suite for the same reason.
+
 Verify the local figures with:
 
     go test -cover ./...
