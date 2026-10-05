@@ -149,7 +149,10 @@ func (s *SlowRegistry) Reset(_ context.Context, upstreamID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
-	*st = slowState{id: st.id, name: StateClosed, lastWrite: s.gov.now()}
+	*st = slowState{
+		machine:   machine{id: st.id, name: StateClosed},
+		lastWrite: s.gov.now(),
+	}
 }
 
 // clearWindow empties the evidence; entering closed drops what the
