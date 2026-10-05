@@ -9,7 +9,8 @@
  * Responsibilities:
  * - Open when the window's slow share reaches the configured ratio and
  *   the window holds enough samples to trust, and probe back to health
- *   exactly like the consecutive machine
+ *   exactly like the consecutive machine — the positional skeleton both
+ *   run is the shared machine.go
  * - Nothing else: what counts as slow is the caller's classification —
  *   slow completions arrive as OutcomeSlow, carried by the report —
  *   and the breaker never reads a clock to judge speed
@@ -55,13 +56,10 @@ type slowBucket struct {
 	slow  int64
 }
 
-// slowState is the mutable per-upstream state: the machine position and
-// the rolling window.
+// slowState is the mutable per-upstream state: the shared machine
+// skeleton, the rolling window and the cursor the window rolls on.
 type slowState struct {
-	id        string
-	name      State
-	openedAt  time.Time
-	probe     *probeGrant
+	machine
 	buckets   [slowBuckets]slowBucket
 	offset    int
 	lastWrite time.Time
@@ -70,13 +68,12 @@ type slowState struct {
 // SlowRegistry is the slow-call-strategy breaker registry. It is safe
 // for concurrent use.
 type SlowRegistry struct {
-	mu         sync.Mutex
-	cfg        Config
+	mu sync.Mutex
+	// gov runs the positional skeleton; slowRatio is this strategy's
+	// evidence rule.
+	gov        governor
+	slowRatio  float64
 	byUpstream map[string]*slowState
-	now        func() time.Time
-	// onTransition observes every state change (metrics hook); nil
-	// disables observation.
-	onTransition func(upstreamID string, from, to State)
 }
 
 // SlowOption customizes a SlowRegistry.
@@ -84,12 +81,12 @@ type SlowOption func(*SlowRegistry)
 
 // SlowClock overrides the clock for tests.
 func SlowClock(now func() time.Time) SlowOption {
-	return func(s *SlowRegistry) { s.now = now }
+	return func(s *SlowRegistry) { s.gov.now = now }
 }
 
 // SlowOnTransition installs the state-change observer.
 func SlowOnTransition(fn func(upstreamID string, from, to State)) SlowOption {
-	return func(s *SlowRegistry) { s.onTransition = fn }
+	return func(s *SlowRegistry) { s.gov.onTransition = fn }
 }
 
 // NewSlowRegistry builds the slow-call-strategy breaker registry. The
@@ -109,9 +106,13 @@ func NewSlowRegistry(cfg Config, opts ...SlowOption) *SlowRegistry {
 		cfg.ProbeTimeout = defaultProbeTimeout
 	}
 	s := &SlowRegistry{
-		cfg:        cfg,
+		gov: governor{
+			cooldown:     cfg.Cooldown,
+			probeTimeout: cfg.ProbeTimeout,
+			now:          time.Now,
+		},
+		slowRatio:  cfg.SlowRatio,
 		byUpstream: make(map[string]*slowState),
-		now:        time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -126,57 +127,19 @@ func (s *SlowRegistry) Allow(_ context.Context, upstreamID string) (Permission, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
-	now := s.now()
-
-	switch st.name {
-	case StateClosed:
-		return &slowPermission{s: s, st: st}, true
-
-	case StateOpen:
-		if now.Sub(st.openedAt) < s.cfg.Cooldown {
-			return nil, false
-		}
-		s.transition(st, StateHalfOpen)
-		grant := &probeGrant{deadline: now.Add(s.cfg.ProbeTimeout)}
-		st.probe = grant
-		return &slowPermission{s: s, st: st, grant: grant}, true
-
-	case StateHalfOpen:
-		if st.probe != nil {
-			if now.After(st.probe.deadline) {
-				s.reclaimProbe(st, now)
-			}
-			return nil, false
-		}
-		grant := &probeGrant{deadline: now.Add(s.cfg.ProbeTimeout)}
-		st.probe = grant
-		return &slowPermission{s: s, st: st, grant: grant}, true
-	}
-	return nil, false
+	return s.gov.allow(&st.machine,
+		func(grant *probeGrant) Permission { return &slowPermission{s: s, st: st, grant: grant} },
+		st.clearWindow)
 }
 
 // StateOf implements Breaker: reading performs the lazy transitions
 // (open cooldown elapsed -> half-open; expired probe -> open) so the
-// router's pre-filter never sees stale positions. A read never
-// allocates the probe slot.
+// router's pre-filter never sees stale positions.
 func (s *SlowRegistry) StateOf(_ context.Context, upstreamID string) State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
-	now := s.now()
-
-	switch st.name {
-	case StateOpen:
-		if now.Sub(st.openedAt) >= s.cfg.Cooldown {
-			s.transition(st, StateHalfOpen)
-			return StateHalfOpen
-		}
-	case StateHalfOpen:
-		if st.probe != nil && now.After(st.probe.deadline) {
-			s.reclaimProbe(st, now)
-		}
-	}
-	return st.name
+	return s.gov.observe(&st.machine, st.clearWindow)
 }
 
 // Reset implements Breaker: an operator forcing the breaker closed. The
@@ -187,44 +150,24 @@ func (s *SlowRegistry) Reset(_ context.Context, upstreamID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
-	*st = slowState{id: st.id, name: StateClosed, lastWrite: s.now()}
+	*st = slowState{id: st.id, name: StateClosed, lastWrite: s.gov.now()}
+}
+
+// clearWindow empties the evidence; entering closed drops what the
+// breaker opened on, so recovery starts from clean observation instead
+// of the backlog that armed it.
+func (st *slowState) clearWindow() {
+	st.buckets = [slowBuckets]slowBucket{}
 }
 
 // stateOf returns the per-upstream state, creating it in closed.
 func (s *SlowRegistry) stateOf(upstreamID string) *slowState {
 	st, ok := s.byUpstream[upstreamID]
 	if !ok {
-		st = &slowState{id: upstreamID, name: StateClosed, lastWrite: s.now()}
+		st = &slowState{machine: machine{id: upstreamID, name: StateClosed}, lastWrite: s.gov.now()}
 		s.byUpstream[upstreamID] = st
 	}
 	return st
-}
-
-// transition moves the machine and fires the observer.
-func (s *SlowRegistry) transition(st *slowState, to State) {
-	from := st.name
-	if from == to {
-		return
-	}
-	st.name = to
-	if to == StateOpen {
-		st.openedAt = s.now()
-	}
-	if to == StateClosed {
-		st.probe = nil
-		st.buckets = [slowBuckets]slowBucket{}
-	}
-	if s.onTransition != nil {
-		s.onTransition(st.id, from, to)
-	}
-}
-
-// reclaimProbe absorbs an abandoned or expired probe, moving half-open
-// back to open with a fresh cooldown.
-func (s *SlowRegistry) reclaimProbe(st *slowState, now time.Time) {
-	st.probe = nil
-	s.transition(st, StateOpen)
-	st.openedAt = now
 }
 
 // record adds one completion to the current bucket.
@@ -290,7 +233,7 @@ func (p *slowPermission) Report(outcome Outcome) {
 	}
 	p.reported = true
 	s, st := p.s, p.st
-	now := s.now()
+	now := s.gov.now()
 
 	switch st.name {
 	case StateClosed:
@@ -302,8 +245,8 @@ func (p *slowPermission) Report(outcome Outcome) {
 			st.record(now, slow)
 			total, slowCount := st.share(now)
 			if total >= slowMinSamples {
-				if share := float64(slowCount) / float64(total); share >= s.cfg.SlowRatio {
-					s.transition(st, StateOpen)
+				if share := float64(slowCount) / float64(total); share >= s.slowRatio {
+					s.gov.enter(&st.machine, StateOpen, nil)
 				}
 			}
 		}
@@ -316,24 +259,24 @@ func (p *slowPermission) Report(outcome Outcome) {
 			return
 		}
 		if outcome == OutcomeGatewayTerminated {
-			s.reclaimProbe(st, now)
+			s.gov.reclaim(&st.machine, now, nil)
 			return
 		}
 		if now.After(st.probe.deadline) && outcome != OutcomeServerFault {
 			// A healthy probe reported past its own deadline is
 			// unreliable; treat it as timed out.
-			s.reclaimProbe(st, now)
+			s.gov.reclaim(&st.machine, now, nil)
 			return
 		}
 		st.probe = nil
 		if outcome == OutcomeServerFault {
-			s.transition(st, StateOpen)
+			s.gov.enter(&st.machine, StateOpen, nil)
 			return
 		}
 		// A healthy probe — fast or slow — closes the machine; the
 		// transition empties the window, so recovery starts from clean
 		// evidence instead of the backlog that opened the breaker.
-		s.transition(st, StateClosed)
+		s.gov.enter(&st.machine, StateClosed, st.clearWindow)
 
 	case StateOpen:
 		// A very late report after a concurrent reclaim: absorbed.

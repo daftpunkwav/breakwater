@@ -230,7 +230,7 @@ func TestSlowRatioDefaultAndClamp(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []float64{0, -1, 1.5, math.NaN()} {
 		reg := NewSlowRegistry(Config{SlowRatio: bad})
-		if reg.cfg.SlowRatio != defaultSlowRatio {
+		if reg.slowRatio != defaultSlowRatio {
 			t.Fatalf("SlowRatio %v survived, want the default %v", bad, defaultSlowRatio)
 		}
 	}

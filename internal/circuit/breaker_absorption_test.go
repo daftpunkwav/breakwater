@@ -87,7 +87,7 @@ func TestReportAfterConcurrentReclaimIsAbsorbed(t *testing.T) {
 func TestAllowFailsClosedOnUnknownState(t *testing.T) {
 	t.Parallel()
 	b, _ := testRegistry(t, nil)
-	b.byUpstream["u"] = &state{id: "u", name: State("corrupted")}
+	b.byUpstream["u"] = &state{machine: machine{id: "u", name: State("corrupted")}}
 
 	if _, ok := b.Allow(context.Background(), "u"); ok {
 		t.Fatal("unknown state must not be granted a call")
@@ -102,8 +102,8 @@ func TestTransitionToSameStateIsNoOp(t *testing.T) {
 	fired := false
 	b, _ := testRegistry(t, nil, OnTransition(func(string, State, State) { fired = true }))
 
-	s := &state{id: "u", name: StateClosed, failures: 2}
-	b.transition(s, StateClosed)
+	s := &state{machine: machine{id: "u", name: StateClosed}, failures: 2}
+	b.gov.enter(&s.machine, StateClosed, func() { s.failures = 0 })
 
 	if fired {
 		t.Fatal("observer fired for a no-op transition")
