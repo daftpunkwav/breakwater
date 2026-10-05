@@ -128,7 +128,7 @@ func TestServeDrainTimeoutExitsCleanly(t *testing.T) {
 	// close ever arrives — the test releases the handler itself.
 	reached := make(chan struct{})
 	release := make(chan struct{})
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		close(reached)
 		<-release
 	}))
@@ -308,7 +308,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		// (observation flush, then the returned error). The exact same
 		// address form is reused — a bare ":port" could still bind on
 		// the dual-stack wildcard.
-		blocker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+		blocker := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 		defer blocker.Close()
 		setEnv(t, baseEnv(blocker.Listener.Addr().String()))
 		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
@@ -496,6 +496,7 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	// statement by statement, after stripping the comment lines (a
 	// bare semicolon split would otherwise execute comment-only
 	// fragments).
+	// nosemgrep: go_filesystem_rule-fileread -- path is a fixed literal inside the repository
 	schema, err := os.ReadFile(filepath.Join("..", "..", "deploy", "schema.sql"))
 	if err != nil {
 		t.Fatalf("read deploy schema: %v", err)
@@ -518,6 +519,7 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 		if strings.TrimSpace(stmt) == "" {
 			continue
 		}
+		// nosemgrep: go_sql_rule-concat-sqli -- statements come from the repository's own deploy/schema.sql
 		if _, err := conn.Exec(connCtx, stmt); err != nil {
 			t.Fatalf("apply schema statement %q: %v", firstLine(stmt), err)
 		}

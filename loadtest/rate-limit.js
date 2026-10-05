@@ -4,6 +4,9 @@
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... rate-limit.js
 // Tier RPM must be small for the run (e.g. 60): over-limit is the point.
+//
+// __ENV is the k6 runtime's environment object, not a Node global.
+/* global __ENV */
 import http from 'k6/http';
 import { check } from 'k6';
 import { Rate } from 'k6/metrics';

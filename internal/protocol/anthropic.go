@@ -175,8 +175,10 @@ func (anthropicWire) RenderSuccess(w http.ResponseWriter, status int, header htt
 }
 
 // RenderUpstreamError implements Wire: the upstream OpenAI error body
-// re-rendered in the Messages error envelope, same status.
-func (anthropicWire) RenderUpstreamError(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
+// re-rendered in the Messages error envelope, same status. The Messages
+// envelope carries no upstream headers, so the passthrough header set
+// the port hands over is not read.
+func (anthropicWire) RenderUpstreamError(w http.ResponseWriter, status int, _ http.Header, upstreamBody []byte) {
 	message, _ := parseUpstreamError(upstreamBody)
 	writeJSONResponse(w, status, anthropicErrorBody("api_error", message))
 }

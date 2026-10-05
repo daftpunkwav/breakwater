@@ -80,7 +80,7 @@ func TestReconcileOnceSurfacesAppendFailure(t *testing.T) {
 // scriptedSnapshotSource answers every read with the same snapshot.
 type scriptedSnapshotSource struct{ snap *Snapshot }
 
-func (s *scriptedSnapshotSource) TenantSnapshot(_ context.Context, tenantID string, takenAt time.Time) (*Snapshot, error) {
+func (s *scriptedSnapshotSource) TenantSnapshot(_ context.Context, _ string, takenAt time.Time) (*Snapshot, error) {
 	snap := *s.snap
 	snap.TakenAt = takenAt
 	return &snap, nil

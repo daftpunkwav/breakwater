@@ -47,7 +47,7 @@ type fakeTx struct {
 	sqls    []string
 }
 
-func (f *fakeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+func (f *fakeTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	f.sqls = append(f.sqls, sql)
 	if f.calls >= len(f.answers) {
 		return &scriptedRow{err: errors.New("unexpected query")}

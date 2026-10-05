@@ -22,7 +22,9 @@ package protocol
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
+	"strings"
 )
 
 // Format names one client-facing API surface.
@@ -192,22 +194,85 @@ func ValidHeaderValue(v string) bool {
 	return true
 }
 
+// PlainContentType labels a relayed upstream body whose own media type
+// may not be forwarded (see ForwardedContentType).
+const PlainContentType = "text/plain; charset=utf-8"
+
+// ForwardedContentType returns the Content-Type to relay for an upstream
+// response whose media type is v, or fallback when v may not be relayed.
+// Three values may not: one that is not a legal header field value, one a
+// browser renders as a document, and one a browser cannot parse as a media
+// type at all — an unparseable label is one the browser sniffs, so it is
+// replaced rather than relayed. A document served from the gateway's own
+// origin would run whatever the upstream put in the body there, so the
+// label is replaced even though the bytes are relayed unchanged: this is a
+// wire passthrough, not a renderer. The caller picks the fallback because
+// it knows the shape of the body it is writing.
+func ForwardedContentType(v, fallback string) string {
+	if v == "" || !ValidHeaderValue(v) {
+		return fallback
+	}
+	mediaType, _, err := mime.ParseMediaType(v)
+	// A bare token with no subtype is not a media type a browser can
+	// extract, which leaves the label to its sniffer. Go's parser accepts
+	// one, so the shape is required here as well.
+	if err != nil || !strings.Contains(mediaType, "/") || rendersAsDocument(mediaType) {
+		return fallback
+	}
+	return v
+}
+
+// rendersAsDocument reports whether a parsed media type — lowercased and
+// free of parameters, which is the essence a browser compares — is one a
+// browser renders as a document, and therefore a context in which a script
+// in the body runs. Three families qualify. The HTML and XML MIME types,
+// which WHATWG MIME Sniffing uses as supplied. The unknown labels, which it
+// hands to the sniffing algorithm, so an HTML body under one of those
+// becomes a document all the same. And multipart/x-mixed-replace, whose
+// parts the HTML navigation algorithm processes one by one from a top-level
+// context, so an HTML part is rendered like any other navigation response.
+// Every other supplied type is used as it stands.
+func rendersAsDocument(mediaType string) bool {
+	switch mediaType {
+	case "text/html", "application/xml", "text/xml", "multipart/x-mixed-replace",
+		"unknown/unknown", "application/unknown", "*/*":
+		return true
+	}
+	return strings.HasSuffix(mediaType, "+xml")
+}
+
 // renderExchangeBody writes status, selected headers and body. A
 // broken upstream can report a status outside the renderable range;
 // net/http panics on those, so the passthrough clamps instead. The
 // selected headers carry upstream-controlled values, so each one is
-// forwarded only when it is a legal header field value.
+// forwarded only when it is a legal header field value, and the media
+// type only when it is not a document a browser would render (see
+// ForwardedContentType).
+//
+// The body is opaque upstream bytes, relayed unchanged: this is a wire
+// passthrough, not a renderer. What keeps those bytes from executing in
+// a browser is the label above them — the gateway renders no HTML
+// itself, sets no cookie, answers the inference routes on POST only, and
+// never relays a document media type.
 func renderExchangeBody(w http.ResponseWriter, status int, header http.Header, body []byte, names []string) {
 	if status < 100 || status > 599 {
 		status = http.StatusBadGateway
 	}
 	out := w.Header()
 	for _, name := range names {
+		if name == "Content-Type" {
+			continue
+		}
 		if v := header.Get(name); v != "" && ValidHeaderValue(v) {
 			out.Set(name, v)
 		}
 	}
+	// The media type is set even when the upstream sent none: left
+	// unset, net/http would sniff the upstream's own bytes and put them
+	// back in charge of the label.
+	out.Set("Content-Type", ForwardedContentType(header.Get("Content-Type"), PlainContentType))
 	w.WriteHeader(status)
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- upstream response body relayed byte-for-byte under a media type that is never a document; the gateway renders no HTML
 	_, _ = w.Write(body)
 }
 

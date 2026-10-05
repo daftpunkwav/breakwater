@@ -29,6 +29,12 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - `readBounded` fails the attempt when the body exceeds
   `maxResponseBytes` (32 MiB). It does not truncate. The stream commit
   point is the first byte written to the client.
+- The commit sets the client media type through
+  `protocol.ForwardedContentType`, falling back to `text/event-stream`:
+  a document a browser would render is not what the frames below are. It
+  also forwards `Cache-Control` when that is a legal field value, so an
+  upstream directive survives to the intermediaries; the rest of the
+  buffered passthrough set does not apply to a stream.
 - A streaming attempt uses the attempt timeout until the first byte,
   then the optional stream ceiling and the optional idle watchdog.
   Each body read re-arms the idle watchdog.

@@ -3,6 +3,9 @@
 // (the load-level complement of the -race unit test).
 //
 //   k6 run -e BASE_URL=... -e API_KEY=... -e ADMIN_TOKEN=... quota-race.js
+//
+// __ENV is the k6 runtime's environment object, not a Node global.
+/* global __ENV */
 import http from 'k6/http';
 import { check } from 'k6';
 
@@ -26,6 +29,7 @@ export const options = {
 const body = JSON.stringify({
   model: 'mock-gpt',
   temperature: 0.7, // bypass cache: every request must settle against usage
+  // nosemgrep: codacy.yaml.security.hard-coded-tokens -- max_tokens is an OpenAI request field, not a credential
   max_tokens: 32,
   messages: [{ role: 'user', content: 'drain the balance' }],
 });

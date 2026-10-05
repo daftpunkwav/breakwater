@@ -101,7 +101,20 @@ func TestLoadDefaults(t *testing.T) {
 // values are trimmed.
 func TestLoadOverrides(t *testing.T) {
 	cleanEnv(t)
+	setOverrideEnv(t)
 
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load with overrides: %v", err)
+	}
+	assertOverrides(t, cfg)
+}
+
+// setOverrideEnv sets every overridable variable to a value distinct from
+// its default, in one place, so the assertion half below reads as the
+// expectation table.
+func setOverrideEnv(t *testing.T) {
+	t.Helper()
 	t.Setenv(envAddr, "127.0.0.1:9090")
 	t.Setenv(envShutdownGrace, "45s")
 	t.Setenv(envRedisAddr, "redis.internal:6379")
@@ -138,12 +151,12 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envProbeBackoff, "4m")
 	t.Setenv(envFallbacks, `{"m1":["m2","m3"]}`)
 	t.Setenv(envContextLimits, `{"m1":128000,"m2":32000}`)
+}
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load with overrides: %v", err)
-	}
-
+// assertOverrides checks the configuration loaded by TestLoadOverrides
+// against the values setOverrideEnv wrote.
+func assertOverrides(t *testing.T, cfg Config) {
+	t.Helper()
 	if cfg.Server.Addr != "127.0.0.1:9090" || cfg.Server.ShutdownGrace != 45*time.Second {
 		t.Fatalf("server = %+v", cfg.Server)
 	}

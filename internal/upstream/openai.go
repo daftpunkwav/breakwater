@@ -104,8 +104,8 @@ func (o *OpenAI) ReviveCredentials() { o.ring.revive() }
 // the client body, so the rewrite applies whenever the two diverge.
 func (o *OpenAI) bodyModel(req Request) (string, bool) {
 	target := req.Model
-	if real, ok := o.modelMap[req.Model]; ok {
-		target = real
+	if provider, ok := o.modelMap[req.Model]; ok {
+		target = provider
 	}
 	carrier := req.Model
 	if req.BodyModel != "" {

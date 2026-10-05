@@ -17,3 +17,7 @@ Examples: `feat: initialize project repository`, `fix: long-session context over
 `type` as above; the description is kebab-case.
 
 Examples: `feat/context-compaction`, `fix/memory-dedup`
+
+---
+
+Last updated: 2026-10-05. Bump this line whenever the conventions above change.

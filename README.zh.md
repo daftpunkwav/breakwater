@@ -92,7 +92,9 @@ Translated 格式只收文本：非文本的 input part 或 message block 在摄
 拒。canonical wire 原样转发，所以 tool 声明与 tool 消息原样通过，而多模态
 的 `content` 数组无法通过 canonical 解码，作为畸形请求被拒。精确匹配缓存
 只服务 canonical wire（translated 格式的重放需要响应重渲染，这是刻意不做
-的伪装）。
+的伪装）。转发的响应只有在客户端可解析时才沿用上游的 `Content-Type`：浏览器
+会当作文档渲染的媒体类型——HTML、XHTML、SVG、XML——一律以 `text/plain`
+转发，因为网关自身不渲染 HTML，也绝不能把一份文档从自己的 origin 递给浏览器。
 
 ## Quick start
 

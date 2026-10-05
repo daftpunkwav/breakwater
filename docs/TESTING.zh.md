@@ -33,9 +33,11 @@
 | -------- | ----- | ------------- |
 | 被拒请求绝不抵达 upstream | `internal/server`、`internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`、`TestChainRateLimitsWithRetryAfter`、`TestChainQuotaExhaustionIsPaymentRequired`、`TestChainDeniesModelOutsideTier` |
 | 同一 cache key 的并发冷请求恰好一次上游回源 | `internal/cache` | `TestFlightSingleFetchUnderStampede`、`TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
+| 中途离场的发起者既不取消共享回源，也不使其上的 waiter 失败 | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`、`TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
 | panic 的回源释放其 waiter 而非卡死它们 | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | 请求绝不超出 attempt 上限，重试绝不超出全局 in-flight 预算 | `internal/retry` | `TestExecuteCapsAttempts`、`TestBudgetCapsInFlightRetries`、`TestBudgetReleaseAbsorbsImbalance` |
 | 第一个响应字节之后，loop 绝不重试 | `internal/retry`、`internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
+| 转发的响应绝不携带浏览器会当作文档渲染的媒体类型；三个可设置它的位置——缓冲 passthrough、流式 commit、缓存 replay——皆然 | `internal/protocol`、`internal/relay`、`internal/cache` | `TestForwardedContentType`、`TestRenderExchangeBodyReplacesDocumentContentType`、`TestStreamCommitReplacesDocumentContentType`、`TestCacheReplayReplacesDocumentContentType` |
 | 打开的 breaker 拒绝一切调用；half-open 恰放行一个 probe 并回收被弃的 | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`、`TestBreakerReclaimsAbandonedProbe` |
 | ratio 守卫按失败占比拒绝越来越多的调用，但绝不完全切断流量——每个强制放行间隔仍有一个调用通过 | `internal/circuit` | `TestRatioDenialTracksFailureShare`、`TestRatioForcePassAdmitsOnePerInterval` |
 | slow-call 熔断只在采样窗口的慢占比达标时开路（样本不足永不开路，故障算最强的慢证据），健康探测在清空后的窗口上关闭它 | `internal/circuit` | `TestSlowWindowNeedsSamples`、`TestSlowShareOpensTheBreaker`、`TestSlowProbeClosesOnAnEmptiedWindow` |
@@ -59,14 +61,20 @@ PostgreSQL，因此数据库门控的集成测试在那里运行——这正是�
 
 | 包 | 本地、无数据库 | 双服务齐备 |
 | ------- | ------------------- | ------------------ |
-| `internal/auth` | 90.3% | ~99% |
-| `internal/insights` | 87.2% | ~99% |
-| `cmd/breakwater` | 92.3% | ~96% |
+| `internal/auth` | 90.7% | ~96% |
+| `internal/insights` | 87.3% | ~98% |
+| `cmd/breakwater` | 94.0% | ~96% |
 
 其余所有包在本地、无任何服务的情况下即 ≥95%。即便双数据库齐备，
 `cmd/breakwater` 未覆盖的仍是一组防御性 error return——任何合法配置都无法
 抵达：upstream adapter 与 router 本就由已校验的配置构建，它们的错误分支是
 为未来其他构建方式预留的。这些如实披露，而不是用怎么跑都过的测试伪装。
+
+把 DSN 指向空数据库时，需要先做一件事：对该库应用 `deploy/schema.sql`。
+有三个包的测试会自行应用该文件——共五个调用点——而 `go test` 会并发运行
+各包，于是其中两个可能同时通过同一个 `IF NOT EXISTS` 检查，落败方的
+create 会因 catalog 键重复而失败。CI 的 job 出于同样原因在整套测试之前先
+应用一次 schema。
 
 本地数字用以下命令验证：
 

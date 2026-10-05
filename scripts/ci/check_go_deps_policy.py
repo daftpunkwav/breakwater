@@ -6,7 +6,8 @@ itself (first line of the listing) is skipped."""
 from __future__ import annotations
 
 import json
-import subprocess
+# The module graph is only reachable through the go toolchain.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -22,7 +23,11 @@ def main() -> int:
         return 0
 
     try:
-        listing = subprocess.run(
+        # A fixed literal argument list: no caller-supplied value reaches the
+        # command line. The toolchain is taken from PATH, which is where the
+        # CI job installs it (actions/setup-go) - resolving it here would only
+        # repeat the same PATH lookup.
+        listing = subprocess.run(  # nosec B603 B607
             ["go", "list", "-m", "all"],
             check=True,
             capture_output=True,

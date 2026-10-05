@@ -106,7 +106,11 @@ canonical wire forwards verbatim, so tool declarations and tool messages pass
 through untouched, while a multimodal `content` array fails the canonical decode
 and is rejected as a malformed request. The exact-match cache serves the
 canonical wire (translated replays would need response re-rendering,
-which is deliberately not faked).
+which is deliberately not faked). A relayed response keeps the
+upstream's `Content-Type` only when a client can parse it: a media type
+a browser renders as a document — HTML, XHTML, SVG, XML — is relayed as
+`text/plain`, since the gateway renders no HTML of its own and must not
+hand a browser a document from its own origin.
 
 ## Quick start
 

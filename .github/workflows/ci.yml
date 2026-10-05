@@ -93,12 +93,24 @@ jobs:
       # the same wait. pipefail is set because the runner's default
       # shell is bash -e — without it a failing go test would be masked
       # by tee and the floor would parse a half-written report.
+      #
+      # The deploy schema is applied once first, because three packages'
+      # DSN-gated tests apply it themselves — from five call sites — and
+      # go test runs packages concurrently: two of them can pass the same
+      # IF NOT EXISTS check, and the loser's create fails on a duplicate
+      # catalog key, which then cascades into every later test that needs
+      # the rows. With the tables already in place each later apply is a
+      # no-op.
       - name: Test
         run: |
           set -eo pipefail
+          psql "$BREAKWATER_TEST_POSTGRES_DSN" -v ON_ERROR_STOP=1 -q -f deploy/schema.sql
           go test -race -cover -timeout 8m ./... | tee /tmp/cover.txt
         env:
           BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
+          # The credential pair belongs to the ephemeral postgres service
+          # container declared above; it is not a repository secret.
+          #checkov:skip=CKV_SECRET_4:throwaway credential of the ephemeral CI postgres service
           BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable
 
       # The coverage floor (>=95% per package) is a hard gate, parsed

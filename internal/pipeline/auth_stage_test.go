@@ -69,7 +69,7 @@ func serveThroughAuth(t *testing.T, store auth.Store, format protocol.Format, he
 
 	var downstream *Carrier
 	served := false
-	handler := AuthStage(store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthStage(store)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		served = true
 		downstream = CarrierFrom(r.Context())
 	}))
@@ -158,7 +158,7 @@ func TestAuthStageGuardMissingCarrier(t *testing.T) {
 
 	served := false
 	handler := AuthStage(&stubStore{tenant: auth.Tenant{ID: "t"}})(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { served = true }))
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served = true }))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

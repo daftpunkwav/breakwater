@@ -22,6 +22,7 @@ package cache
 import (
 	"context"
 	"math"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- this file draws only non-cryptographic TTL jitter; no key material comes from it
 	"math/rand/v2"
 	"sync"
 	"time"

@@ -36,9 +36,11 @@ are the index — run any of them to check the property directly.
 | -------- | ----- | ------------- |
 | A rejected request never reaches an upstream | `internal/server`, `internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`, `TestChainRateLimitsWithRetryAfter`, `TestChainQuotaExhaustionIsPaymentRequired`, `TestChainDeniesModelOutsideTier` |
 | Concurrent cold requests for one cache key cause exactly one upstream fetch | `internal/cache` | `TestFlightSingleFetchUnderStampede`, `TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
+| A starter that walks away mid-fetch neither cancels the shared fetch nor fails the waiters riding it | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`, `TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
 | A panicking fetch releases its waiters instead of wedging them | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | A request never exceeds its attempt cap, and retries never exceed the global in-flight budget | `internal/retry` | `TestExecuteCapsAttempts`, `TestBudgetCapsInFlightRetries`, `TestBudgetReleaseAbsorbsImbalance` |
 | After the first response byte, the loop never retries | `internal/retry`, `internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
+| A relayed response never carries a media type a browser renders as a document, at any of the three points one can be set — the buffered passthrough, the stream commit, and a cache replay | `internal/protocol`, `internal/relay`, `internal/cache` | `TestForwardedContentType`, `TestRenderExchangeBodyReplacesDocumentContentType`, `TestStreamCommitReplacesDocumentContentType`, `TestCacheReplayReplacesDocumentContentType` |
 | An open breaker denies every call; half-open admits exactly one probe and reclaims abandoned ones | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`, `TestBreakerReclaimsAbandonedProbe` |
 | The ratio guard denies a rising share of calls but never cuts traffic entirely — one call per forced-pass interval still gets through | `internal/circuit` | `TestRatioDenialTracksFailureShare`, `TestRatioForcePassAdmitsOnePerInterval` |
 | The slow-call breaker opens only on a sampled window reaching the slow share (a thin window never opens, faults count as the strongest slow evidence), and a healthy probe closes it on an emptied window | `internal/circuit` | `TestSlowWindowNeedsSamples`, `TestSlowShareOpensTheBreaker`, `TestSlowProbeClosesOnAnEmptiedWindow` |
@@ -64,9 +66,9 @@ services reads lower, because whole SQL paths sit behind
 
 | Package | Local, no databases | With both services |
 | ------- | ------------------- | ------------------ |
-| `internal/auth` | 90.3% | ~99% |
-| `internal/insights` | 87.2% | ~99% |
-| `cmd/breakwater` | 92.3% | ~96% |
+| `internal/auth` | 90.7% | ~96% |
+| `internal/insights` | 87.3% | ~98% |
+| `cmd/breakwater` | 94.0% | ~96% |
 
 Every other package reads ≥95% locally, without any service. What
 remains uncovered in `cmd/breakwater` even with both databases is a set
@@ -75,6 +77,13 @@ upstream adapter and the router are already built from validated
 configuration, so their error branches exist for a future where they are
 constructed some other way. Those are disclosed rather than faked with
 tests that would pass regardless.
+
+Pointing the DSN at an empty database needs one thing first: apply
+`deploy/schema.sql` to it. Three packages' tests apply that file
+themselves — from five call sites — and `go test` runs packages
+concurrently, so two of them can pass the same `IF NOT EXISTS` check and
+the loser's create fails on a duplicate catalog key. The CI job applies
+the schema once before the suite for the same reason.
 
 Verify the local figures with:
 

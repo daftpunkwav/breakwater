@@ -111,7 +111,7 @@ func TestCarrierStageAssemblesCarrier(t *testing.T) {
 	t.Parallel()
 
 	var seen *Carrier
-	handler := CarrierStage()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CarrierStage()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = CarrierFrom(r.Context())
 	}))
 
@@ -127,7 +127,7 @@ func TestCarrierStageFreshCarrierPerRequest(t *testing.T) {
 	t.Parallel()
 
 	var first *Carrier
-	handler := CarrierStage()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CarrierStage()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		if first == nil {
 			first = CarrierFrom(r.Context())
 			return

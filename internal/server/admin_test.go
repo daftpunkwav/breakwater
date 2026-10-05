@@ -145,7 +145,7 @@ func TestAdminQuotaRejectsWrongMethod(t *testing.T) {
 func TestAdminQuotaRejectsInvalidTenantID(t *testing.T) {
 	t.Parallel()
 	written := false
-	setter := func(_ *http.Request, tenantID string, balance int64) error {
+	setter := func(_ *http.Request, _ string, _ int64) error {
 		written = true
 		return nil
 	}

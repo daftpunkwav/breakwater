@@ -79,7 +79,7 @@ func TestRequestIDAttachedToCarrier(t *testing.T) {
 	handler := Chain(
 		CarrierStage(),
 		RequestIDStage(),
-	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		carrier := CarrierFrom(r.Context())
 		if carrier == nil {
 			t.Error("no carrier on the context")

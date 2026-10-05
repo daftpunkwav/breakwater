@@ -86,7 +86,7 @@ type Executor struct {
 // in-flight exchange, the release idempotent. It is a port so the
 // relay stays decoupled from any particular counting implementation.
 type Bulkhead interface {
-	Acquire(id string, max int64) (release func(), ok bool)
+	Acquire(id string, limit int64) (release func(), ok bool)
 }
 
 // Option customizes an Executor.
@@ -156,14 +156,14 @@ func WithSlowCallThreshold(d time.Duration) Option {
 
 // WithUpstreamBulkhead installs the per-upstream in-flight ceiling: an
 // attempt may start an exchange on an upstream only when its slot count
-// is below max, and the slot returns when the attempt ends whatever the
-// outcome. A nil gate or a max at or below zero keeps upstream
+// is below limit, and the slot returns when the attempt ends whatever
+// the outcome. A nil gate or a limit at or below zero keeps upstream
 // concurrency unbounded.
-func WithUpstreamBulkhead(gate Bulkhead, max int64) Option {
-	if gate == nil || max <= 0 {
-		return func(e *Executor) {}
+func WithUpstreamBulkhead(gate Bulkhead, limit int64) Option {
+	if gate == nil || limit <= 0 {
+		return func(*Executor) {}
 	}
-	return func(e *Executor) { e.bulkhead = gate; e.bulkheadMax = max }
+	return func(e *Executor) { e.bulkhead = gate; e.bulkheadMax = limit }
 }
 
 // New builds an Executor. A nil budget disables the global in-flight

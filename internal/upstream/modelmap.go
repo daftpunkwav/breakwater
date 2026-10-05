@@ -32,11 +32,11 @@ import (
 func ParseModelMap(models []string) map[string]string {
 	rewrites := make(map[string]string)
 	for _, entry := range models {
-		client, real, ok := strings.Cut(entry, "=")
-		if !ok || client == "" || real == "" || client == "*" {
+		client, provider, ok := strings.Cut(entry, "=")
+		if !ok || client == "" || provider == "" || client == "*" {
 			continue
 		}
-		rewrites[client] = real
+		rewrites[client] = provider
 	}
 	return rewrites
 }

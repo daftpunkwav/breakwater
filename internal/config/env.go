@@ -119,9 +119,12 @@ const (
 	envUpstreamMaxInFlight = "BREAKWATER_UPSTREAM_MAX_INFLIGHT"
 )
 
-// Load reads the configuration from the environment and validates it.
-func Load() (Config, error) {
-	cfg := Config{
+// defaultConfig is the value every unset variable falls back to: the
+// literal defaults Load starts from, before any variable is read. It is
+// separate from Load so the parsing and checking that follow stay in one
+// readable sequence.
+func defaultConfig() Config {
+	return Config{
 		Server: Server{
 			Addr:          envString(envAddr, defaultAddr),
 			ShutdownGrace: defaultShutdownGrace,
@@ -176,6 +179,11 @@ func Load() (Config, error) {
 			Strategy: envString(envRouting, "static"),
 		},
 	}
+}
+
+// Load reads the configuration from the environment and validates it.
+func Load() (Config, error) {
+	cfg := defaultConfig()
 
 	var err error
 	if cfg.Identity, err = loadIdentitySource(envIdentity, cfg.Identity); err != nil {
@@ -546,7 +554,7 @@ func validateUpstreams(cfg *Config) error {
 			return fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
 		}
 		for _, m := range u.Models {
-			if client, real, ok := strings.Cut(m, "="); ok && (client == "" || real == "" || client == "*") {
+			if client, provider, ok := strings.Cut(m, "="); ok && (client == "" || provider == "" || client == "*") {
 				return fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
 			}
 		}
@@ -582,6 +590,7 @@ func loadIdentitySource(key, raw string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("config: %s=%q names no file", key, raw)
 	}
+	// nosemgrep: go_filesystem_rule-fileread -- the path is operator configuration, never request input
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("config: read %s: %w", key, err)

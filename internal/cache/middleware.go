@@ -183,17 +183,30 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 // passthrough set (protocol.PassthroughHeaderNames): the body's media
 // type, and the Retry-After a negatively cached 429/5xx owes its
 // client — a hit that drops it invites the immediate retry the upstream
-// asked to wait out. One list, two consumers: neither can drift. The
-// values need no legality re-check here: the only writers store headers
-// already validated by the passthrough surfaces at capture time.
+// asked to wait out. One list, two consumers: neither can drift.
+//
+// Nothing is copied verbatim. A store is an injected port, so an entry is
+// not provably one this gateway captured: every value goes through the
+// legality check the live passthrough applies, and the media type through
+// its policy as well. The body is opaque upstream bytes replayed
+// unchanged — the label above them is what keeps them from executing in a
+// browser, and the gateway never relays a document media type.
 func replay(w http.ResponseWriter, entry Entry) {
 	header := w.Header()
 	for _, name := range protocol.PassthroughHeaderNames() {
-		if v := entry.Header.Get(name); v != "" {
+		if name == "Content-Type" {
+			continue
+		}
+		if v := entry.Header.Get(name); v != "" && protocol.ValidHeaderValue(v) {
 			header.Set(name, v)
 		}
 	}
+	// Set explicitly rather than leaving it to net/http's sniffing,
+	// which would read the stored bytes and put them back in charge of
+	// the label.
+	header.Set("Content-Type", protocol.ForwardedContentType(entry.Header.Get("Content-Type"), protocol.PlainContentType))
 	w.WriteHeader(entry.Status)
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- stored upstream payload replayed byte-for-byte under a media type that is never a document; the gateway renders no HTML
 	_, _ = w.Write(entry.Body)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

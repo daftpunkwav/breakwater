@@ -38,6 +38,7 @@ func countingUpstream(t *testing.T, fetches *atomic.Int64, holdStart <-chan stru
 				`data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n",
 				"data: [DONE]\n\n",
 			} {
+				// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 				if _, err := w.Write([]byte(chunk)); err != nil {
 					return
 				}
@@ -49,6 +50,7 @@ func countingUpstream(t *testing.T, fetches *atomic.Int64, holdStart <-chan stru
 		fetches.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		// A broken client write ends the exchange; nothing to observe.
+		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- test fixture writes an opaque JSON body; no HTML is rendered
 		_, _ = fmt.Fprintf(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":%d}}`, fetches.Load())
 	})
 }
@@ -171,6 +173,64 @@ func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
 	}
 }
 
+// TestCacheReplayDropsIllegalHeaderValues pins the replay's half of the
+// upstream boundary: a store is an injected port, so a value it returns
+// that is not a legal header field value is dropped rather than copied —
+// the rule the live passthrough applies, and the one that keeps HTTP/1's
+// space-replacement and HTTP/2's silent drop from diverging.
+func TestCacheReplayDropsIllegalHeaderValues(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
+	header.Set("Retry-After", "3\r\nSet-Cookie: injected=1")
+
+	rec := httptest.NewRecorder()
+	replay(rec, Entry{Status: http.StatusTooManyRequests, Header: header, Body: []byte("{}")})
+
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("replayed Retry-After = %q, want the illegal value dropped", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("replayed content type = %q, want the legal value forwarded", got)
+	}
+}
+
+// TestCacheReplayReplacesDocumentContentType pins the other half of the
+// replay contract: the media type is not trusted from the store. A store
+// is an injected port, so an entry need not be one this gateway
+// captured; a document a browser would render never reaches the client,
+// while the stored bytes do, unchanged.
+func TestCacheReplayReplacesDocumentContentType(t *testing.T) {
+	t.Parallel()
+	body := []byte("<script>alert(1)</script>")
+	for _, tc := range []struct {
+		name string
+		ct   string
+		want string
+	}{
+		{"document", "text/html", protocol.PlainContentType},
+		{"unlabelled", "", protocol.PlainContentType},
+		{"parseable", "application/json", "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			header := http.Header{}
+			if tc.ct != "" {
+				header.Set("Content-Type", tc.ct)
+			}
+			rec := httptest.NewRecorder()
+			replay(rec, Entry{Status: http.StatusOK, Header: header, Body: body})
+
+			if got := rec.Header().Get("Content-Type"); got != tc.want {
+				t.Fatalf("replayed content type = %q, want %q", got, tc.want)
+			}
+			if got := rec.Body.Bytes(); string(got) != string(body) {
+				t.Fatalf("replayed body = %q, want the stored bytes unchanged", got)
+			}
+		})
+	}
+}
+
 // TestCacheMiddlewareReplayCarriesRetryAfter pins the negative-cache
 // replay contract: the Retry-After a stored 429 carries is part of the
 // fact being cached, and a hit that drops it invites the immediate
@@ -215,7 +275,7 @@ func TestCacheMiddlewareNeverNegativeCachesGatewayEnvelopes(t *testing.T) {
 	var fetches atomic.Int64
 	// A handler that dies before its first byte produces a response-less
 	// fetch: no status, nothing shareable, nothing cacheable.
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		fetches.Add(1)
 		_ = r // never write anything
 	})

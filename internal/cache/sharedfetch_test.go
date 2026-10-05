@@ -22,11 +22,12 @@ import (
 )
 
 func oversizedUpstream(fetches *atomic.Int64, release <-chan struct{}) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fetches.Add(1)
 		<-release
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
 		_, _ = w.Write([]byte(strings.Repeat("x", maxCacheableBytes+1)))
 	})
 }
@@ -40,10 +41,11 @@ func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T
 	t.Parallel()
 	var fetches atomic.Int64
 	release := make(chan struct{})
+	flight := NewFlight()
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), NewFlight(), time.Minute, nil, time.Minute),
+		Middleware(NewMemory(), flight, time.Minute, nil, time.Minute),
 	)(oversizedUpstream(&fetches, release))
 
 	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
@@ -58,14 +60,13 @@ func TestCacheMiddlewareOversizedResponsesAreNeitherSharedNorStored(t *testing.T
 	}
 
 	waiterDone := make(chan *httptest.ResponseRecorder, 1)
-	waiterIssued := make(chan struct{})
 	go func() {
-		// Signal just before firing, so the release below cannot
-		// outrun the waiter on its way to the shared flight.
-		close(waiterIssued)
 		waiterDone <- fireRequest(handler, body)
 	}()
-	<-waiterIssued
+	// The release waits for the join, not for the goroutine: a holder
+	// released before the waiter attaches finishes first, and a waiter
+	// arriving at a finished flight legitimately fetches on its own.
+	awaitSharedWaiter(t, flight, body)
 	close(release)
 
 	owner := <-ownerDone
@@ -99,7 +100,7 @@ func TestCacheMiddlewareWaiterSurvivesOwnerDisconnect(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var fetches atomic.Int64
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		fetches.Add(1)
 		select {
 		case entered <- struct{}{}:
@@ -160,6 +161,27 @@ func TestCacheMiddlewareWaiterSurvivesOwnerDisconnect(t *testing.T) {
 	}
 }
 
+// awaitSharedWaiter blocks until the flight for body has an attached
+// waiter. Releasing the holder before that join would let it finish
+// first, and a waiter arriving at a finished flight legitimately starts
+// a fetch of its own — not the situation this test pins.
+func awaitSharedWaiter(t *testing.T, flight *Flight, body string) {
+	t.Helper()
+	key := KeyFor([]byte(body))
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		flight.mu.Lock()
+		c := flight.calls[key]
+		joined := c != nil && c.waiters.Load() > 0
+		flight.mu.Unlock()
+		if joined {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no waiter attached to the shared flight: the fetch ended before it joined")
+}
+
 // TestCacheSharedFetchSurvivesTheStarterLeaving pins the ownership
 // rule of a shared fetch: the request that happens to start the flight
 // does not own it. A starter that walks away mid-fetch must not cancel
@@ -169,10 +191,18 @@ func TestCacheSharedFetchSurvivesTheStarterLeaving(t *testing.T) {
 	t.Parallel()
 	var fetches atomic.Int64
 	reached := make(chan struct{})
+	var reachedOnce sync.Once
 	release := make(chan struct{})
-	handler := cacheStage(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	flight := NewFlight()
+	handler := pipeline.Chain(
+		pipeline.CarrierStage(),
+		pipeline.FormatStage(protocol.FormatOpenAIChat),
+		Middleware(NewMemory(), flight, time.Minute, nil, time.Minute),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fetches.Add(1)
-		close(reached)
+		// Idempotent: a second upstream call is a test failure the fetch
+		// count below reports, never a panic that aborts the binary.
+		reachedOnce.Do(func() { close(reached) })
 		// A real upstream exchange is bound by its context, which is
 		// what makes the starter's cancellation matter.
 		select {
@@ -200,12 +230,13 @@ func TestCacheSharedFetchSurvivesTheStarterLeaving(t *testing.T) {
 	waiterRec := make(chan *httptest.ResponseRecorder, 1)
 	waiterIssued := make(chan struct{})
 	go func() {
-		// Signal just before firing, so the release below cannot
-		// outrun the waiter on its way to the shared flight.
 		close(waiterIssued)
 		waiterRec <- fireRequest(handler, body)
 	}()
 	<-waiterIssued
+	// The waiter is only on its way when it signals; wait for the join
+	// itself before releasing the holder.
+	awaitSharedWaiter(t, flight, body)
 	close(release)
 
 	waiter := <-waiterRec
@@ -227,7 +258,7 @@ func TestCacheSharedFetchRendersTheStarterAnEnvelope(t *testing.T) {
 	release := make(chan struct{})
 	var started sync.WaitGroup
 	started.Add(1)
-	handler := cacheStage(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := cacheStage(t, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		started.Done()
 		<-release
 		// Produce no response at all: the handler simply returns.
@@ -261,7 +292,7 @@ func TestCacheSharedFetchStaysInsideItsBudget(t *testing.T) {
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		Middleware(NewMemory(), NewFlight(), time.Minute, nil, budget),
-	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		fetches.Add(1)
 		once.Do(func() { close(reached) })
 		// A black hole: the exchange ends only when its context does.

@@ -8,7 +8,7 @@ Wire contracts of the gateway: how each client-facing API format is ingested int
 
 | File | Role |
 |---|---|
-| `wire.go` | The translation contract: `Format` enum, `Ingest`, the `Wire` and `StreamTranscoder` interfaces, `WireFor`. `chatWire` is the canonical wire itself — byte passthrough, only `Content-Type` and `Retry-After` forwarded, an out-of-range upstream status clamped to 502 |
+| `wire.go` | The translation contract: `Format` enum, `Ingest`, the `Wire` and `StreamTranscoder` interfaces, `WireFor`. `chatWire` is the canonical wire itself — byte passthrough, only `Content-Type` and `Retry-After` forwarded (a document media type is relayed as `text/plain`), an out-of-range upstream status clamped to 502 |
 | `schema.go` | The decoded subset of the chat completion schema (`ChatRequest`, `Usage`), `ParseUsage`, the gateway error envelope (`WriteError`), the shared rejection codes (`CodeRateLimited`, `CodeInsufficientQuota`, `CodeModelNotAllowed`) and `MaxBodyBytes` (4 MiB) |
 | `sse.go` | SSE codecs: `WriteData`/`WriteEvent`, the in-stream error contract (`ErrorType` = `gateway_error`, codes `upstream_reset` / `upstream_timeout` / `budget_exhausted`), `WriteAbort` — exactly one error event, then `data: [DONE]` |
 | `responses.go` | The openai-responses wire: ingest (`input`, `instructions`, `max_output_tokens`), Responses objects, `response.*` events, `response.failed` on abort |
@@ -22,5 +22,6 @@ Wire contracts of the gateway: how each client-facing API format is ingested int
 - Object ids on translated surfaces are gateway-generated (`resp_gw_`, `msg_gw_` prefixes) because upstream ids are not known until later frames.
 - `Code` is a closed set shared by the HTTP error envelope and the in-stream contract; the Messages wire maps it onto its own error-type vocabulary. Adding a code is a protocol change and must update the contract tests in `sse_test.go` together with the enum.
 - SSE byte layout is pinned by contract tests because SDKs parse it; response headers and flushing are the handler's business, not the codecs'.
+- A relayed response carries the upstream's `Content-Type` only when it is a media type a client can parse. A document a browser would render — HTML, XHTML, SVG, XML — is relayed as `text/plain` (`ForwardedContentType`): the body bytes are still the upstream's, but the gateway must not hand a browser a document from its own origin. An upstream that sent no usable media type gets `text/plain` too, rather than leaving the label to net/http's sniffing of upstream bytes.
 
 Consumed by [internal/server](../../internal/server/); the testing taxonomy lives in [docs/TESTING.md](../../docs/TESTING.md).

@@ -204,6 +204,7 @@ func writeStream(ctx context.Context, w http.ResponseWriter, req completionReque
 		if err != nil {
 			return err
 		}
+		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- SSE frame assembled from marshalled JSON; the harness renders no HTML
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 			return err
 		}

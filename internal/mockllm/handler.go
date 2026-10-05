@@ -16,6 +16,7 @@ package mockllm
 import (
 	"encoding/json"
 	"errors"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- this file draws only the non-cryptographic fault-injection probability; no key material comes from it
 	"math/rand/v2"
 	"net/http"
 	"time"

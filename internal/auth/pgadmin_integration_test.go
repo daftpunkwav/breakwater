@@ -19,24 +19,10 @@ import (
 )
 
 func TestPGAdminStoreIntegration(t *testing.T) {
-	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
-	}
+	dsn := integrationDSN(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() { _ = conn.Close(ctx) }()
-	applyIdentitySchema(t, ctx, conn)
-
-	store, err := NewPGStore(ctx, dsn)
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	store := newPGAdminStore(t, ctx, dsn)
 
 	userID, err := store.CreateUser(ctx, "Alice", RoleUser, "free")
 	if err != nil {
@@ -151,6 +137,39 @@ func TestPGAdminStoreIntegration(t *testing.T) {
 
 func ptrInt64(v int64) *int64 { return &v }
 
+// integrationDSN returns the integration database DSN, skipping the test
+// when the environment does not name one.
+func integrationDSN(t *testing.T) string {
+	t.Helper()
+	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
+	}
+	return dsn
+}
+
+// newPGAdminStore prepares a store against the integration database: one
+// connection applies the deploy schema, then the store opens its own pool
+// over the same DSN. The setup connection is released on the way out of
+// this helper — on the failure path too, which is what the deferred close
+// buys over an explicit one: applyIdentitySchema ends the test through
+// t.Fatalf, and only a defer still runs then. The DDL is committed, so the
+// pool never needs that connection.
+func newPGAdminStore(t *testing.T, ctx context.Context, dsn string) *PGStore {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	applyIdentitySchema(t, ctx, conn)
+	store, err := NewPGStore(ctx, dsn)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	return store
+}
+
 // applyIdentitySchema loads the deploy schema into the test database;
 // the DDL is idempotent (IF NOT EXISTS throughout).
 func applyIdentitySchema(t *testing.T, ctx context.Context, conn *pgx.Conn) {
@@ -170,24 +189,11 @@ func applyIdentitySchema(t *testing.T, ctx context.Context, conn *pgx.Conn) {
 // refused with ErrTooManyKeys — a plain check-then-insert would let a
 // burst slip past the count.
 func TestPGAdminCreateKeyCapIsConcurrencySafe(t *testing.T) {
-	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
-	}
+	dsn := integrationDSN(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	store := newPGAdminStore(t, ctx, dsn)
 
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() { _ = conn.Close(ctx) }()
-	applyIdentitySchema(t, ctx, conn)
-
-	store, err := NewPGStore(ctx, dsn)
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
 	userID, err := store.CreateUser(ctx, "Racer", RoleUser, "free")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
