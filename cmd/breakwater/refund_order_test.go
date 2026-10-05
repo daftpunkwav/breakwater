@@ -125,19 +125,32 @@ func TestCacheHitRefundsTheWholeReservation(t *testing.T) {
 		t.Fatalf("upstream hits = %d, want 1", hits)
 	}
 
-	reserved, refunded := scrapeQuotaCounters(t, addr, "t1")
+	reserved, _ = scrapeQuotaCounters(t, addr, "t1")
 	// The hit took a lease of its own: cache sits inside the quota
-	// stage, so a replay is reserved too, never free.
+	// stage, so a replay is reserved too, never free. The reservation
+	// is taken before the response is written, so it is already visible.
 	if reserved <= reservedAfterFill {
 		t.Fatalf("reserved = %v after the cache hit, want more than the fill's %v — the hit escaped the ledger",
 			reserved, reservedAfterFill)
 	}
 	// The one real fetch consumed 2 tokens (its usage block); the hit
 	// consumed nothing. Any drift means the hit settled instead of
-	// cancelling — the LIFO refund is broken.
-	if got := reserved - refunded; got != 2 {
-		t.Fatalf("reserved-refunded = %v after the cache hit, want 2 (the real fetch's usage): reserved=%v refunded=%v",
-			got, reserved, refunded)
+	// cancelling — the LIFO refund is broken. The correction runs after
+	// next() returns, and a replayed hit flushes its reply before that,
+	// so the refund becomes visible a moment after the client sees the
+	// response: poll for the ledger to converge instead of racing it.
+	var refunded float64
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		reserved, refunded = scrapeQuotaCounters(t, addr, "t1")
+		if reserved-refunded == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reserved-refunded = %v after the cache hit, want 2 (the real fetch's usage): reserved=%v refunded=%v",
+				reserved-refunded, reserved, refunded)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	// The rpm bucket is spent: the next request is refused by the
