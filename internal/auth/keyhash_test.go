@@ -10,7 +10,6 @@ package auth
 
 import (
 	"os"
-	"path/filepath"
 	"regexp"
 	"testing"
 )
@@ -54,7 +53,9 @@ func TestHashKeyPepperKeysTheDigest(t *testing.T) {
 // deploy/seed.sql — literals duplicated here would let the SQL side
 // drift while this test stayed green.
 func TestSeedKeyHashMatchesHashKey(t *testing.T) {
-	sqlBytes, err := os.ReadFile(filepath.Join("..", "..", "deploy", "seed.sql"))
+	// Literal path: the repo layout is fixed, and os / go test accept
+	// forward slashes on Windows too.
+	sqlBytes, err := os.ReadFile("../../deploy/seed.sql")
 	if err != nil {
 		t.Fatalf("read seed.sql: %v", err)
 	}
