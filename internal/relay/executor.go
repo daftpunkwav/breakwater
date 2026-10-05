@@ -637,13 +637,14 @@ func readBounded(body io.Reader, limit int64, sizeHint int64) ([]byte, error) {
 }
 
 // growSeed converts a validated size hint into the one Grow allocation
-// size, headroom included. The cap keeps the int64-to-int narrowing
-// overflow-free on platforms where int is 32-bit. A hint past it cannot
-// be honored by Grow anyway, so growSeed yields 0 — Grow(0) is a no-op
+// size, headroom included. The cap keeps the hint inside the range
+// every platform's int can hold, so the int64-to-int narrowing cannot
+// overflow — 32-bit architectures included. A hint past the cap cannot
+// be honored by Grow anyway, so growSeed yields 0: Grow(0) is a no-op
 // and the read falls back to the growth chain, costing throughput,
 // never correctness.
 func growSeed(sizeHint int64) int {
-	if sizeHint > math.MaxInt-readSeedHeadroom {
+	if sizeHint > math.MaxInt32-readSeedHeadroom {
 		return 0
 	}
 	return int(sizeHint) + readSeedHeadroom

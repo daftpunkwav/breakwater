@@ -80,8 +80,8 @@ func TestGrowSeedCapsBeforeNarrowing(t *testing.T) {
 		want     int
 	}{
 		{"small hint keeps headroom", 4, 4 + readSeedHeadroom},
-		{"largest in-range hint", math.MaxInt - readSeedHeadroom, math.MaxInt},
-		{"first hint past the cap", math.MaxInt - readSeedHeadroom + 1, 0},
+		{"largest in-range hint", math.MaxInt32 - readSeedHeadroom, math.MaxInt32},
+		{"first hint past the cap", math.MaxInt32 - readSeedHeadroom + 1, 0},
 		{"hint past the cap skips pre-sizing", math.MaxInt64, 0},
 	}
 	for _, tc := range cases {
