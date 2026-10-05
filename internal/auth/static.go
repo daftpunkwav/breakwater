@@ -10,10 +10,10 @@
  *   store in the LRU cache instead
  *
  * Keys are stored only as keyed hashes — HMAC-SHA256 over the optional
- * BREAKWATER_KEY_PEPPER, mirroring the schema's key_hash discipline:
- * neither a database leak nor a heap scan of the lookup map yields a
- * usable key, and a pepper set at deployment time also takes offline
- * brute-force of weak keys off the table.
+ * BREAKWATER_KEY_PEPPER, mirroring the schema's key_hash discipline: a
+ * leak of the lookup map or the database alone yields no usable key,
+ * and a pepper set at deployment time also takes offline brute-force
+ * of weak keys off the table.
  */
 package auth
 

@@ -38,9 +38,10 @@ pgadmin integration tests need PostgreSQL (`BREAKWATER_TEST_POSTGRES_DSN`).
 ## Invariants
 
 - Keys are stored and looked up only as HMAC-SHA256 digests keyed by
-  `BREAKWATER_KEY_PEPPER` (database and static set alike); the raw secret
-  exists exactly once, in the `CreateKey` response. Changing the pepper
-  invalidates every persisted key_hash.
+  `BREAKWATER_KEY_PEPPER` (database and static set alike); no raw secret
+  is persisted — it appears once in the `CreateKey` response and is
+  otherwise held only in process memory, resolution caches included.
+  Changing the pepper invalidates every persisted key_hash.
 - Stores return the merged snapshot (`MergeTier`); the governance layers
   never re-merge. Scalars take the nearest set layer (key over user over
   tier); `denied_models` only unions; `allowed_models` only intersects. A

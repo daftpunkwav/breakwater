@@ -34,8 +34,9 @@ PostgreSQL（`BREAKWATER_TEST_POSTGRES_DSN`）。
 ## Invariants
 
 - key 只以 HMAC-SHA256 哈希存储与查找，HMAC 密钥为 `BREAKWATER_KEY_PEPPER`
-  （数据库与静态集一致）；明文只存在于 `CreateKey` 响应中，仅此一次。
-  更换 pepper 会使所有已持久化的 key_hash 失效。
+  （数据库与静态集一致）；明文不落任何持久化存储——它只出现在 `CreateKey`
+  响应中一次，其余时间仅存在于进程内存（含解析缓存）。更换 pepper 会使所有
+  已持久化的 key_hash 失效。
 - store 返回合并后的快照（`MergeTier`）；治理层永不重复合并。标量取最近
   一层设置值（key 覆盖 user 覆盖 tier）；`denied_models` 只做并集；
   `allowed_models` 只做交集。损坏的 overrides 文档会使解析失败，而不是被
