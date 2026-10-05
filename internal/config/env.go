@@ -411,7 +411,9 @@ func loadRouting(cfg *Config) error {
 
 // validate enforces the bounds one setting's parsed value must satisfy
 // (some conditioned on its subsystem being enabled) and the shape of
-// the model tables, after every setting is parsed.
+// the model tables, after every setting is parsed. The checks run in
+// load order, one validator per subsystem like the loadXxx parsers
+// above, so the first refusal always names the earliest misconfiguration.
 func validate(cfg *Config) error {
 	if cfg.Server.ShutdownGrace <= 0 {
 		return fmt.Errorf("config: %s must be positive", envShutdownGrace)
@@ -424,6 +426,28 @@ func validate(cfg *Config) error {
 	if cfg.Obs.AccessLogQueueSize <= 0 {
 		return fmt.Errorf("config: %s must be positive", envAccessLogQueue)
 	}
+	if err := validateRetryBudget(cfg); err != nil {
+		return err
+	}
+	if err := validateCache(cfg); err != nil {
+		return err
+	}
+	if err := validateCircuit(cfg); err != nil {
+		return err
+	}
+	if err := validateProbe(cfg); err != nil {
+		return err
+	}
+	if err := validateModelTables(cfg); err != nil {
+		return err
+	}
+	return validateUpstreams(cfg)
+}
+
+// validateRetryBudget enforces the attempt-loop bounds that need more
+// than one parsed setting to judge; the per-setting negativity checks
+// already ran in loadRetry.
+func validateRetryBudget(cfg *Config) error {
 	if cfg.Retry.MaxAttempts <= 0 {
 		return fmt.Errorf("config: %s must be positive", envRetryMaxAttempts)
 	}
@@ -439,41 +463,63 @@ func validate(cfg *Config) error {
 	if cfg.Retry.BudgetPercent > 0 && cfg.Retry.BudgetMinInFlight < 1 {
 		return fmt.Errorf("config: %s must be at least 1 when %s is set", envRetryBudgetMin, envRetryBudgetPercent)
 	}
-	if cfg.Cache.Enabled {
-		if cfg.Cache.TTL <= 0 {
-			return fmt.Errorf("config: %s must be positive", envCacheTTL)
-		}
-		if cfg.Cache.Capacity <= 0 {
-			return fmt.Errorf("config: %s must be positive", envCacheCapacity)
-		}
+	return nil
+}
+
+// validateCache enforces the cache bounds, only while the cache is
+// enabled: a disabled cache carries no live knobs, so its stale values
+// must not fail the boot.
+func validateCache(cfg *Config) error {
+	if !cfg.Cache.Enabled {
+		return nil
 	}
-	if cfg.Circuit.Enabled {
-		switch cfg.Circuit.Strategy {
-		case "consecutive", "ratio":
-		case "slow-call":
-			// The negated conjunction rejects NaN too: every direct
-			// comparison against NaN is false, so an OR of range checks
-			// would wave it through and the breaker would arm with a
-			// ratio it can never reach — silently inert.
-			if !(cfg.Circuit.SlowRatio > 0 && cfg.Circuit.SlowRatio <= 1) {
-				return fmt.Errorf("config: %s must be a ratio in (0, 1]", envCircuitSlowRatio)
-			}
-			if cfg.Circuit.SlowCallThreshold <= 0 {
-				return fmt.Errorf("config: %s must be positive when the strategy is slow-call: without it no attempt is ever slow", envCircuitSlowThresh)
-			}
-		default:
-			return fmt.Errorf("config: %s must be \"consecutive\", \"ratio\" or \"slow-call\"", envCircuitStrategy)
-		}
-		if cfg.Circuit.FailThreshold <= 0 {
-			return fmt.Errorf("config: %s must be positive", envCircuitThreshold)
-		}
-		if cfg.Circuit.Cooldown <= 0 {
-			return fmt.Errorf("config: %s must be positive", envCircuitCooldown)
-		}
-		if cfg.Circuit.ProbeTimeout <= 0 {
-			return fmt.Errorf("config: %s must be positive", envCircuitProbe)
-		}
+	if cfg.Cache.TTL <= 0 {
+		return fmt.Errorf("config: %s must be positive", envCacheTTL)
 	}
+	if cfg.Cache.Capacity <= 0 {
+		return fmt.Errorf("config: %s must be positive", envCacheCapacity)
+	}
+	return nil
+}
+
+// validateCircuit enforces the breaker bounds, only while the breaker
+// is enabled.
+func validateCircuit(cfg *Config) error {
+	if !cfg.Circuit.Enabled {
+		return nil
+	}
+	switch cfg.Circuit.Strategy {
+	case "consecutive", "ratio":
+	case "slow-call":
+		// The negated conjunction rejects NaN too: every direct
+		// comparison against NaN is false, so an OR of range checks
+		// would wave it through and the breaker would arm with a
+		// ratio it can never reach — silently inert.
+		if !(cfg.Circuit.SlowRatio > 0 && cfg.Circuit.SlowRatio <= 1) {
+			return fmt.Errorf("config: %s must be a ratio in (0, 1]", envCircuitSlowRatio)
+		}
+		if cfg.Circuit.SlowCallThreshold <= 0 {
+			return fmt.Errorf("config: %s must be positive when the strategy is slow-call: without it no attempt is ever slow", envCircuitSlowThresh)
+		}
+	default:
+		return fmt.Errorf("config: %s must be \"consecutive\", \"ratio\" or \"slow-call\"", envCircuitStrategy)
+	}
+	if cfg.Circuit.FailThreshold <= 0 {
+		return fmt.Errorf("config: %s must be positive", envCircuitThreshold)
+	}
+	if cfg.Circuit.Cooldown <= 0 {
+		return fmt.Errorf("config: %s must be positive", envCircuitCooldown)
+	}
+	if cfg.Circuit.ProbeTimeout <= 0 {
+		return fmt.Errorf("config: %s must be positive", envCircuitProbe)
+	}
+	return nil
+}
+
+// validateProbe enforces the recovery-loop bounds; the interval acts as
+// the loop's on/off switch, so the timeout and threshold bounds apply
+// only while a loop is configured.
+func validateProbe(cfg *Config) error {
 	if cfg.Probe.Interval < 0 {
 		return fmt.Errorf("config: %s must not be negative", envProbeInterval)
 	}
@@ -489,6 +535,13 @@ func validate(cfg *Config) error {
 	if cfg.Probe.Interval > 0 && cfg.Probe.Threshold < 1 {
 		return fmt.Errorf("config: %s must be positive when %s is enabled", envProbeThreshold, envProbeInterval)
 	}
+	return nil
+}
+
+// validateModelTables refuses the keyed tables (context limits and
+// fallback chains) whose entries could never route: an empty key names
+// no model, and an empty value reserves a model that serves nothing.
+func validateModelTables(cfg *Config) error {
 	for model, limit := range cfg.ContextLimits {
 		if model == "" {
 			return fmt.Errorf("config: %s has an empty model name", envContextLimits)
@@ -510,7 +563,7 @@ func validate(cfg *Config) error {
 			}
 		}
 	}
-	return validateUpstreams(cfg)
+	return nil
 }
 
 // validateUpstreams refuses an upstream table that cannot serve
@@ -520,59 +573,77 @@ func validate(cfg *Config) error {
 func validateUpstreams(cfg *Config) error {
 	seenUpstreamIDs := make(map[string]struct{}, len(cfg.Upstreams))
 	for i, u := range cfg.Upstreams {
-		if u.ID == "" || u.BaseURL == "" {
-			return fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
+		if err := validateUpstream(u, i, seenUpstreamIDs); err != nil {
+			return err
 		}
-		// An id is a routing key, a metrics label, an access-log field
-		// and an admin URL segment at once; a character outside the
-		// documented set would only surface as a broken admin route or
-		// an ambiguous key. Refuse at load, like every other identity
-		// collision.
-		if !validID(u.ID) {
-			return fmt.Errorf("config: upstreams[%d] has an invalid id %q: ids are 1-128 characters of [A-Za-z0-9._-]", i, u.ID)
+		if err := validateCredentialRing(u, i); err != nil {
+			return err
 		}
-		// A duplicated id would alias two distinct providers into one
-		// circuit-breaker state and one admin target — the second copy
-		// silently shadowing the first. Refuse at load, like every other
-		// identity collision.
-		if _, dup := seenUpstreamIDs[u.ID]; dup {
-			return fmt.Errorf("config: upstreams[%d] repeats id %q", i, u.ID)
+	}
+	return nil
+}
+
+// validateUpstream refuses one upstream entry that cannot serve: an
+// unusable id, a colliding identity, an unparsable or scheme-less
+// base_url, an empty model list or a malformed model binding. The
+// seen set carries the ids of the entries before this one; a repeat
+// would alias two distinct providers into one circuit-breaker state
+// and one admin target — the second copy silently shadowing the
+// first — so it is refused at load, like every other identity
+// collision.
+func validateUpstream(u Upstream, i int, seen map[string]struct{}) error {
+	if u.ID == "" || u.BaseURL == "" {
+		return fmt.Errorf("config: upstreams[%d] needs id and base_url", i)
+	}
+	// An id is a routing key, a metrics label, an access-log field
+	// and an admin URL segment at once; a character outside the
+	// documented set would only surface as a broken admin route or
+	// an ambiguous key. Refuse at load, like every other identity
+	// collision.
+	if !validID(u.ID) {
+		return fmt.Errorf("config: upstreams[%d] has an invalid id %q: ids are 1-128 characters of [A-Za-z0-9._-]", i, u.ID)
+	}
+	if _, dup := seen[u.ID]; dup {
+		return fmt.Errorf("config: upstreams[%d] repeats id %q", i, u.ID)
+	}
+	seen[u.ID] = struct{}{}
+	// Scheme and host must parse now, not per request: a missing
+	// scheme otherwise surfaces as a transport error against a
+	// "healthy" gateway, 100% of requests failing with no startup
+	// signal at all.
+	parsed, err := url.Parse(u.BaseURL)
+	if err != nil {
+		return fmt.Errorf("config: upstreams[%d] (%s) has an unparsable base_url %q: %w", i, u.ID, u.BaseURL, err)
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("config: upstreams[%d] (%s) base_url %q needs an http(s) scheme and a host", i, u.ID, u.BaseURL)
+	}
+	if len(u.Models) == 0 {
+		return fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
+	}
+	for _, m := range u.Models {
+		if client, provider, ok := strings.Cut(m, "="); ok && (client == "" || provider == "" || client == "*") {
+			return fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
 		}
-		seenUpstreamIDs[u.ID] = struct{}{}
-		// Scheme and host must parse now, not per request: a missing
-		// scheme otherwise surfaces as a transport error against a
-		// "healthy" gateway, 100% of requests failing with no startup
-		// signal at all.
-		parsed, err := url.Parse(u.BaseURL)
-		if err != nil {
-			return fmt.Errorf("config: upstreams[%d] (%s) has an unparsable base_url %q: %w", i, u.ID, u.BaseURL, err)
+	}
+	return nil
+}
+
+// validateCredentialRing refuses a dirty credential list. The ring
+// indexes retirement and log trails by list position, so the merged
+// list must be clean: an empty entry would send a broken Authorization
+// header, and a duplicate would rotate two slots onto one secret — a
+// config smell that must refuse to boot, not rotate uselessly.
+func validateCredentialRing(u Upstream, i int) error {
+	seenCredentials := make(map[string]struct{}, len(u.APIKeys)+1)
+	for j, key := range u.Credentials() {
+		if key == "" {
+			return fmt.Errorf("config: upstreams[%d] (%s) has an empty credential at ring position %d", i, u.ID, j)
 		}
-		if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return fmt.Errorf("config: upstreams[%d] (%s) base_url %q needs an http(s) scheme and a host", i, u.ID, u.BaseURL)
+		if _, dup := seenCredentials[key]; dup {
+			return fmt.Errorf("config: upstreams[%d] (%s) repeats a credential", i, u.ID)
 		}
-		if len(u.Models) == 0 {
-			return fmt.Errorf("config: upstreams[%d] (%s) lists no models", i, u.ID)
-		}
-		for _, m := range u.Models {
-			if client, provider, ok := strings.Cut(m, "="); ok && (client == "" || provider == "" || client == "*") {
-				return fmt.Errorf("config: upstreams[%d] (%s) has invalid model binding %q, want \"client=real\"", i, u.ID, m)
-			}
-		}
-		// The credential ring indexes retirement and log trails by list
-		// position, so the merged list must be clean: an empty entry
-		// would send a broken Authorization header, and a duplicate
-		// would rotate two slots onto one secret — a config smell that
-		// must refuse to boot, not rotate uselessly.
-		seenCredentials := make(map[string]struct{}, len(u.APIKeys)+1)
-		for j, key := range u.Credentials() {
-			if key == "" {
-				return fmt.Errorf("config: upstreams[%d] (%s) has an empty credential at ring position %d", i, u.ID, j)
-			}
-			if _, dup := seenCredentials[key]; dup {
-				return fmt.Errorf("config: upstreams[%d] (%s) repeats a credential", i, u.ID)
-			}
-			seenCredentials[key] = struct{}{}
-		}
+		seenCredentials[key] = struct{}{}
 	}
 	return nil
 }
