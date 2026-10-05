@@ -70,16 +70,21 @@ func servedRoutes(t *testing.T) http.Handler {
 	return buildAllRoutes(t, backend.URL)
 }
 
-func TestResponsesRouteNonStream(t *testing.T) {
-	t.Parallel()
-	rec := post(t, servedRoutes(t), "/v1/responses", "", `{"model":"m1","input":"hello"}`)
+// bufferedContract posts one buffered request against the served routes
+// and asserts the reply is a 200 carrying every wanted fragment.
+func bufferedContract(t *testing.T, path, body string, wants ...string) {
+	t.Helper()
+	rec := post(t, servedRoutes(t), path, "", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"object":"response"`) || !strings.Contains(body, `"text":"hi"`) {
-		t.Fatalf("body = %s", body)
-	}
+	assertContains(t, rec.Body.String(), wants...)
+}
+
+func TestResponsesRouteNonStream(t *testing.T) {
+	t.Parallel()
+	bufferedContract(t, "/v1/responses", `{"model":"m1","input":"hello"}`,
+		`"object":"response"`, `"text":"hi"`)
 }
 
 // assertContains fails the test once for every wanted substring the
@@ -118,15 +123,9 @@ func TestResponsesRouteStream(t *testing.T) {
 
 func TestMessagesRouteNonStream(t *testing.T) {
 	t.Parallel()
-	rec := post(t, servedRoutes(t), "/v1/messages", "",
-		`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"type":"message"`) || !strings.Contains(body, `"stop_reason":"end_turn"`) {
-		t.Fatalf("body = %s", body)
-	}
+	bufferedContract(t, "/v1/messages",
+		`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
+		`"type":"message"`, `"stop_reason":"end_turn"`)
 }
 
 func TestMessagesRouteStream(t *testing.T) {
