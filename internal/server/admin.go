@@ -527,7 +527,12 @@ func decodeAdminJSONOptional(w http.ResponseWriter, r *http.Request, v any) bool
 func decodeAdminBody(w http.ResponseWriter, r *http.Request, v any, optional bool) bool {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil && !(optional && errors.Is(err, io.EOF)) {
+	err := dec.Decode(v)
+	if optional && errors.Is(err, io.EOF) {
+		// The documented absent-body zero value.
+		return true
+	}
+	if err != nil {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
 			"malformed or unexpected request body")
 		return false
