@@ -12,8 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -41,15 +39,7 @@ func (b *brokenReader) Read(p []byte) (int, error) {
 func TestStreamAbortTerminatesHonestly(t *testing.T) {
 	t.Parallel()
 	partial := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(&brokenReader{data: partial}),
-		}, nil
-	}}
+	cand := sseUpstream(&brokenReader{data: partial})
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
@@ -83,15 +73,7 @@ func TestStreamAbortAfterClientDepartureEndsSilently(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	partial := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(&cancelOnBreakReader{data: partial, cancel: cancel}),
-		}, nil
-	}}
+	cand := sseUpstream(&cancelOnBreakReader{data: partial, cancel: cancel})
 	rec := httptest.NewRecorder()
 	exec := New(testPolicy(), nil)
 
@@ -135,15 +117,7 @@ func (b *cancelOnBreakReader) Read(p []byte) (int, error) {
 func TestStreamAbortReusesTheTranscoderInstance(t *testing.T) {
 	t.Parallel()
 	partial := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(&brokenReader{data: partial}),
-		}, nil
-	}}
+	cand := sseUpstream(&brokenReader{data: partial})
 	rec := httptest.NewRecorder()
 	exec := New(testPolicy(), nil)
 	result := exec.Execute(context.Background(), Job{
@@ -187,15 +161,7 @@ func TestAbortCodeMapsFailureClasses(t *testing.T) {
 func TestStreamAbortFrameStaysCodeLevel(t *testing.T) {
 	t.Parallel()
 	partial := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(&deadlineReader{data: partial}),
-		}, nil
-	}}
+	cand := sseUpstream(&deadlineReader{data: partial})
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")

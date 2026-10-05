@@ -53,28 +53,30 @@ func TestReconcileOnceSurfacesSourceFailure(t *testing.T) {
 	}
 }
 
+// assertStoreFailureSurfaces reconciles once against a scripted source
+// (it answers with a real snapshot, so the failing store is reached)
+// and requires the returned error to wrap want.
+func assertStoreFailureSurfaces(t *testing.T, store *failingStore, want error) {
+	t.Helper()
+	source := &scriptedSnapshotSource{snap: &Snapshot{TenantID: "t", Epoch: 1}}
+	rec := NewReconciler(source, []string{"t"}, store)
+	if _, _, _, err := rec.ReconcileOnce(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want %v surfaced", err, want)
+	}
+}
+
 func TestReconcileOnceSurfacesLatestFailure(t *testing.T) {
 	t.Parallel()
 	latestErr := errors.New("latest: database down")
 	store := &failingStore{memSnapshotStore: newMemSnapshotStore(), latestErr: latestErr}
-	// The source returns a real snapshot so the Latest call is reached.
-	source := &scriptedSnapshotSource{snap: &Snapshot{TenantID: "t", Epoch: 1}}
-	rec := NewReconciler(source, []string{"t"}, store)
-	if _, _, _, err := rec.ReconcileOnce(context.Background()); !errors.Is(err, latestErr) {
-		t.Fatalf("err = %v, want the latest-read failure surfaced", err)
-	}
+	assertStoreFailureSurfaces(t, store, latestErr)
 }
 
 func TestReconcileOnceSurfacesAppendFailure(t *testing.T) {
 	t.Parallel()
 	appendErr := errors.New("append: database down")
 	store := &failingStore{memSnapshotStore: newMemSnapshotStore(), appendErr: appendErr}
-	source := &scriptedSnapshotSource{snap: &Snapshot{TenantID: "t", Epoch: 1}}
-	rec := NewReconciler(source, []string{"t"}, store)
-
-	if _, _, _, err := rec.ReconcileOnce(context.Background()); !errors.Is(err, appendErr) {
-		t.Fatalf("err = %v, want the append failure surfaced", err)
-	}
+	assertStoreFailureSurfaces(t, store, appendErr)
 }
 
 // scriptedSnapshotSource answers every read with the same snapshot.

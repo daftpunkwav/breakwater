@@ -61,13 +61,18 @@ func post(t *testing.T, handler http.Handler, path, key, body string) *httptest.
 	return rec
 }
 
+// servedRoutes mounts the three inference routes over one fresh test
+// upstream, cleaned up with the test.
+func servedRoutes(t *testing.T) http.Handler {
+	t.Helper()
+	backend := testUpstreamBackend(t)
+	t.Cleanup(backend.Close)
+	return buildAllRoutes(t, backend.URL)
+}
+
 func TestResponsesRouteNonStream(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/responses", "", `{"model":"m1","input":"hello"}`)
+	rec := post(t, servedRoutes(t), "/v1/responses", "", `{"model":"m1","input":"hello"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -77,37 +82,35 @@ func TestResponsesRouteNonStream(t *testing.T) {
 	}
 }
 
-func TestResponsesRouteStream(t *testing.T) {
-	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/responses", "", `{"model":"m1","stream":true,"input":"hello"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	for _, want := range []string{
-		"event: response.created",
-		"event: response.output_text.delta",
-		`"delta":"hi"`,
-		"event: response.completed",
-		`"output_tokens":1`,
-	} {
+// assertContains fails the test once for every wanted substring the
+// body lacks.
+func assertContains(t *testing.T, body string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
 		if !strings.Contains(body, want) {
 			t.Errorf("stream missing %q\ngot:\n%s", want, body)
 		}
 	}
 }
 
+func TestResponsesRouteStream(t *testing.T) {
+	t.Parallel()
+	rec := post(t, servedRoutes(t), "/v1/responses", "", `{"model":"m1","stream":true,"input":"hello"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	assertContains(t, rec.Body.String(),
+		"event: response.created",
+		"event: response.output_text.delta",
+		`"delta":"hi"`,
+		"event: response.completed",
+		`"output_tokens":1`,
+	)
+}
+
 func TestMessagesRouteNonStream(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/messages", "",
+	rec := post(t, servedRoutes(t), "/v1/messages", "",
 		`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
@@ -120,26 +123,17 @@ func TestMessagesRouteNonStream(t *testing.T) {
 
 func TestMessagesRouteStream(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/messages", "",
+	rec := post(t, servedRoutes(t), "/v1/messages", "",
 		`{"model":"m1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	body := rec.Body.String()
-	for _, want := range []string{
+	assertContains(t, rec.Body.String(),
 		"event: message_start",
 		"event: content_block_delta",
 		`"text":"hi"`,
 		"event: message_stop",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("stream missing %q\ngot:\n%s", want, body)
-		}
-	}
+	)
 }
 
 func TestMessagesRouteHonorsXAPIKey(t *testing.T) {
@@ -210,11 +204,7 @@ func TestMessagesRouteStreamAbortTerminatesHonestly(t *testing.T) {
 
 func TestMessagesRouteRejectsMissingMaxTokens(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/messages", "", `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
+	rec := post(t, servedRoutes(t), "/v1/messages", "", `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

@@ -53,18 +53,24 @@ func TestAutoDisableHookTransitionsOnce(t *testing.T) {
 	hook("typo", -1, "upstream_auth_failure")
 }
 
-// assertAutoDisabledCount renders the registry and checks the
-// auto-disable counter fired exactly n times.
-func assertAutoDisabledCount(t *testing.T, metrics *obs.Metrics, want int) {
+// assertMetricLine renders the registry and checks the exposition
+// carries metric's line with exactly the wanted sample value.
+func assertMetricLine(t *testing.T, metrics *obs.Metrics, metric string, want int) {
 	t.Helper()
 	var out strings.Builder
 	if err := metrics.Render(&out); err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	wantLine := `breakwater_upstream_auto_disabled_total{upstream="u1",reason="upstream_auth_failure"} `
-	if !strings.Contains(out.String(), wantLine+strconv.Itoa(want)) {
-		t.Fatalf("exposition missing %s%d:\n%s", wantLine, want, out.String())
+	if !strings.Contains(out.String(), metric+strconv.Itoa(want)) {
+		t.Fatalf("exposition missing %s%d:\n%s", metric, want, out.String())
 	}
+}
+
+// assertAutoDisabledCount renders the registry and checks the
+// auto-disable counter fired exactly n times.
+func assertAutoDisabledCount(t *testing.T, metrics *obs.Metrics, want int) {
+	t.Helper()
+	assertMetricLine(t, metrics, `breakwater_upstream_auto_disabled_total{upstream="u1",reason="upstream_auth_failure"} `, want)
 }
 
 // newProbeTarget spins up an upstream whose probe endpoint answers
@@ -99,20 +105,30 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 	t.Fatal("condition not met in time")
 }
 
+// healthyRecoveryFixture boots the recovery loop over one
+// auto-disabled upstream whose probe endpoint answers 200, at the
+// given consecutive-pass threshold, and cleans the loop up with the
+// test.
+func healthyRecoveryFixture(t *testing.T, reason string, threshold int) *router.Switch {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	adapter, _ := newProbeTarget(t, http.StatusOK)
+	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
+	if _, err := sw.AutoDisableUpstream("u1", reason); err != nil {
+		t.Fatalf("auto disable: %v", err)
+	}
+
+	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, threshold, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	return sw
+}
+
 // TestRecoveryLiftsAutoDisableOnHealthyProbe: an auto-disabled
 // upstream is probed and comes back when the probe answers 2xx.
 func TestRecoveryLiftsAutoDisableOnHealthyProbe(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusOK)
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
-
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	sw := healthyRecoveryFixture(t, "upstream_auth_failure", 1)
 
 	waitFor(t, 2*time.Second, func() bool { return sw.UpstreamEnabled("u1") })
 }
@@ -161,16 +177,7 @@ func TestRecoveryRequiresConsecutivePasses(t *testing.T) {
 // the upstream comes back once the consecutive-pass count is met.
 func TestRecoveryRestoresAtThreshold(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusOK)
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_quota_exhausted"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
-
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 3, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	sw := healthyRecoveryFixture(t, "upstream_quota_exhausted", 3)
 
 	waitFor(t, 2*time.Second, func() bool { return sw.UpstreamEnabled("u1") })
 }
@@ -368,14 +375,7 @@ func TestAutoDisableHookRetiresCredentialFirst(t *testing.T) {
 // credential-retirement counter fired exactly n times.
 func assertCredentialRetiredCount(t *testing.T, metrics *obs.Metrics, want int) {
 	t.Helper()
-	var out strings.Builder
-	if err := metrics.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	wantLine := `breakwater_credential_retired_total{upstream="u1",reason="upstream_auth_failure"} `
-	if !strings.Contains(out.String(), wantLine+strconv.Itoa(want)) {
-		t.Fatalf("exposition missing %s%d:\n%s", wantLine, want, out.String())
-	}
+	assertMetricLine(t, metrics, `breakwater_credential_retired_total{upstream="u1",reason="upstream_auth_failure"} `, want)
 }
 
 // TestSwitchEnableRevivesRing: the switch's enable callback restores

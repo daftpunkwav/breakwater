@@ -49,20 +49,44 @@ func dripStream(ctx context.Context, n int, delay time.Duration) io.Reader {
 	return pr
 }
 
+// sseHeader is the header of a streaming reply.
+func sseHeader() http.Header {
+	header := http.Header{}
+	header.Set("Content-Type", "text/event-stream")
+	return header
+}
+
+// sseDripUpstream is one stub upstream answering a streaming 200 whose
+// body drips n frames one delay apart — the standard fixture of the
+// stream timing tests; the body dies with the request's context.
+func sseDripUpstream(n int, delay time.Duration) *stubUpstream {
+	return &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     sseHeader(),
+			Body:       io.NopCloser(dripStream(ctx, n, delay)),
+		}, nil
+	}}
+}
+
+// sseUpstream is one stub upstream answering a streaming 200 with a
+// fixed body.
+func sseUpstream(body io.Reader) *stubUpstream {
+	return &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     sseHeader(),
+			Body:       io.NopCloser(body),
+		}, nil
+	}}
+}
+
 // TestStreamOutlivesAttemptTimeout pins the streaming time budget: the
 // attempt timeout bounds time-to-first-byte only — a body that keeps
 // streaming past it must survive.
 func TestStreamOutlivesAttemptTimeout(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(dripStream(ctx, 5, 60*time.Millisecond)), // ~300ms total
-		}, nil
-	}}
+	cand := sseDripUpstream(5, 60*time.Millisecond) // ~300ms total
 	exec := New(retry.Policy{MaxAttempts: 1, AttemptTimeout: 80 * time.Millisecond}, nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
@@ -90,11 +114,9 @@ func TestStreamTimeToFirstByteRetries(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		}
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
 		return &upstream.Response{
 			StatusCode: http.StatusOK,
-			Header:     header,
+			Header:     sseHeader(),
 			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 		}, nil
 	}}
@@ -118,11 +140,6 @@ func TestStreamTimeToFirstByteRetries(t *testing.T) {
 func TestStreamTTFTExpiryDuringForwardRetries(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	sseHeader := func() http.Header {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return header
-	}
 	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
 		calls++
 		if calls == 1 {
@@ -153,15 +170,7 @@ func TestStreamTTFTExpiryDuringForwardRetries(t *testing.T) {
 // that runs past it ends through the error contract as upstream_timeout.
 func TestStreamCeilingTerminatesHonestly(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(dripStream(ctx, 20, 50*time.Millisecond)),
-		}, nil
-	}}
+	cand := sseDripUpstream(20, 50*time.Millisecond)
 	exec := New(retry.Policy{MaxAttempts: 1, AttemptTimeout: 2 * time.Second},
 		nil, WithStreamTimeout(100*time.Millisecond))
 
@@ -185,15 +194,7 @@ func TestStreamCeilingTerminatesHonestly(t *testing.T) {
 // open it.
 func TestStreamCeilingNeverPunishesTheBreaker(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(dripStream(ctx, 20, 50*time.Millisecond)),
-		}, nil
-	}}
+	cand := sseDripUpstream(20, 50*time.Millisecond)
 	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour, ProbeTimeout: time.Second})
 	exec := New(retry.Policy{MaxAttempts: 1, AttemptTimeout: 2 * time.Second},
 		nil, WithStreamTimeout(100*time.Millisecond), WithBreaker(breaker))
