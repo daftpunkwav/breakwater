@@ -264,15 +264,7 @@ func (m *Metrics) ObserveDuration(upstream string, seconds float64) {
 	if m == nil {
 		return
 	}
-	f := m.families["breakwater_request_duration_seconds"]
-	c := f.childOf(upstream)
-	addFloat(&c.value, seconds)
-	c.count.Add(1)
-	for i, bound := range f.buckets {
-		if seconds <= bound {
-			c.buckets[i].Add(1)
-		}
-	}
+	m.observeHistogram("breakwater_request_duration_seconds", upstream, seconds)
 }
 
 // InflightAdd adjusts the in-flight gauge.
@@ -481,7 +473,14 @@ func (m *Metrics) ObserveTTFT(upstream string, seconds float64) {
 	if m == nil {
 		return
 	}
-	f := m.families["breakwater_upstream_ttft_seconds"]
+	m.observeHistogram("breakwater_upstream_ttft_seconds", upstream, seconds)
+}
+
+// observeHistogram adds one observation to a histogram family: the
+// running sum, the sample count and every cumulative bucket the
+// observation lands in.
+func (m *Metrics) observeHistogram(family, upstream string, seconds float64) {
+	f := m.families[family]
 	c := f.childOf(upstream)
 	addFloat(&c.value, seconds)
 	c.count.Add(1)

@@ -61,85 +61,82 @@ func post(t *testing.T, handler http.Handler, path, key, body string) *httptest.
 	return rec
 }
 
-func TestResponsesRouteNonStream(t *testing.T) {
-	t.Parallel()
+// servedRoutes mounts the three inference routes over one fresh test
+// upstream, cleaned up with the test.
+func servedRoutes(t *testing.T) http.Handler {
+	t.Helper()
 	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
+	t.Cleanup(backend.Close)
+	return buildAllRoutes(t, backend.URL)
+}
 
-	rec := post(t, handler, "/v1/responses", "", `{"model":"m1","input":"hello"}`)
+// bufferedContract posts one buffered request against the served routes
+// and asserts the reply is a 200 carrying every wanted fragment.
+func bufferedContract(t *testing.T, path, body string, wants ...string) {
+	t.Helper()
+	rec := post(t, servedRoutes(t), path, "", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"object":"response"`) || !strings.Contains(body, `"text":"hi"`) {
-		t.Fatalf("body = %s", body)
+	assertContains(t, rec.Body.String(), wants...)
+}
+
+func TestResponsesRouteNonStream(t *testing.T) {
+	t.Parallel()
+	bufferedContract(t, "/v1/responses", `{"model":"m1","input":"hello"}`,
+		`"object":"response"`, `"text":"hi"`)
+}
+
+// assertContains fails the test once for every wanted substring the
+// body lacks.
+func assertContains(t *testing.T, body string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Errorf("stream missing %q\ngot:\n%s", want, body)
+		}
 	}
+}
+
+// streamContract posts one streaming request against the served routes
+// and asserts the reply carries every event of the format's stream
+// contract.
+func streamContract(t *testing.T, path, body string, wants ...string) {
+	t.Helper()
+	rec := post(t, servedRoutes(t), path, "", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	assertContains(t, rec.Body.String(), wants...)
 }
 
 func TestResponsesRouteStream(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/responses", "", `{"model":"m1","stream":true,"input":"hello"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	for _, want := range []string{
+	streamContract(t, "/v1/responses", `{"model":"m1","stream":true,"input":"hello"}`,
 		"event: response.created",
 		"event: response.output_text.delta",
 		`"delta":"hi"`,
 		"event: response.completed",
 		`"output_tokens":1`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("stream missing %q\ngot:\n%s", want, body)
-		}
-	}
+	)
 }
 
 func TestMessagesRouteNonStream(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/messages", "",
-		`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"type":"message"`) || !strings.Contains(body, `"stop_reason":"end_turn"`) {
-		t.Fatalf("body = %s", body)
-	}
+	bufferedContract(t, "/v1/messages",
+		`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
+		`"type":"message"`, `"stop_reason":"end_turn"`)
 }
 
 func TestMessagesRouteStream(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/messages", "",
-		`{"model":"m1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	for _, want := range []string{
+	streamContract(t, "/v1/messages",
+		`{"model":"m1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
 		"event: message_start",
 		"event: content_block_delta",
 		`"text":"hi"`,
 		"event: message_stop",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("stream missing %q\ngot:\n%s", want, body)
-		}
-	}
+	)
 }
 
 func TestMessagesRouteHonorsXAPIKey(t *testing.T) {
@@ -210,11 +207,7 @@ func TestMessagesRouteStreamAbortTerminatesHonestly(t *testing.T) {
 
 func TestMessagesRouteRejectsMissingMaxTokens(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-	handler := buildAllRoutes(t, backend.URL)
-
-	rec := post(t, handler, "/v1/messages", "", `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
+	rec := post(t, servedRoutes(t), "/v1/messages", "", `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

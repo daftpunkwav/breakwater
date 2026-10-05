@@ -14,17 +14,19 @@ import (
 	"time"
 )
 
-func TestCandidatesStaticKeepsBindingOrder(t *testing.T) {
-	t.Parallel()
+// twoUpstreamCandidates builds a router over two bindings in configured
+// order (slow-primary, fast-fallback) with the given measured
+// latencies, and returns the candidate ids it serves model m1 in.
+func twoUpstreamCandidates(t *testing.T, strategy Strategy, slowPrimary, fastFallback time.Duration) []string {
+	t.Helper()
 	tr := NewTracker()
-	// fast-fallback is measured faster, but static mode ignores scores.
-	tr.Record("slow-primary", 5*time.Millisecond, false)
-	tr.Record("fast-fallback", 1*time.Millisecond, false)
+	tr.Record("slow-primary", slowPrimary, false)
+	tr.Record("fast-fallback", fastFallback, false)
 
 	priority, err := NewPriority([]Binding{
 		{Models: []string{"m1"}, Upstream: stubUp{id: "slow-primary"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "fast-fallback"}},
-	}, WithStrategy(StrategyStatic), WithTracker(tr))
+	}, WithStrategy(strategy), WithTracker(tr))
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
@@ -33,30 +35,22 @@ func TestCandidatesStaticKeepsBindingOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
-	if got := candidateIDs(candidates); got[0] != "slow-primary" {
+	return candidateIDs(candidates)
+}
+
+func TestCandidatesStaticKeepsBindingOrder(t *testing.T) {
+	t.Parallel()
+	// fast-fallback is measured faster, but static mode ignores scores.
+	got := twoUpstreamCandidates(t, StrategyStatic, 5*time.Millisecond, 1*time.Millisecond)
+	if got[0] != "slow-primary" {
 		t.Fatalf("order = %v, want the configured order under static strategy", got)
 	}
 }
 
 func TestCandidatesLatencyPrefersFastest(t *testing.T) {
 	t.Parallel()
-	tr := NewTracker()
-	tr.Record("slow-primary", 50*time.Millisecond, false)
-	tr.Record("fast-fallback", 5*time.Millisecond, false)
-
-	priority, err := NewPriority([]Binding{
-		{Models: []string{"m1"}, Upstream: stubUp{id: "slow-primary"}},
-		{Models: []string{"m1"}, Upstream: stubUp{id: "fast-fallback"}},
-	}, WithStrategy(StrategyLatency), WithTracker(tr))
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-
-	candidates, err := priority.Candidates(context.Background(), "m1")
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
-	if got := candidateIDs(candidates); got[0] != "fast-fallback" {
+	got := twoUpstreamCandidates(t, StrategyLatency, 50*time.Millisecond, 5*time.Millisecond)
+	if got[0] != "fast-fallback" {
 		t.Fatalf("order = %v, want the measured-cheapest first", got)
 	}
 }

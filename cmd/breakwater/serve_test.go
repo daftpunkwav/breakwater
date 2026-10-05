@@ -272,6 +272,15 @@ func TestServeWithoutIdentity(t *testing.T) {
 	}
 }
 
+// runMustFail runs the assembly under the current environment and
+// fails the test when it boots.
+func runMustFail(t *testing.T, why string) {
+	t.Helper()
+	if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
+		t.Fatal(why)
+	}
+}
+
 // TestServeReturnsStartupErrors pins that assembly failures surface as
 // returned errors instead of exit codes. Each branch below trips a
 // different assembly step after config.Load has passed.
@@ -282,25 +291,19 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		// The admin-token guard is not this test's subject: arm the
 		// surface so the failure comes from the identity store assembly.
 		t.Setenv("BREAKWATER_ADMIN_TOKEN", "test")
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("assembly failure must surface as a returned error")
-		}
+		runMustFail(t, "assembly failure must surface as a returned error")
 	})
 
 	t.Run("access log path", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0")) // DSN stays empty: static identity
 		t.Setenv("BREAKWATER_ACCESS_LOG_PATH", filepath.Join(t.TempDir(), "missing-dir", "a.log"))
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("an unopenable access log must fail assembly")
-		}
+		runMustFail(t, "an unopenable access log must fail assembly")
 	})
 
 	t.Run("dead redis", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_REDIS_ADDR", "127.0.0.1:1")
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("dead redis: assembly failure must surface as a returned error")
-		}
+		runMustFail(t, "dead redis: assembly failure must surface as a returned error")
 	})
 
 	t.Run("busy port", func(t *testing.T) {
@@ -311,9 +314,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		blocker := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 		defer blocker.Close()
 		setEnv(t, baseEnv(blocker.Listener.Addr().String()))
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("a busy port must surface as a returned error")
-		}
+		runMustFail(t, "a busy port must surface as a returned error")
 	})
 
 	t.Run("malformed static identity", func(t *testing.T) {
@@ -321,9 +322,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		// store assembly rather than from any later step.
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_IDENTITY", "{not json")
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("malformed identity JSON must fail assembly")
-		}
+		runMustFail(t, "malformed identity JSON must fail assembly")
 	})
 
 	t.Run("invalid model binding", func(t *testing.T) {
@@ -331,9 +330,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		// adapters are built, after the identity store is in place.
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_UPSTREAMS", `[{"id":"mock","base_url":"http://127.0.0.1:1","models":["=broken"]}]`)
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("an unresolvable model binding must fail assembly")
-		}
+		runMustFail(t, "an unresolvable model binding must fail assembly")
 	})
 
 	t.Run("fallback names an unknown model", func(t *testing.T) {
@@ -344,17 +341,13 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_UPSTREAMS", `[{"id":"mock","base_url":"http://127.0.0.1:1","models":["m1"]}]`)
 		t.Setenv("BREAKWATER_FALLBACKS", `{"m1":["nope"]}`)
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("a fallback naming an unconfigured model must fail assembly")
-		}
+		runMustFail(t, "a fallback naming an unconfigured model must fail assembly")
 	})
 
 	t.Run("unknown routing strategy", func(t *testing.T) {
 		setEnv(t, baseEnv("127.0.0.1:0"))
 		t.Setenv("BREAKWATER_ROUTING_STRATEGY", "random")
-		if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-			t.Fatal("an unknown routing strategy must fail assembly")
-		}
+		runMustFail(t, "an unknown routing strategy must fail assembly")
 	})
 }
 
@@ -363,9 +356,7 @@ func TestServeReturnsStartupErrors(t *testing.T) {
 func TestRunRejectsBadConfiguration(t *testing.T) {
 	setEnv(t, baseEnv("127.0.0.1:0"))
 	t.Setenv("BREAKWATER_STREAM_TIMEOUT", "-5s")
-	if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-		t.Fatal("run must reject an invalid configuration")
-	}
+	runMustFail(t, "run must reject an invalid configuration")
 }
 
 // TestRunRejectsUnauthenticatedDeployment: the binary path refuses the
@@ -377,9 +368,7 @@ func TestRunRejectsUnauthenticatedDeployment(t *testing.T) {
 		`BREAKWATER_UPSTREAMS=[{"id":"mock","base_url":"http://127.0.0.1:1","models":["*"]}]`,
 		"BREAKWATER_IDENTITY=",
 	})
-	if err := run(context.Background(), slog.New(slog.DiscardHandler), "test"); err == nil {
-		t.Fatal("run must refuse upstreams without an identity source")
-	}
+	runMustFail(t, "run must refuse upstreams without an identity source")
 }
 
 func TestMergeReadiness(t *testing.T) {

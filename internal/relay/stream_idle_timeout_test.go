@@ -123,17 +123,9 @@ func TestIdleWatchdogCutsSilentStream(t *testing.T) {
 // re-arms the watchdog on every body read.
 func TestIdleWatchdogHeldOffByActivity(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		// Five frames, one every 40ms inside the 150ms window: ~200ms
-		// total, past the idle window many times over.
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(dripStream(ctx, 5, 40*time.Millisecond)),
-		}, nil
-	}}
+	// Five frames, one every 40ms inside the 150ms window: ~200ms
+	// total, past the idle window many times over.
+	cand := sseDripUpstream(5, 40*time.Millisecond)
 	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithStreamIdleTimeout(150*time.Millisecond))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")

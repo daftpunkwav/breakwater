@@ -197,41 +197,14 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	case strings.HasPrefix(r.URL.Path, "/admin/models/"):
 		a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-			a.serveModelSwitch(w, r, strings.TrimPrefix(r.URL.Path, "/admin/models/"))
+			a.serveRoutingSwitch(w, r, modelSwitch, strings.TrimPrefix(r.URL.Path, "/admin/models/"))
 		})
 	case strings.HasPrefix(r.URL.Path, "/admin/upstreams/"):
 		a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-			a.serveUpstreamSwitch(w, r, strings.TrimPrefix(r.URL.Path, "/admin/upstreams/"))
+			a.serveRoutingSwitch(w, r, upstreamSwitch, strings.TrimPrefix(r.URL.Path, "/admin/upstreams/"))
 		})
 	case strings.HasPrefix(r.URL.Path, "/admin/tenants/") && strings.HasSuffix(r.URL.Path, "/quota"):
-		tenantID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/tenants/"), "/quota")
-		if tenantID == "" {
-			http.NotFound(w, r)
-			return
-		}
-		// The tenant id is a Redis/ledger key segment and an access-log
-		// field downstream; a character outside the identity stores' own
-		// rule would create or read ledger entries no real tenant can
-		// ever own. Reject it here, at the surface's boundary, before the
-		// ledger is consulted.
-		if !validTenantID(tenantID) {
-			protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-				"tenant ids are 1-128 characters of [A-Za-z0-9._-]")
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			a.guarded(w, r, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-				a.serveQuota(w, r, tenantID)
-			})
-		case http.MethodPut:
-			a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-				a.serveQuotaTopUp(w, r, tenantID)
-			})
-		default:
-			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPut)
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
+		a.serveTenants(w, r, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/tenants/"), "/quota"))
 	default:
 		http.NotFound(w, r)
 	}
@@ -245,6 +218,44 @@ func (a *Admin) guarded(w http.ResponseWriter, r *http.Request, method string, f
 		return
 	}
 	fn(w, r)
+}
+
+// guardedPair routes a dual-method path: GET reads, writeMethod writes,
+// and anything else is a 405 advertising both — the same answer every
+// dual-method path on this surface gives.
+func (a *Admin) guardedPair(w http.ResponseWriter, r *http.Request, writeMethod string, read, write http.HandlerFunc) {
+	switch r.Method {
+	case http.MethodGet:
+		read(w, r)
+	case writeMethod:
+		write(w, r)
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+writeMethod)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// serveTenants routes /admin/tenants/{id}/quota once the id segment is
+// cut loose: the id must clear the tenant rule before any ledger is
+// consulted, then GET reads the balance and PUT tops it up.
+func (a *Admin) serveTenants(w http.ResponseWriter, r *http.Request, tenantID string) {
+	if tenantID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	// The tenant id is a Redis/ledger key segment and an access-log
+	// field downstream; a character outside the identity stores' own
+	// rule would create or read ledger entries no real tenant can
+	// ever own. Reject it here, at the surface's boundary, before the
+	// ledger is consulted.
+	if !validTenantID(tenantID) {
+		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"tenant ids are 1-128 characters of [A-Za-z0-9._-]")
+		return
+	}
+	a.guardedPair(w, r, http.MethodPut,
+		func(w http.ResponseWriter, r *http.Request) { a.serveQuota(w, r, tenantID) },
+		func(w http.ResponseWriter, r *http.Request) { a.serveQuotaTopUp(w, r, tenantID) })
 }
 
 // authorized checks the bearer token; empty token disables the check.
@@ -420,31 +431,38 @@ func (a *Admin) serveRouting(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.routing.View())
 }
 
-// serveModelSwitch handles PUT /admin/models/{id}: the body is
-// {"enabled": false} and takes the model out of routing immediately.
-func (a *Admin) serveModelSwitch(w http.ResponseWriter, r *http.Request, model string) {
-	if a.routing == nil || model == "" {
-		http.NotFound(w, r)
-		return
-	}
-	enabled, ok := decodeEnabled(w, r)
-	if !ok {
-		return
-	}
-	if err := a.routing.SetModel(model, enabled); err != nil {
-		if errors.Is(err, router.ErrUnknownModel) {
-			protocol.WriteError(w, http.StatusNotFound, "model_unknown", err.Error())
-			return
-		}
-		protocol.WriteError(w, http.StatusInternalServerError, "routing_switch_failed", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"model": model, "enabled": enabled})
+// switchTarget names one subject of the runtime routing switches: the
+// JSON field the response answers with, the sentinel its store call
+// reports for an unknown id, the wire code that sentinel renders as,
+// and the switch call itself.
+type switchTarget struct {
+	label   string
+	unknown error
+	code    string
+	set     func(*router.Switch, string, bool) error
 }
 
-// serveUpstreamSwitch handles PUT /admin/upstreams/{id}: the body is
-// {"enabled": false} and drops the upstream from every candidate list.
-func (a *Admin) serveUpstreamSwitch(w http.ResponseWriter, r *http.Request, id string) {
+// modelSwitch and upstreamSwitch are the switch subjects: PUT
+// /admin/models/{id} and PUT /admin/upstreams/{id} differ only by them.
+var (
+	modelSwitch = switchTarget{
+		label:   "model",
+		unknown: router.ErrUnknownModel,
+		code:    "model_unknown",
+		set:     (*router.Switch).SetModel,
+	}
+	upstreamSwitch = switchTarget{
+		label:   "upstream",
+		unknown: router.ErrUnknownUpstream,
+		code:    "upstream_unknown",
+		set:     (*router.Switch).SetUpstream,
+	}
+)
+
+// serveRoutingSwitch handles the PUT switches: the body is
+// {"enabled": false} and takes the subject out of routing immediately —
+// a misbehaving model or provider must not require a restart.
+func (a *Admin) serveRoutingSwitch(w http.ResponseWriter, r *http.Request, t switchTarget, id string) {
 	if a.routing == nil || id == "" {
 		http.NotFound(w, r)
 		return
@@ -453,15 +471,15 @@ func (a *Admin) serveUpstreamSwitch(w http.ResponseWriter, r *http.Request, id s
 	if !ok {
 		return
 	}
-	if err := a.routing.SetUpstream(id, enabled); err != nil {
-		if errors.Is(err, router.ErrUnknownUpstream) {
-			protocol.WriteError(w, http.StatusNotFound, "upstream_unknown", err.Error())
+	if err := t.set(a.routing, id, enabled); err != nil {
+		if errors.Is(err, t.unknown) {
+			protocol.WriteError(w, http.StatusNotFound, t.code, err.Error())
 			return
 		}
 		protocol.WriteError(w, http.StatusInternalServerError, "routing_switch_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"upstream": id, "enabled": enabled})
+	writeJSON(w, http.StatusOK, map[string]any{t.label: id, "enabled": enabled})
 }
 
 // decodeEnabled parses the {"enabled": bool} switch payload shared by
@@ -488,21 +506,10 @@ func decodeEnabled(w http.ResponseWriter, r *http.Request) (bool, bool) {
 // must fail the write loudly, never land as a silent no-op on a
 // governance surface. Trailing data after the first JSON value is
 // rejected the same way: `{"balance":5} {"balance":9}` must never
-// silently take the first document.
+// silently take the first document. An absent body is a 400 — the
+// caller asked for a payload.
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-			"malformed or unexpected request body")
-		return false
-	}
-	if err := dec.Decode(v); !errors.Is(err, io.EOF) {
-		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
-			"unexpected data after the JSON body")
-		return false
-	}
-	return true
+	return decodeAdminBody(w, r, v, false)
 }
 
 // decodeAdminJSONOptional is decodeAdminJSON for the endpoints whose
@@ -510,9 +517,22 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // decodes as the zero value, every other malformed or unknown-member
 // document — trailing data included — is rejected exactly the same way.
 func decodeAdminJSONOptional(w http.ResponseWriter, r *http.Request, v any) bool {
+	return decodeAdminBody(w, r, v, true)
+}
+
+// decodeAdminBody is the strict decoder both admin JSON helpers share.
+// optional marks whether an absent body (EOF) counts as the zero value
+// instead of a 400; every other rejection is identical, so the two
+// entry points cannot drift.
+func decodeAdminBody(w http.ResponseWriter, r *http.Request, v any, optional bool) bool {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
+	err := dec.Decode(v)
+	if optional && errors.Is(err, io.EOF) {
+		// The documented absent-body zero value.
+		return true
+	}
+	if err != nil {
 		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
 			"malformed or unexpected request body")
 		return false

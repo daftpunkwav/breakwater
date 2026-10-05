@@ -1,7 +1,8 @@
 /**
  * @file breaker
- * @description The hand-written circuit breaker: a per-upstream
- * three-state machine (closed / open / half-open).
+ * @description The hand-written consecutive-failure circuit breaker: a
+ * per-upstream three-state machine (closed / open / half-open) over the
+ * positional skeleton every strategy shares (machine.go).
  *
  * Responsibilities:
  * - Stop traffic toward a persistently failing upstream and probe it
@@ -55,13 +56,11 @@ const (
 	defaultProbeTimeout  = 5 * time.Second
 )
 
-// state is the mutable per-upstream machine state.
+// state is the mutable per-upstream machine state: the shared skeleton
+// plus the consecutive-failure count that is this strategy's evidence.
 type state struct {
-	id       string
-	name     State
+	machine
 	failures int
-	openedAt time.Time
-	probe    *probeGrant // non-nil while a half-open probe is outstanding
 }
 
 // probeGrant tracks the one outstanding half-open probe; nil probe
@@ -73,13 +72,12 @@ type probeGrant struct {
 // Registry is the process-local breaker registry. It is safe for
 // concurrent use.
 type Registry struct {
-	mu         sync.Mutex
-	cfg        Config
-	byUpstream map[string]*state
-	now        func() time.Time
-	// onTransition observes every state change (metrics hook); nil
-	// disables observation.
-	onTransition func(upstreamID string, from, to State)
+	mu sync.Mutex
+	// gov runs the positional skeleton; failThreshold is this
+	// strategy's evidence rule.
+	gov           governor
+	failThreshold int
+	byUpstream    map[string]*state
 }
 
 // Option customizes a Registry.
@@ -87,12 +85,12 @@ type Option func(*Registry)
 
 // WithClock overrides the clock for tests.
 func WithClock(now func() time.Time) Option {
-	return func(b *Registry) { b.now = now }
+	return func(b *Registry) { b.gov.now = now }
 }
 
 // OnTransition installs the state-change observer.
 func OnTransition(fn func(upstreamID string, from, to State)) Option {
-	return func(b *Registry) { b.onTransition = fn }
+	return func(b *Registry) { b.gov.onTransition = fn }
 }
 
 // NewRegistry builds the breaker registry.
@@ -107,9 +105,13 @@ func NewRegistry(cfg Config, opts ...Option) *Registry {
 		cfg.ProbeTimeout = defaultProbeTimeout
 	}
 	b := &Registry{
-		cfg:        cfg,
-		byUpstream: make(map[string]*state),
-		now:        time.Now,
+		gov: governor{
+			cooldown:     cfg.Cooldown,
+			probeTimeout: cfg.ProbeTimeout,
+			now:          time.Now,
+		},
+		failThreshold: cfg.FailThreshold,
+		byUpstream:    make(map[string]*state),
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -124,70 +126,18 @@ func (b *Registry) Allow(_ context.Context, upstreamID string) (Permission, bool
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s := b.stateOf(upstreamID)
-	now := b.now()
-
-	switch s.name {
-	case StateClosed:
-		return &granted{s: s, breaker: b}, true
-
-	case StateOpen:
-		if now.Sub(s.openedAt) < b.cfg.Cooldown {
-			return nil, false
-		}
-		// Cooldown elapsed: the breaker transitions to half-open and
-		// this call becomes the probe.
-		b.transition(s, StateHalfOpen)
-		grant := &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
-		s.probe = grant
-		return &granted{s: s, breaker: b, grant: grant}, true
-
-	case StateHalfOpen:
-		// Exactly one probe may be outstanding. An expired one is
-		// reclaimed first and counted as a server fault: past its
-		// deadline a probe is no longer evidence about the upstream,
-		// whoever still holds it — a hung holder and a holder that
-		// finished successfully but reported late look the same here.
-		if s.probe != nil {
-			if now.After(s.probe.deadline) {
-				b.reclaimProbe(s, now)
-			}
-			// Another probe is outstanding: denied, never queued.
-			return nil, false
-		}
-		grant := &probeGrant{deadline: now.Add(b.cfg.ProbeTimeout)}
-		s.probe = grant
-		return &granted{s: s, breaker: b, grant: grant}, true
-	}
-	return nil, false
+	return b.gov.allow(&s.machine,
+		func(grant *probeGrant) Permission { return &granted{s: s, breaker: b, grant: grant} })
 }
 
 // StateOf implements Breaker. Reading state performs lazy transitions
 // (open cooldown elapsed → half-open; expired probe → open) so the
-// router's pre-filter never sees stale positions. A read never
-// allocates the probe slot: probing stays the exclusive business of
-// Allow, so a router read followed by the attempt still finds the slot
-// free.
+// router's pre-filter never sees stale positions.
 func (b *Registry) StateOf(_ context.Context, upstreamID string) State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s := b.stateOf(upstreamID)
-	now := b.now()
-
-	switch s.name {
-	case StateOpen:
-		if now.Sub(s.openedAt) >= b.cfg.Cooldown {
-			// Lazy transition so a reader never sees a stale open. No
-			// probe is allocated here: a read must not consume the single
-			// half-open slot — the next Allow becomes the probe.
-			b.transition(s, StateHalfOpen)
-			return StateHalfOpen
-		}
-	case StateHalfOpen:
-		if s.probe != nil && now.After(s.probe.deadline) {
-			b.reclaimProbe(s, now)
-		}
-	}
-	return s.name
+	return b.gov.observe(&s.machine)
 }
 
 // Reset implements Breaker: an operator forcing the breaker closed.
@@ -200,44 +150,17 @@ func (b *Registry) Reset(_ context.Context, upstreamID string) {
 	s := b.stateOf(upstreamID)
 	s.failures = 0
 	s.probe = nil
-	b.transition(s, StateClosed)
+	b.gov.enter(&s.machine, StateClosed, nil)
 }
 
 // stateOf returns the per-upstream state, creating it in closed.
 func (b *Registry) stateOf(upstreamID string) *state {
 	s, ok := b.byUpstream[upstreamID]
 	if !ok {
-		s = &state{id: upstreamID, name: StateClosed}
+		s = &state{machine: machine{id: upstreamID, name: StateClosed}}
 		b.byUpstream[upstreamID] = s
 	}
 	return s
-}
-
-// transition moves the machine and fires the observer.
-func (b *Registry) transition(s *state, to State) {
-	from := s.name
-	if from == to {
-		return
-	}
-	s.name = to
-	if to == StateOpen {
-		s.openedAt = b.now()
-	}
-	if to == StateClosed {
-		s.failures = 0
-		s.probe = nil
-	}
-	if b.onTransition != nil {
-		b.onTransition(s.id, from, to)
-	}
-}
-
-// reclaimProbe absorbs an abandoned or expired probe as a server
-// fault, moving half-open back to open with a fresh cooldown.
-func (b *Registry) reclaimProbe(s *state, now time.Time) {
-	s.probe = nil
-	b.transition(s, StateOpen)
-	s.openedAt = now
 }
 
 // granted is the Permission of an admitted call. grant pins the
@@ -262,7 +185,7 @@ func (g *granted) Report(outcome Outcome) {
 	g.reported = true
 
 	b, s := g.breaker, g.s
-	now := b.now()
+	now := b.gov.now()
 
 	switch s.name {
 	case StateClosed:
@@ -271,8 +194,8 @@ func (g *granted) Report(outcome Outcome) {
 			s.failures = 0
 		case OutcomeServerFault:
 			s.failures++
-			if s.failures >= b.cfg.FailThreshold {
-				b.transition(s, StateOpen)
+			if s.failures >= b.failThreshold {
+				b.gov.enter(&s.machine, StateOpen, nil)
 			}
 		default:
 			// OutcomeGatewayTerminated: the gateway cut the call under
@@ -291,21 +214,21 @@ func (g *granted) Report(outcome Outcome) {
 			// A probe the gateway itself truncated proves nothing about
 			// the upstream: back to open with a fresh cooldown, exactly
 			// like an expired probe, instead of closing on no evidence.
-			b.reclaimProbe(s, now)
+			b.gov.reclaim(&s.machine, now)
 			return
 		}
 		if now.After(s.probe.deadline) && (outcome == OutcomeSuccess || outcome == OutcomeSlow) {
 			// A success reported after its own deadline is unreliable;
 			// treat the probe as timed out.
-			b.reclaimProbe(s, now)
+			b.gov.reclaim(&s.machine, now)
 			return
 		}
 		s.probe = nil
 		switch outcome {
 		case OutcomeSuccess, OutcomeClientFault, OutcomeSlow:
-			b.transition(s, StateClosed)
+			b.gov.enter(&s.machine, StateClosed, func() { s.failures = 0 })
 		case OutcomeServerFault:
-			b.transition(s, StateOpen)
+			b.gov.enter(&s.machine, StateOpen, nil)
 		}
 
 	case StateOpen:

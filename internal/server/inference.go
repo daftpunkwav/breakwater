@@ -142,25 +142,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := s.router.Candidates(r.Context(), carrier.Chat.Model)
 	if err != nil {
-		if errors.Is(err, router.ErrDisabled) {
-			// An operator switched the model off: a deliberate refusal,
-			// distinct from a configuration gap (404) and a health
-			// condition (503).
-			wire.RenderError(w, http.StatusForbidden, "model_disabled",
-				"model "+carrier.Chat.Model+" is disabled by the operator")
-			return
-		}
-		if errors.Is(err, router.ErrUnavailable) {
-			// The model exists but every binding is ineligible: the
-			// same fast-fail contract the executor renders at attempt
-			// time, so the condition reads identically wherever it is
-			// detected.
-			wire.RenderError(w, http.StatusServiceUnavailable, "circuit_open",
-				"every upstream serving model "+carrier.Chat.Model+" is unavailable")
-			return
-		}
-		wire.RenderError(w, http.StatusNotFound, "model_not_found",
-			"no upstream serves model "+carrier.Chat.Model)
+		renderCandidatesError(w, wire, carrier.Chat.Model, err)
 		return
 	}
 
@@ -228,6 +210,37 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// reservation itself as the last resort for a delivered 2xx reply,
 	// and zero for a failure — an error reply served no tokens, so its
 	// reservation refunds in full.
+	settleConsumption(carrier, result)
+	carrier.Relay = &result
+}
+
+// renderCandidatesError maps the router's candidate lookup failures
+// onto the inference endpoints' status codes, so every format renders
+// the same condition identically.
+func renderCandidatesError(w http.ResponseWriter, wire protocol.Wire, model string, err error) {
+	switch {
+	case errors.Is(err, router.ErrDisabled):
+		// An operator switched the model off: a deliberate refusal,
+		// distinct from a configuration gap (404) and a health
+		// condition (503).
+		wire.RenderError(w, http.StatusForbidden, "model_disabled",
+			"model "+model+" is disabled by the operator")
+	case errors.Is(err, router.ErrUnavailable):
+		// The model exists but every binding is ineligible: the
+		// same fast-fail contract the executor renders at attempt
+		// time, so the condition reads identically wherever it is
+		// detected.
+		wire.RenderError(w, http.StatusServiceUnavailable, "circuit_open",
+			"every upstream serving model "+model+" is unavailable")
+	default:
+		wire.RenderError(w, http.StatusNotFound, "model_not_found",
+			"no upstream serves model "+model)
+	}
+}
+
+// settleConsumption records how many tokens the completed exchange
+// consumed against the carrier's reservation.
+func settleConsumption(carrier *pipeline.Carrier, result relay.Result) {
 	switch {
 	case result.Status < 200 || result.Status > 299:
 		carrier.Consumed = 0
@@ -238,5 +251,4 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		carrier.Consumed = carrier.Tokens
 	}
-	carrier.Relay = &result
 }

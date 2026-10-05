@@ -98,20 +98,33 @@ func buildEndpoint(t *testing.T, backendURL string) http.Handler {
 	)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
 }
 
-func TestCompletionsBufferedRoundTrip(t *testing.T) {
-	t.Parallel()
+// completionGateway serves the chat-completions endpoint over one
+// fresh test upstream, cleaned up with the test.
+func completionGateway(t *testing.T) *httptest.Server {
+	t.Helper()
 	backend := testUpstreamBackend(t)
-	defer backend.Close()
-
+	t.Cleanup(backend.Close)
 	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil, nil))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hello"}]}`))
+// postCompletion posts one chat-completions body to the gateway and
+// returns the response; its body is closed with the test.
+func postCompletion(t *testing.T, body string) *http.Response {
+	t.Helper()
+	resp, err := http.Post(completionGateway(t).URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+func TestCompletionsBufferedRoundTrip(t *testing.T) {
+	t.Parallel()
+	resp := postCompletion(t, `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -126,18 +139,7 @@ func TestCompletionsBufferedRoundTrip(t *testing.T) {
 
 func TestCompletionsStreamedRoundTrip(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil, nil))
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	resp := postCompletion(t, `{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content type = %q", ct)
@@ -154,18 +156,7 @@ func TestCompletionsStreamedRoundTrip(t *testing.T) {
 
 func TestCompletionsUnknownModel(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil, nil))
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"model":"nope","messages":[]}`))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	resp := postCompletion(t, `{"model":"nope","messages":[]}`)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
@@ -220,17 +211,7 @@ func TestCompletionsAllUpstreamsCircuitOpenIsUnavailable(t *testing.T) {
 
 func TestCompletionsMalformedBody(t *testing.T) {
 	t.Parallel()
-	backend := testUpstreamBackend(t)
-	defer backend.Close()
-
-	srv := httptest.NewServer(newRootHandler(inferenceMap(buildEndpoint(t, backend.URL)), nil, nil, "test", nil, nil))
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader("{not json"))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	resp := postCompletion(t, "{not json")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}

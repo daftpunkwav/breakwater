@@ -25,6 +25,17 @@ type authzSpy struct {
 
 func (s *authzSpy) ServeHTTP(_ http.ResponseWriter, _ *http.Request) { s.called = true }
 
+// governedTenant fires one request through the stage as tenant t1
+// carrying the given tier in the canonical chat format — the shape
+// every governed-path test varies only in its tier and body.
+func governedTenant(t *testing.T, tier auth.Tier, body string) (*httptest.ResponseRecorder, *authzSpy) {
+	t.Helper()
+	return authzFire(t, &Carrier{
+		Format: protocol.FormatOpenAIChat,
+		Tenant: auth.Tenant{ID: "t1", Tier: tier},
+	}, body)
+}
+
 // authzFire runs one request through the stage and returns the recorder
 // and the wrapped handler state.
 func authzFire(t *testing.T, carrier *Carrier, body string) (*httptest.ResponseRecorder, *authzSpy) {
@@ -40,11 +51,7 @@ func authzFire(t *testing.T, carrier *Carrier, body string) (*httptest.ResponseR
 
 func TestAuthzStageDeniesModelOutsideTier(t *testing.T) {
 	t.Parallel()
-	carrier := &Carrier{
-		Format: protocol.FormatOpenAIChat,
-		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"m1"}}},
-	}
-	rec, spy := authzFire(t, carrier, `{"model":"m2","messages":[{"role":"user","content":"hi"}]}`)
+	rec, spy := governedTenant(t, auth.Tier{AllowedModels: []string{"m1"}}, `{"model":"m2","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "model_not_allowed") {
 		t.Fatalf("status = %d body = %s, want 403 model_not_allowed", rec.Code, rec.Body.String())
 	}
@@ -55,14 +62,10 @@ func TestAuthzStageDeniesModelOutsideTier(t *testing.T) {
 
 func TestAuthzStageDenyBeatsAllowAndWildcard(t *testing.T) {
 	t.Parallel()
-	carrier := &Carrier{
-		Format: protocol.FormatOpenAIChat,
-		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{
-			AllowedModels: []string{"*"},
-			DeniedModels:  []string{"m2"},
-		}},
-	}
-	rec, spy := authzFire(t, carrier, `{"model":"m2","messages":[{"role":"user","content":"hi"}]}`)
+	rec, spy := governedTenant(t, auth.Tier{
+		AllowedModels: []string{"*"},
+		DeniedModels:  []string{"m2"},
+	}, `{"model":"m2","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusForbidden || spy.called {
 		t.Fatalf("status = %d called = %v, want the deny list to win", rec.Code, spy.called)
 	}
@@ -70,11 +73,7 @@ func TestAuthzStageDenyBeatsAllowAndWildcard(t *testing.T) {
 
 func TestAuthzStageAllowsListModel(t *testing.T) {
 	t.Parallel()
-	carrier := &Carrier{
-		Format: protocol.FormatOpenAIChat,
-		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"m1"}}},
-	}
-	rec, spy := authzFire(t, carrier, `{"model":"m1","messages":[{"role":"user","content":"hi"}]}`)
+	rec, spy := governedTenant(t, auth.Tier{AllowedModels: []string{"m1"}}, `{"model":"m1","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusOK || !spy.called {
 		t.Fatalf("status = %d called = %v, want the allowed model through", rec.Code, spy.called)
 	}
@@ -94,9 +93,7 @@ func TestAuthzStageUngovernedBypass(t *testing.T) {
 
 func TestAuthzStageRequiresModel(t *testing.T) {
 	t.Parallel()
-	carrier := &Carrier{Format: protocol.FormatOpenAIChat,
-		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"*"}}}}
-	rec, spy := authzFire(t, carrier, `{"messages":[{"role":"user","content":"hi"}]}`)
+	rec, spy := governedTenant(t, auth.Tier{AllowedModels: []string{"*"}}, `{"messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "model is required") {
 		t.Fatalf("status = %d body = %s, want 400 model is required", rec.Code, rec.Body.String())
 	}
@@ -107,9 +104,7 @@ func TestAuthzStageRequiresModel(t *testing.T) {
 
 func TestAuthzStageRejectsMalformedBody(t *testing.T) {
 	t.Parallel()
-	carrier := &Carrier{Format: protocol.FormatOpenAIChat,
-		Tenant: auth.Tenant{ID: "t1", Tier: auth.Tier{AllowedModels: []string{"*"}}}}
-	rec, spy := authzFire(t, carrier, `{malformed`)
+	rec, spy := governedTenant(t, auth.Tier{AllowedModels: []string{"*"}}, `{malformed`)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_request") {
 		t.Fatalf("status = %d body = %s, want 400 invalid_request", rec.Code, rec.Body.String())
 	}
