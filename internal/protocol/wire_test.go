@@ -63,6 +63,94 @@ func TestValidHeaderValue(t *testing.T) {
 	}
 }
 
+// TestForwardedContentType pins the media-type policy: a type a browser
+// would render as a document, sniff into one, or cannot parse at all is
+// replaced by the fallback; everything a client can actually parse is
+// relayed verbatim; and a value that is not a legal field value never
+// reaches the wire. The document cases cover all three families the rule
+// names — the HTML and XML MIME types a browser uses as supplied, the
+// unknown labels it hands to the sniffing algorithm, and the multipart
+// push type whose parts are navigated one by one.
+func TestForwardedContentType(t *testing.T) {
+	t.Parallel()
+	const fallback = "text/plain; charset=utf-8"
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"json", "application/json", "application/json"},
+		{"json with charset", "application/json; charset=utf-8", "application/json; charset=utf-8"},
+		{"sse", "text/event-stream", "text/event-stream"},
+		{"plain text", "text/plain; charset=utf-8", "text/plain; charset=utf-8"},
+		{"octet stream", "application/octet-stream", "application/octet-stream"},
+		{"problem json", "application/problem+json", "application/problem+json"},
+		{"multipart mixed", "multipart/mixed; boundary=x", "multipart/mixed; boundary=x"},
+		{"html", "text/html", fallback},
+		{"html with charset", "text/html; charset=utf-8", fallback},
+		{"html upper case", "TEXT/HTML", fallback},
+		{"xhtml", "application/xhtml+xml", fallback},
+		{"svg", "image/svg+xml", fallback},
+		{"xml", "application/xml", fallback},
+		{"text xml", "text/xml", fallback},
+		{"other xml family", "application/rss+xml", fallback},
+		{"application unknown", "application/unknown", fallback},
+		{"unknown unknown", "unknown/unknown", fallback},
+		{"wildcard", "*/*", fallback},
+		{"unknown label with parameters", "application/unknown; charset=utf-8", fallback},
+		{"multipart mixed replace", "multipart/x-mixed-replace; boundary=x", fallback},
+		{"json is not the xml family", "application/vnd.api+json", "application/vnd.api+json"},
+		{"empty", "", fallback},
+		{"illegal", "text/html\r\nSet-Cookie: x", fallback},
+		{"crlf inside a quoted parameter", "text/plain; x=\"a\r\nb\"", fallback},
+		{"unterminated quoted parameter", "text/plain; x=\"a", fallback},
+		{"parameter without a value", "text/plain; charset", fallback},
+		{"bare token, no subtype", "not-a-media-type", fallback},
+		{"bare wildcard, no subtype", "*", fallback},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ForwardedContentType(tc.in, fallback); got != tc.want {
+				t.Fatalf("ForwardedContentType(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderExchangeBodyReplacesDocumentContentType pins the passthrough
+// boundary: the upstream's bytes are relayed unchanged, but a media type
+// a browser would render as a document is not, and a body the upstream
+// left unlabelled is not left to net/http's sniffing either.
+func TestRenderExchangeBodyReplacesDocumentContentType(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		ct   string
+		want string
+	}{
+		{"document", "text/html", PlainContentType},
+		{"unlabelled", "", PlainContentType},
+		{"parseable", "application/json", "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			header := http.Header{}
+			if tc.ct != "" {
+				header.Set("Content-Type", tc.ct)
+			}
+			rec := httptest.NewRecorder()
+			renderExchangeBody(rec, http.StatusBadGateway, header, []byte("<script>alert(1)</script>"), PassthroughHeaderNames())
+
+			if got := rec.Header().Get("Content-Type"); got != tc.want {
+				t.Fatalf("content type = %q, want %q", got, tc.want)
+			}
+			if got := rec.Body.String(); got != "<script>alert(1)</script>" {
+				t.Fatalf("body = %q, want the upstream bytes unchanged", got)
+			}
+		})
+	}
+}
+
 // TestRenderExchangeBodyDropsIllegalHeaderValues pins the passthrough's
 // upstream-boundary check: a hostile or broken upstream cannot put
 // control bytes into the client response's forwarded headers — the

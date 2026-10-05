@@ -37,6 +37,7 @@
 | panic 的回源释放其 waiter 而非卡死它们 | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | 请求绝不超出 attempt 上限，重试绝不超出全局 in-flight 预算 | `internal/retry` | `TestExecuteCapsAttempts`、`TestBudgetCapsInFlightRetries`、`TestBudgetReleaseAbsorbsImbalance` |
 | 第一个响应字节之后，loop 绝不重试 | `internal/retry`、`internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
+| 转发的响应绝不携带浏览器会当作文档渲染的媒体类型；三个可设置它的位置——缓冲 passthrough、流式 commit、缓存 replay——皆然 | `internal/protocol`、`internal/relay`、`internal/cache` | `TestForwardedContentType`、`TestRenderExchangeBodyReplacesDocumentContentType`、`TestStreamCommitReplacesDocumentContentType`、`TestCacheReplayReplacesDocumentContentType` |
 | 打开的 breaker 拒绝一切调用；half-open 恰放行一个 probe 并回收被弃的 | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`、`TestBreakerReclaimsAbandonedProbe` |
 | ratio 守卫按失败占比拒绝越来越多的调用，但绝不完全切断流量——每个强制放行间隔仍有一个调用通过 | `internal/circuit` | `TestRatioDenialTracksFailureShare`、`TestRatioForcePassAdmitsOnePerInterval` |
 | slow-call 熔断只在采样窗口的慢占比达标时开路（样本不足永不开路，故障算最强的慢证据），健康探测在清空后的窗口上关闭它 | `internal/circuit` | `TestSlowWindowNeedsSamples`、`TestSlowShareOpensTheBreaker`、`TestSlowProbeClosesOnAnEmptiedWindow` |

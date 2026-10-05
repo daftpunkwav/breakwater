@@ -7,8 +7,12 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - HTTP routes and handlers belong to `internal/server`.
 - One file per client format, and one test file per format.
 - The canonical wire forwards request bytes unchanged. Do not re-encode
-  unknown fields. Forward only `Content-Type` and `Retry-After`. Clamp
-  an out-of-range upstream status to 502.
+  unknown fields. Forward only `Content-Type` and `Retry-After`. Relay a
+  `Content-Type` naming a document a browser would render — HTML, XHTML,
+  SVG, XML — as `text/plain` (`ForwardedContentType`), and never leave
+  the media type unset, which would hand the label to net/http's
+  sniffing of upstream bytes. Clamp an out-of-range upstream status to
+  502.
 - Translated wires ingest a declared subset. Refuse fields and parts
   they cannot express, including `tools`, `tool_choice`, `reasoning`,
   `previous_response_id`, `stop_sequences`, `top_k`, and non-text

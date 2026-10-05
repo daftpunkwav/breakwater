@@ -183,26 +183,30 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 // passthrough set (protocol.PassthroughHeaderNames): the body's media
 // type, and the Retry-After a negatively cached 429/5xx owes its
 // client — a hit that drops it invites the immediate retry the upstream
-// asked to wait out. One list, two consumers: neither can drift. The
-// values need no legality re-check here: the only writers store headers
-// already validated by the passthrough surfaces at capture time.
+// asked to wait out. One list, two consumers: neither can drift.
 //
-// The body is opaque upstream bytes and its media type is replayed with
-// it, so an upstream that answers text/html has this response rendered
-// as HTML. What keeps that from being a script-injection vector is the
-// gateway's own surface, not the escaping: it renders no HTML itself,
-// sets no cookie, and answers the inference routes on POST only. A
-// cookie-based session, or HTML served from this origin, would end
-// that.
+// The media type goes through the same policy as the live passthrough
+// rather than being copied verbatim: a store is an injected port, so the
+// entry is not provably one this gateway captured. The body is opaque
+// upstream bytes replayed unchanged — the label above them is what keeps
+// them from executing in a browser, and the gateway never relays a
+// document media type.
 func replay(w http.ResponseWriter, entry Entry) {
 	header := w.Header()
 	for _, name := range protocol.PassthroughHeaderNames() {
+		if name == "Content-Type" {
+			continue
+		}
 		if v := entry.Header.Get(name); v != "" {
 			header.Set(name, v)
 		}
 	}
+	// Set explicitly rather than leaving it to net/http's sniffing,
+	// which would read the stored bytes and put them back in charge of
+	// the label.
+	header.Set("Content-Type", protocol.ForwardedContentType(entry.Header.Get("Content-Type"), protocol.PlainContentType))
 	w.WriteHeader(entry.Status)
-	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- stored upstream payload replayed byte-for-byte; the gateway renders no HTML
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- stored upstream payload replayed byte-for-byte under a media type that is never a document; the gateway renders no HTML
 	_, _ = w.Write(entry.Body)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

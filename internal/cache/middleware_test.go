@@ -173,6 +173,42 @@ func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
 	}
 }
 
+// TestCacheReplayReplacesDocumentContentType pins the other half of the
+// replay contract: the media type is not trusted from the store. A store
+// is an injected port, so an entry need not be one this gateway
+// captured; a document a browser would render never reaches the client,
+// while the stored bytes do, unchanged.
+func TestCacheReplayReplacesDocumentContentType(t *testing.T) {
+	t.Parallel()
+	body := []byte("<script>alert(1)</script>")
+	for _, tc := range []struct {
+		name string
+		ct   string
+		want string
+	}{
+		{"document", "text/html", protocol.PlainContentType},
+		{"unlabelled", "", protocol.PlainContentType},
+		{"parseable", "application/json", "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			header := http.Header{}
+			if tc.ct != "" {
+				header.Set("Content-Type", tc.ct)
+			}
+			rec := httptest.NewRecorder()
+			replay(rec, Entry{Status: http.StatusOK, Header: header, Body: body})
+
+			if got := rec.Header().Get("Content-Type"); got != tc.want {
+				t.Fatalf("replayed content type = %q, want %q", got, tc.want)
+			}
+			if got := rec.Body.Bytes(); string(got) != string(body) {
+				t.Fatalf("replayed body = %q, want the stored bytes unchanged", got)
+			}
+		})
+	}
+}
+
 // TestCacheMiddlewareReplayCarriesRetryAfter pins the negative-cache
 // replay contract: the Retry-After a stored 429 carries is part of the
 // fact being cached, and a hit that drops it invites the immediate

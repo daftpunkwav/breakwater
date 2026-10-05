@@ -8,7 +8,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `wire.go` | 翻译契约：`Format` 枚举、`Ingest`、`Wire` 与 `StreamTranscoder` 接口、`WireFor`。`chatWire` 即 canonical wire 本身——byte passthrough，只转发 `Content-Type` 与 `Retry-After`，越界的上游 status 收敛为 502 |
+| `wire.go` | 翻译契约：`Format` 枚举、`Ingest`、`Wire` 与 `StreamTranscoder` 接口、`WireFor`。`chatWire` 即 canonical wire 本身——byte passthrough，只转发 `Content-Type` 与 `Retry-After`（文档类媒体类型以 `text/plain` 转发），越界的上游 status 收敛为 502 |
 | `schema.go` | chat completion schema 的解码子集（`ChatRequest`、`Usage`）、`ParseUsage`、网关错误信封（`WriteError`）、共享拒绝码（`CodeRateLimited`、`CodeInsufficientQuota`、`CodeModelNotAllowed`）以及 `MaxBodyBytes`（4 MiB） |
 | `sse.go` | SSE codec：`WriteData`/`WriteEvent`、in-stream 错误契约（`ErrorType` = `gateway_error`，码为 `upstream_reset` / `upstream_timeout` / `budget_exhausted`）、`WriteAbort`——恰好一个 error event，随后 `data: [DONE]` |
 | `responses.go` | openai-responses wire：ingest（`input`、`instructions`、`max_output_tokens`）、Responses 对象、`response.*` 事件、中断时输出 `response.failed` |
@@ -22,5 +22,6 @@
 - translated 表面的对象 id 由网关生成（前缀 `resp_gw_`、`msg_gw_`），因为上游 id 要到后续帧才揭晓。
 - `Code` 是封闭集合，由 HTTP 错误信封与 in-stream 契约共享；Messages wire 把它映射到自己的 error-type 词汇。新增 code 属于协议变更，必须与 `sse_test.go` 的契约测试同步更新。
 - SSE 字节布局由契约测试钉死，因为 SDK 会解析它；response header 与 flush 是 handler 的事，不归这些 codec。
+- 转发的响应只有在 `Content-Type` 是客户端可解析的媒体类型时才沿用上游值。浏览器会当作文档渲染的类型——HTML、XHTML、SVG、XML——一律以 `text/plain` 转发（`ForwardedContentType`）：body 字节仍来自上游，但网关绝不能把一份文档从自己的 origin 递交给浏览器。上游未给出可用媒体类型时同样落到 `text/plain`，而不是把标签交给 net/http 去嗅探上游字节。
 
 消费方：[internal/server](../../internal/server/)；测试分类法见 [docs/TESTING.md](../../docs/TESTING.md)。

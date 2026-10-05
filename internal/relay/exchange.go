@@ -155,14 +155,12 @@ func (r *requestRun) exchangeStream(cand upstream.Upstream, resp *upstream.Respo
 	// Commit: from here on the loop must never see a plain error. The
 	// forwarded headers carry upstream-controlled values, so each is
 	// set only when it is a legal header field value — the same rule
-	// the buffered passthrough applies (internal/protocol). An unusable
-	// Content-Type falls back to the SSE default.
+	// the buffered passthrough applies (internal/protocol). The media
+	// type falls back to the SSE default both when the upstream sent
+	// nothing usable and when it named a document a browser would
+	// render, which is not what the frames below are.
 	header := r.job.Out.Header()
-	if ct := resp.Header.Get("Content-Type"); ct != "" && protocol.ValidHeaderValue(ct) {
-		header.Set("Content-Type", ct)
-	} else {
-		header.Set("Content-Type", "text/event-stream")
-	}
+	header.Set("Content-Type", protocol.ForwardedContentType(resp.Header.Get("Content-Type"), "text/event-stream"))
 	if cc := resp.Header.Get("Cache-Control"); cc != "" && protocol.ValidHeaderValue(cc) {
 		header.Set("Cache-Control", cc)
 	}

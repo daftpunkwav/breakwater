@@ -9,6 +9,9 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 - `KeyFor` is the SHA-256 of the raw request body. Matching is
   byte-exact.
 - A hit replays the stored response and sets `carrier.Consumed` to zero.
+  The replayed media type goes through `protocol.ForwardedContentType`:
+  a store is an injected port, so its entry is not trusted to be one this
+  gateway captured.
 - A missing or failing store forwards to the upstream.
 - Streaming requests do not share a flight. Each stream fetches on its
   own and may store after completion. Last write wins.

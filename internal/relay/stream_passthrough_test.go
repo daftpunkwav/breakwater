@@ -56,6 +56,32 @@ func TestStreamPassthroughPreservesBytesAndScrapesUsage(t *testing.T) {
 	}
 }
 
+// TestStreamCommitReplacesDocumentContentType: an upstream that labels
+// its frames as a document a browser would render does not get that
+// label onto the client response. The frames are SSE, so the SSE default
+// is both the safe answer and the accurate one.
+func TestStreamCommitReplacesDocumentContentType(t *testing.T) {
+	t.Parallel()
+	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		header := http.Header{}
+		header.Set("Content-Type", "text/html")
+		return &upstream.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		}, nil
+	}}
+	exec := New(testPolicy(), nil)
+
+	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
+	if ct := result.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type = %q, want the SSE default", ct)
+	}
+	if string(result.Body) != "data: [DONE]\n\n" {
+		t.Fatalf("stream bytes altered: %q", result.Body)
+	}
+}
+
 // TestStreamCommitHeadersFallBackAndPassThrough pins the commit header
 // rules: a missing upstream content type becomes text/event-stream, and
 // an upstream cache-control directive survives the commit.
