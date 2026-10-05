@@ -2,7 +2,9 @@
 -- The key_hash column holds HMAC-SHA256 of the raw key, keyed by
 -- BREAKWATER_KEY_PEPPER. The digests below assume the pepper is unset
 -- (the empty key) at seed time; a deployment that sets a pepper must
--- recompute them (TestSeedKeyHashMatchesHashKey pins the Go side).
+-- recompute them (TestSeedKeyHashMatchesHashKey pins the Go side
+-- against this file). Reapplying the seed refreshes the two dev keys'
+-- hashes, so a database seeded by an older build heals on reapply.
 -- The raw values are the loadtest scenarios' default API_KEYs:
 -- 'bw-local-t1' (local-1) and 'bw-local-t2' (local-2). The README
 -- quick start uses a separate BREAKWATER_IDENTITY key and does not
@@ -24,9 +26,12 @@ VALUES ('local-1', 'Local Tenant One', 'user', 'free', '{}'),
         '{"denied_models":["secret-model"],"concurrency":4}')
 ON CONFLICT (id) DO NOTHING;
 
+-- Unlike the tiers and tenants above, a conflicting key row refreshes
+-- its hash: these two rows are the seed's own, and a stale hash from an
+-- older build would otherwise keep the loadtest keys rejected.
 INSERT INTO api_keys (id, tenant_id, key_hash)
 VALUES ('key-local-1', 'local-1',
         'dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088'),
        ('key-local-2', 'local-2',
         'a544711afeb45d9c00135b1c18c3e05582f59bd78272137fd30fc204aed2fd76')
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET key_hash = EXCLUDED.key_hash;
