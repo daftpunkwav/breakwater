@@ -112,19 +112,32 @@ func scanUsers(rows rowsScanner) ([]UserView, error) {
 	return out, rows.Err()
 }
 
+// Override-layer write queries: each is a compile-time literal of this
+// file, never composed from input.
+const (
+	setUserOverridesQuery = `UPDATE tenants SET overrides = $1 WHERE id = $2`
+	setKeyOverridesQuery  = `UPDATE api_keys SET overrides = $1 WHERE id = $2`
+)
+
 // SetUserLimits implements AdminStore.
 func (s *PGStore) SetUserLimits(ctx context.Context, userID string, o LimitOverride) error {
+	return s.setOverrides(ctx, setUserOverridesQuery, "user", userID, o, ErrUnknownUser)
+}
+
+// setOverrides replaces one stored override document: a subject whose
+// row is gone renders as the layer's unknown sentinel, so a write
+// against a deleted user or key can never masquerade as an outage.
+func (s *PGStore) setOverrides(ctx context.Context, query, layer, id string, o LimitOverride, unknown error) error {
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return fmt.Errorf("auth: encode overrides: %w", err)
 	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE tenants SET overrides = $1 WHERE id = $2`, raw, userID)
+	tag, err := s.pool.Exec(ctx, query, raw, id)
 	if err != nil {
-		return fmt.Errorf("auth: set user limits: %w", err)
+		return fmt.Errorf("auth: set %s limits: %w", layer, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: %s", ErrUnknownUser, userID)
+		return fmt.Errorf("%w: %s", unknown, id)
 	}
 	return nil
 }
@@ -234,19 +247,7 @@ func scanKeys(rows rowsScanner) ([]KeyView, error) {
 
 // SetKeyLimits implements AdminStore.
 func (s *PGStore) SetKeyLimits(ctx context.Context, keyID string, o LimitOverride) error {
-	raw, err := json.Marshal(o)
-	if err != nil {
-		return fmt.Errorf("auth: encode overrides: %w", err)
-	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE api_keys SET overrides = $1 WHERE id = $2`, raw, keyID)
-	if err != nil {
-		return fmt.Errorf("auth: set key limits: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: %s", ErrUnknownKey, keyID)
-	}
-	return nil
+	return s.setOverrides(ctx, setKeyOverridesQuery, "key", keyID, o, ErrUnknownKey)
 }
 
 // SetKeyStatus implements AdminStore.
