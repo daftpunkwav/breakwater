@@ -53,9 +53,7 @@ func TestFatalUpstreamReasonTable(t *testing.T) {
 func TestExecutorReportsFatalOncePerExchange(t *testing.T) {
 	t.Parallel()
 	var reports []string
-	up := &stubUpstream{id: "u1", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusUnauthorized, `{"error":{"type":"authentication_error"}}`), nil
-	}}
+	up := jsonStubUpstream(t, "u1", http.StatusUnauthorized, `{"error":{"type":"authentication_error"}}`)
 	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(id string, _ int, reason string) {
 		reports = append(reports, id+"/"+reason)
 	}))
@@ -71,10 +69,8 @@ func TestExecutorReportsFatalOncePerExchange(t *testing.T) {
 func TestExecutorKeepsQuietOnTransientFailures(t *testing.T) {
 	t.Parallel()
 	hookFired := false
-	up := &stubUpstream{id: "u1", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusTooManyRequests,
-			`{"error":{"code":"rate_limit_exceeded","type":"rate_limit_error"}}`), nil
-	}}
+	up := jsonStubUpstream(t, "u1", http.StatusTooManyRequests,
+		`{"error":{"code":"rate_limit_exceeded","type":"rate_limit_error"}}`)
 	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(string, int, string) { hookFired = true }))
 	result := execute(t, exec, []upstream.Upstream{up}, false, `{}`)
 	if result.Status != http.StatusTooManyRequests {
@@ -92,10 +88,8 @@ func TestExecutorKeepsQuietOnTransientFailures(t *testing.T) {
 func TestExecutorReportsQuotaExhaustionDespiteRetryability(t *testing.T) {
 	t.Parallel()
 	var reasons []string
-	up := &stubUpstream{id: "u1", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusTooManyRequests,
-			`{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}`), nil
-	}}
+	up := jsonStubUpstream(t, "u1", http.StatusTooManyRequests,
+		`{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}`)
 	exec := New(testPolicy(), nil, WithUpstreamFatalHook(func(_ string, _ int, reason string) {
 		reasons = append(reasons, reason)
 	}))
@@ -117,11 +111,7 @@ func TestExecutorReportsQuotaExhaustionDespiteRetryability(t *testing.T) {
 // loop re-hits the same upstream, so its Retry-After governs the wait.
 func TestExecutorHintDelaysSameUpstreamRetry(t *testing.T) {
 	t.Parallel()
-	up := &stubUpstream{id: "u1", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
-		resp.Header.Set("Retry-After", "0.15")
-		return resp, nil
-	}}
+	up := rateLimitedStub(t, "u1", "0.15")
 	// An unshaped backoff: the only wait available is the hint.
 	exec := New(retry.Policy{MaxAttempts: 2}, nil)
 	start := time.Now()
@@ -139,14 +129,8 @@ func TestExecutorHintDelaysSameUpstreamRetry(t *testing.T) {
 // hint must not delay the failover.
 func TestExecutorHintStrippedOnFailover(t *testing.T) {
 	t.Parallel()
-	impatient := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
-		resp.Header.Set("Retry-After", "30")
-		return resp, nil
-	}}
-	healthy := &stubUpstream{id: "fast", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`), nil
-	}}
+	impatient := rateLimitedStub(t, "slow", "30")
+	healthy := jsonStubUpstream(t, "fast", http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
 	exec := New(testPolicy(), nil)
 	start := time.Now()
 	result := execute(t, exec, []upstream.Upstream{impatient, healthy}, false, `{}`)
@@ -168,27 +152,13 @@ func TestExecutorHintStrippedOnFailover(t *testing.T) {
 // upstream's error passthrough to a generic 502.
 func TestExecutorHintOnFinalAttemptKeepsPassthrough(t *testing.T) {
 	t.Parallel()
-	impatient := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
-		resp.Header.Set("Retry-After", "30")
-		return resp, nil
-	}}
-	healthy := &stubUpstream{id: "fast", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{"ok":true}`), nil
-	}}
+	impatient := rateLimitedStub(t, "slow", "30")
+	healthy := jsonStubUpstream(t, "fast", http.StatusOK, `{"ok":true}`)
 	// One attempt against two candidates: the next candidate differs,
 	// but no retry follows to ever read the hint.
 	exec := New(retry.Policy{MaxAttempts: 1}, nil)
 	result := execute(t, exec, []upstream.Upstream{impatient, healthy}, false, `{}`)
-	if result.Status != http.StatusTooManyRequests {
-		t.Fatalf("status = %d body = %s, want the 429 passthrough", result.Status, result.Body)
-	}
-	if !strings.Contains(string(result.Body), "rate_limit_error") {
-		t.Fatalf("body = %s, want the upstream error body passed through", result.Body)
-	}
-	if result.ErrorCode != "" {
-		t.Fatalf("error code = %q, want empty for an upstream passthrough", result.ErrorCode)
-	}
+	assertRateLimitPassthrough(t, result)
 }
 
 // TestExecutorHintOnDeadlineKeepsPassthrough: the failover path strips
@@ -199,14 +169,8 @@ func TestExecutorHintOnFinalAttemptKeepsPassthrough(t *testing.T) {
 // the identity match and downgrade the reply to a generic 502.
 func TestExecutorHintOnDeadlineKeepsPassthrough(t *testing.T) {
 	t.Parallel()
-	impatient := &stubUpstream{id: "slow", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
-		resp.Header.Set("Retry-After", "30")
-		return resp, nil
-	}}
-	healthy := &stubUpstream{id: "fast", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`), nil
-	}}
+	impatient := rateLimitedStub(t, "slow", "30")
+	healthy := jsonStubUpstream(t, "fast", http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
 	// The stripped hint contributes no DelayHint, so the loop falls back
 	// to its computed backoff — 5s against a 50ms overall deadline. The
 	// deadline ends the run inside that backoff sleep, wrapping the
@@ -217,6 +181,24 @@ func TestExecutorHintOnDeadlineKeepsPassthrough(t *testing.T) {
 		BackoffInitial:  5 * time.Second,
 	}, nil)
 	result := execute(t, exec, []upstream.Upstream{impatient, healthy}, false, `{}`)
+	assertRateLimitPassthrough(t, result)
+}
+
+// rateLimitedStub returns a stub upstream answering 429 with the
+// rate-limit envelope and the given Retry-After hint on every exchange.
+func rateLimitedStub(t *testing.T, id, hint string) *stubUpstream {
+	t.Helper()
+	return &stubUpstream{id: id, fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		resp := jsonResponse(t, http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`)
+		resp.Header.Set("Retry-After", hint)
+		return resp, nil
+	}}
+}
+
+// assertRateLimitPassthrough pins the reply as the verbatim upstream
+// 429: the upstream error body and no gateway error code.
+func assertRateLimitPassthrough(t *testing.T, result capturedResult) {
+	t.Helper()
 	if result.Status != http.StatusTooManyRequests {
 		t.Fatalf("status = %d body = %s, want the 429 passthrough", result.Status, result.Body)
 	}

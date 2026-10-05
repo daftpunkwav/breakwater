@@ -66,14 +66,7 @@ func TestRandomIDShape(t *testing.T) {
 // administration operation returns an error (the wrapped transport
 // failure), and nothing pretends to have succeeded.
 func TestPGAdminOutageFailsLoudly(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	store, err := NewPGStore(ctx, unreachableDSN)
-	if err != nil {
-		t.Fatalf("NewPGStore with a syntactically valid dsn: %v", err)
-	}
-	defer store.Close()
+	ctx, store := newOutageStore(t, 20*time.Second)
 
 	// The first exchange pays the dial timeout; the pool then knows the
 	// database is down and the remaining calls fail fast. One context

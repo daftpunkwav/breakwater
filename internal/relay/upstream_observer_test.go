@@ -34,12 +34,8 @@ func (r *recordingObserver) ObserveUpstream(id string, latency time.Duration, fa
 
 func TestObserverReportsEveryAttempt(t *testing.T) {
 	t.Parallel()
-	primary := &stubUpstream{id: "primary", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusServiceUnavailable, `{}`), nil
-	}}
-	fallback := &stubUpstream{id: "fallback", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{}`), nil
-	}}
+	primary := jsonStubUpstream(t, "primary", http.StatusServiceUnavailable, `{}`)
+	fallback := jsonStubUpstream(t, "fallback", http.StatusOK, `{}`)
 	obs := &recordingObserver{}
 	exec := New(testPolicy(), nil, WithUpstreamObserver(obs))
 
@@ -100,9 +96,7 @@ func TestObserverSparedOnClientDisconnect(t *testing.T) {
 // alive is not the client's doing and must hit the failure record.
 func TestObserverRecordsServerSourcedCancel(t *testing.T) {
 	t.Parallel()
-	flaky := &stubUpstream{id: "flaky", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return nil, fmt.Errorf("transport tore down: %w", context.Canceled)
-	}}
+	flaky := failingStubUpstream("flaky", fmt.Errorf("transport tore down: %w", context.Canceled))
 	obs := &recordingObserver{}
 	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithUpstreamObserver(obs))
 
@@ -125,9 +119,7 @@ func TestObserverNilDisables(t *testing.T) {
 	t.Parallel()
 	// The default executor has no observer; this exercises the nil
 	// branch so coverage and honesty stay aligned.
-	cand := &stubUpstream{id: "u", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{}`), nil
-	}}
+	cand := jsonStubUpstream(t, "u", http.StatusOK, `{}`)
 	exec := New(testPolicy(), nil)
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
 	if result.Status != http.StatusOK {

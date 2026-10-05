@@ -30,35 +30,62 @@ func TestParseModelMap(t *testing.T) {
 	}
 }
 
+// rewriteStub is the provider side of the model-map rewrite tests: a
+// server answering `{}` that records every request body, and an
+// adapter bound to the gpt-4o=deepseek-chat mapping.
+type rewriteStub struct {
+	server  *httptest.Server
+	adapter *OpenAI
+	// lastBody yields the most recent request body the stub received.
+	lastBody func() string
+	// count yields the number of exchanges the stub served.
+	count func() int
+}
+
+// newRewriteStub wires the stub; the server closes when the test ends.
+func newRewriteStub(t *testing.T) *rewriteStub {
+	t.Helper()
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+
+	adapter := mustOpenAI(t, OpenAIConfig{
+		ID:       "up-1",
+		BaseURL:  server.URL,
+		ModelMap: ParseModelMap([]string{"gpt-4o=deepseek-chat"}),
+	})
+	return &rewriteStub{
+		server:  server,
+		adapter: adapter,
+		lastBody: func() string {
+			if len(bodies) == 0 {
+				return ""
+			}
+			return bodies[len(bodies)-1]
+		},
+		count: func() int { return len(bodies) },
+	}
+}
+
 // TestForwardRewritesMappedModel: a mapped client model reaches the
 // provider under its real name, with every other body member kept.
 func TestForwardRewritesMappedModel(t *testing.T) {
 	t.Parallel()
 
-	var gotBody string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		gotBody = string(raw)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	adapter, err := NewOpenAI(OpenAIConfig{
-		ID:       "up-1",
-		BaseURL:  server.URL,
-		ModelMap: ParseModelMap([]string{"gpt-4o=deepseek-chat"}),
-	})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	stub := newRewriteStub(t)
 	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"a < b & c"}],"temperature":0.5}`
-	if _, err := adapter.Forward(context.Background(), Request{Model: "gpt-4o", Body: []byte(body)}); err != nil {
+	if _, err := stub.adapter.Forward(context.Background(), Request{Model: "gpt-4o", Body: []byte(body)}); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
+	got := stub.lastBody()
 
 	var decoded map[string]any
-	if err := json.Unmarshal([]byte(gotBody), &decoded); err != nil {
-		t.Fatalf("rewritten body is not JSON: %v\n%s", err, gotBody)
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("rewritten body is not JSON: %v\n%s", err, got)
 	}
 	if decoded["model"] != "deepseek-chat" {
 		t.Fatalf("model = %v, want deepseek-chat", decoded["model"])
@@ -67,8 +94,8 @@ func TestForwardRewritesMappedModel(t *testing.T) {
 		t.Fatalf("temperature = %v, want 0.5 (other members must survive)", decoded["temperature"])
 	}
 	// The rewrite must not HTML-escape message text.
-	if !strings.Contains(gotBody, `a < b & c`) {
-		t.Fatalf("message text was escaped: %s", gotBody)
+	if !strings.Contains(got, `a < b & c`) {
+		t.Fatalf("message text was escaped: %s", got)
 	}
 }
 
@@ -77,44 +104,26 @@ func TestForwardRewritesMappedModel(t *testing.T) {
 func TestForwardKeepsUnmappedModelVerbatim(t *testing.T) {
 	t.Parallel()
 
-	var gotBody string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		gotBody = string(raw)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	adapter, err := NewOpenAI(OpenAIConfig{
-		ID:       "up-1",
-		BaseURL:  server.URL,
-		ModelMap: ParseModelMap([]string{"gpt-4o=deepseek-chat"}),
-	})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	stub := newRewriteStub(t)
 	body := `{"model":"other","messages":[],"nested":{"model":"inner"}}`
-	if _, err := adapter.Forward(context.Background(), Request{Model: "other", Body: []byte(body)}); err != nil {
+	if _, err := stub.adapter.Forward(context.Background(), Request{Model: "other", Body: []byte(body)}); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
-	if gotBody != body {
-		t.Fatalf("body = %s, want verbatim %s", gotBody, body)
+	if got := stub.lastBody(); got != body {
+		t.Fatalf("body = %s, want verbatim %s", got, body)
 	}
 
 	// A mapping to the same name also skips the rewrite.
-	identity, err := NewOpenAI(OpenAIConfig{
+	identity := mustOpenAI(t, OpenAIConfig{
 		ID:       "up-id",
-		BaseURL:  server.URL,
+		BaseURL:  stub.server.URL,
 		ModelMap: ParseModelMap([]string{"same=same"}),
 	})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
 	if _, err := identity.Forward(context.Background(), Request{Model: "same", Body: []byte(`{"model":"same"}`)}); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
-	if gotBody != `{"model":"same"}` {
-		t.Fatalf("body = %s, want verbatim passthrough for identity mapping", gotBody)
+	if got := stub.lastBody(); got != `{"model":"same"}` {
+		t.Fatalf("body = %s, want verbatim passthrough for identity mapping", got)
 	}
 }
 
@@ -124,26 +133,12 @@ func TestForwardKeepsUnmappedModelVerbatim(t *testing.T) {
 func TestForwardRewriteFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	var gotRequests int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		gotRequests++
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	adapter, err := NewOpenAI(OpenAIConfig{
-		ID:       "up-1",
-		BaseURL:  server.URL,
-		ModelMap: ParseModelMap([]string{"gpt-4o=deepseek-chat"}),
-	})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
-	resp, err := adapter.Forward(context.Background(), Request{Model: "gpt-4o", Body: []byte("not json")})
+	stub := newRewriteStub(t)
+	resp, err := stub.adapter.Forward(context.Background(), Request{Model: "gpt-4o", Body: []byte("not json")})
 	if err == nil {
 		t.Fatalf("expected a rewrite failure, got response %v", resp)
 	}
-	if gotRequests != 0 {
-		t.Fatalf("provider saw %d exchanges, want 0", gotRequests)
+	if got := stub.count(); got != 0 {
+		t.Fatalf("provider saw %d exchanges, want 0", got)
 	}
 }

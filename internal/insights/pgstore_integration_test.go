@@ -17,19 +17,24 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestPGInsightsIntegration(t *testing.T) {
+// openIntegrationPG dials the DSN-gated integration database, skipping
+// the test when BREAKWATER_TEST_POSTGRES_DSN is unset, applies the
+// deploy schema, and returns the bounded context, the connection and
+// the DSN.
+func openIntegrationPG(t *testing.T) (context.Context, *pgx.Conn, string) {
+	t.Helper()
 	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer func() { _ = conn.Close(ctx) }()
+	t.Cleanup(func() { _ = conn.Close(ctx) })
 	for _, file := range []string{"../../deploy/schema.sql"} {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -39,6 +44,41 @@ func TestPGInsightsIntegration(t *testing.T) {
 			t.Fatalf("apply %s: %v", file, err)
 		}
 	}
+	return ctx, conn, dsn
+}
+
+// requireIntegrationSummary asserts the aggregate the four scripted
+// records must fold into: two upstream failures out of four requests,
+// one cache hit, real latency percentiles and a classified failure mix.
+func requireIntegrationSummary(t *testing.T, s Summary) {
+	t.Helper()
+	if s.Requests != 4 {
+		t.Fatalf("requests = %d, want 4", s.Requests)
+	}
+	// The 499 disconnect is not a failure; 502 and 503 are.
+	if s.Failures != 2 {
+		t.Fatalf("failures = %d, want 2", s.Failures)
+	}
+	if s.SuccessRate != 0.5 {
+		t.Fatalf("success rate = %v, want 0.5", s.SuccessRate)
+	}
+	if len(s.FailureMix) == 0 {
+		t.Fatal("the failure mix is empty")
+	}
+	mixCode := s.FailureMix[0].Code
+	if mixCode != "circuit_open" && mixCode != "upstream_5xx" {
+		t.Fatalf("top failure = %q, want circuit_open or upstream_5xx", mixCode)
+	}
+	if s.CacheHits != 1 || s.Tokens != 50 {
+		t.Fatalf("cache hits = %d tokens = %d, want 1/50", s.CacheHits, s.Tokens)
+	}
+	if s.P50MS == 0 || s.P95MS == 0 {
+		t.Fatalf("latency percentiles empty: %+v", s)
+	}
+}
+
+func TestPGInsightsIntegration(t *testing.T) {
+	ctx, conn, dsn := openIntegrationPG(t)
 	// The report is only honest against this test's own rows.
 	if _, err := conn.Exec(ctx, `DELETE FROM request_log WHERE tenant_id = 'insights-int'`); err != nil {
 		t.Fatalf("clear previous rows: %v", err)
@@ -78,29 +118,7 @@ func TestPGInsightsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
-	if rep.Summary.Requests != 4 {
-		t.Fatalf("requests = %d, want 4", rep.Summary.Requests)
-	}
-	// The 499 disconnect is not a failure; 502 and 503 are.
-	if rep.Summary.Failures != 2 {
-		t.Fatalf("failures = %d, want 2", rep.Summary.Failures)
-	}
-	if rep.Summary.SuccessRate != 0.5 {
-		t.Fatalf("success rate = %v, want 0.5", rep.Summary.SuccessRate)
-	}
-	if len(rep.Summary.FailureMix) == 0 {
-		t.Fatal("the failure mix is empty")
-	}
-	mixCode := rep.Summary.FailureMix[0].Code
-	if mixCode != "circuit_open" && mixCode != "upstream_5xx" {
-		t.Fatalf("top failure = %q, want circuit_open or upstream_5xx", mixCode)
-	}
-	if rep.Summary.CacheHits != 1 || rep.Summary.Tokens != 50 {
-		t.Fatalf("cache hits = %d tokens = %d, want 1/50", rep.Summary.CacheHits, rep.Summary.Tokens)
-	}
-	if rep.Summary.P50MS == 0 || rep.Summary.P95MS == 0 {
-		t.Fatalf("latency percentiles empty: %+v", rep.Summary)
-	}
+	requireIntegrationSummary(t, rep.Summary)
 	if len(rep.Timeline) == 0 {
 		t.Fatal("timeline empty")
 	}
@@ -132,27 +150,7 @@ func TestPGInsightsIntegration(t *testing.T) {
 // empty summary, not a NULL percentile scan failure — the contract the
 // summary promises ("a window without requests reports 0").
 func TestPGInsightsReportEmptyWindow(t *testing.T) {
-	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() { _ = conn.Close(ctx) }()
-	for _, file := range []string{"../../deploy/schema.sql"} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
-		}
-		if _, err := conn.Exec(ctx, string(raw)); err != nil {
-			t.Fatalf("apply %s: %v", file, err)
-		}
-	}
+	ctx, conn, dsn := openIntegrationPG(t)
 
 	store, err := NewPGStore(ctx, dsn)
 	if err != nil {

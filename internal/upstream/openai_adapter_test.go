@@ -30,11 +30,27 @@ func newTestAdapter(t *testing.T, mutate func(*httptest.Server, *OpenAIConfig)) 
 	if mutate != nil {
 		mutate(server, &cfg)
 	}
+	adapter := mustOpenAI(t, cfg)
+	return server, adapter
+}
+
+// mustOpenAI builds the adapter or fails the test.
+func mustOpenAI(t *testing.T, cfg OpenAIConfig) *OpenAI {
+	t.Helper()
 	adapter, err := NewOpenAI(cfg)
 	if err != nil {
 		t.Fatalf("NewOpenAI: %v", err)
 	}
-	return server, adapter
+	return adapter
+}
+
+// closedUpstream returns the URL of an httptest server that no longer
+// listens: nothing answers anymore.
+func closedUpstream(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	server.Close()
+	return server.URL
 }
 
 // TestNewOpenAIRejectsMisconfiguration: assembly fails without an id
@@ -77,10 +93,7 @@ func TestForwardPostsToCompletionPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: server.URL})
 	resp, err := adapter.Forward(context.Background(), Request{Body: []byte(`{"model":"m1"}`)})
 	if err != nil {
 		t.Fatalf("Forward: %v", err)
@@ -140,10 +153,7 @@ func TestForwardRequestHeaders(t *testing.T) {
 			}))
 			defer server.Close()
 
-			adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL, APIKeys: credentials(tc.apiKey)})
-			if err != nil {
-				t.Fatalf("NewOpenAI: %v", err)
-			}
+			adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: server.URL, APIKeys: credentials(tc.apiKey)})
 			resp, err := adapter.Forward(context.Background(), Request{Stream: tc.stream})
 			if err != nil {
 				t.Fatalf("Forward: %v", err)
@@ -169,10 +179,7 @@ func TestForwardPropagatesRequestID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up", BaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up", BaseURL: server.URL})
 
 	resp, err := adapter.Forward(context.Background(), Request{RequestID: "req-abc"})
 	if err != nil {
@@ -204,10 +211,7 @@ func TestForwardReturnsCompletedFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: server.URL})
 	resp, err := adapter.Forward(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Forward: %v", err)
@@ -231,13 +235,7 @@ func TestForwardReturnsCompletedFailures(t *testing.T) {
 func TestForwardConnectionFailureIsErrorNotResponse(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
-	server.Close() // nothing listens anymore
-
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: closedUpstream(t)})
 	resp, err := adapter.Forward(context.Background(), Request{})
 	if err == nil {
 		t.Fatalf("Forward = %v, nil error, want a connection failure", resp)
@@ -262,10 +260,7 @@ func TestForwardHonorsContextCancellation(t *testing.T) {
 	defer server.Close()
 	defer close(block)
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: server.URL})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(10 * time.Millisecond)
@@ -285,10 +280,7 @@ func TestForwardHonorsContextCancellation(t *testing.T) {
 func TestForwardRejectsUnparsableBaseURL(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: "http://exa mple.com"})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: "http://exa mple.com"})
 	resp, err := adapter.Forward(context.Background(), Request{})
 	if err == nil || resp != nil {
 		t.Fatalf("Forward = (%v, %v), want a build-request error", resp, err)
@@ -342,10 +334,7 @@ func TestForwardRewritesFallbackBodyModel(t *testing.T) {
 			}))
 			defer server.Close()
 
-			adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL, ModelMap: ParseModelMap(tc.models)})
-			if err != nil {
-				t.Fatalf("NewOpenAI: %v", err)
-			}
+			adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: server.URL, ModelMap: ParseModelMap(tc.models)})
 			resp, err := adapter.Forward(context.Background(), tc.req)
 			if err != nil {
 				t.Fatalf("Forward: %v", err)
@@ -419,13 +408,7 @@ func TestProbeWithoutURL(t *testing.T) {
 func TestProbeConnectionFailure(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
-	server.Close()
-
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: "http://127.0.0.1:1", ProbeURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: "http://127.0.0.1:1", ProbeURL: closedUpstream(t)})
 	if err := adapter.Probe(context.Background()); err == nil {
 		t.Fatal("Probe succeeded against a closed server")
 	}
@@ -449,10 +432,7 @@ func TestProbeRejectsTruncatedBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: server.URL, ProbeURL: server.URL + "/healthz"})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: server.URL, ProbeURL: server.URL + "/healthz"})
 	if err := adapter.Probe(context.Background()); err == nil {
 		t.Fatal("Probe accepted a truncated health body")
 	}
@@ -463,10 +443,7 @@ func TestProbeRejectsTruncatedBody(t *testing.T) {
 func TestProbeRejectsUnparsableURL(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up-1", BaseURL: "http://127.0.0.1:8090", ProbeURL: "http://exa mple.com/healthz"})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up-1", BaseURL: "http://127.0.0.1:8090", ProbeURL: "http://exa mple.com/healthz"})
 	if err := adapter.Probe(context.Background()); err == nil {
 		t.Fatal("Probe accepted an unparsable probe url")
 	}
@@ -484,11 +461,8 @@ func TestForwardRotatesCredentialRing(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up", BaseURL: server.URL,
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up", BaseURL: server.URL,
 		APIKeys: []string{"sk-one", "sk-two", "sk-three"}})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
 	wantAuth := []string{"Bearer sk-one", "Bearer sk-two", "Bearer sk-three"}
 	for i := range wantAuth {
 		resp, err := adapter.Forward(context.Background(), Request{})
@@ -530,11 +504,8 @@ func TestForwardFailsWhenEveryCredentialRetired(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "up", BaseURL: server.URL,
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "up", BaseURL: server.URL,
 		APIKeys: []string{"sk-one", "sk-two"}})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
 	if !adapter.RetireCredential(0) || !adapter.RetireCredential(1) {
 		t.Fatal("setup: retire did not take")
 	}
@@ -567,10 +538,7 @@ func TestForwardKeylessUpstreamSkipsCredential(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := NewOpenAI(OpenAIConfig{ID: "mock", BaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewOpenAI: %v", err)
-	}
+	adapter := mustOpenAI(t, OpenAIConfig{ID: "mock", BaseURL: server.URL})
 	resp, err := adapter.Forward(context.Background(), Request{ExcludedCredentials: []int{0, 1}})
 	if err != nil {
 		t.Fatalf("Forward: %v", err)

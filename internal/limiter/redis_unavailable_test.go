@@ -11,13 +11,24 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
 )
+
+// newTestRedisWithDeadline pairs a fresh backend with a bounded
+// context, the setup every backend-failure test drives the API
+// through.
+func newTestRedisWithDeadline(t *testing.T) (*Redis, *miniredis.Miniredis, context.Context) {
+	t.Helper()
+	r, mr := newTestRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return r, mr, ctx
+}
 
 func TestRedisPingReportsHealth(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	r, mr, ctx := newTestRedisWithDeadline(t)
 
 	if err := r.Ping(ctx); err != nil {
 		t.Fatalf("ping against a live server: %v", err)
@@ -30,9 +41,7 @@ func TestRedisPingReportsHealth(t *testing.T) {
 
 func TestRedisAllowSurfacesBackendFailure(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	r, mr, ctx := newTestRedisWithDeadline(t)
 	mr.Close()
 
 	if _, err := r.Allow(ctx, "t", Limits{RPM: 10, TPM: 1000}, 10); err == nil ||
@@ -43,9 +52,7 @@ func TestRedisAllowSurfacesBackendFailure(t *testing.T) {
 
 func TestRedisRefundGuardsAndFailure(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	r, mr, ctx := newTestRedisWithDeadline(t)
 
 	// Zero tokens and a disabled TPM ceiling never touch the backend.
 	if err := r.Refund(ctx, "t", Limits{RPM: 0, TPM: 100}, 0); err != nil {

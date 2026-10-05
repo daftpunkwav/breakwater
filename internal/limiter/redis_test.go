@@ -166,31 +166,15 @@ func TestRedisRefillOverTime(t *testing.T) {
 	mr.SetTime(clock)
 
 	// Drain the whole burst.
-	for i := 0; i < 60; i++ {
-		if d, err := r.Allow(ctx, "t", limits, 0); err != nil || !d.Allowed {
-			t.Fatalf("burst request %d: allowed=%v err=%v", i, d.Allowed, err)
-		}
-	}
-	if d, err := r.Allow(ctx, "t", limits, 0); err != nil || d.Allowed {
-		t.Fatalf("post-burst must reject: %v %v", d.Allowed, err)
-	}
+	drainBurst(t, ctx, r, "t", limits, 60, "burst")
+	mustReject(t, ctx, r, "t", limits, "post-burst must reject")
 	// Two seconds refill two tokens: two requests pass, the third waits.
 	clock = clock.Add(2 * time.Second)
 	mr.SetTime(clock)
-	for i := 0; i < 2; i++ {
-		if d, err := r.Allow(ctx, "t", limits, 0); err != nil || !d.Allowed {
-			t.Fatalf("refill request %d: allowed=%v err=%v", i, d.Allowed, err)
-		}
-	}
-	if d, err := r.Allow(ctx, "t", limits, 0); err != nil || d.Allowed {
-		t.Fatalf("beyond refill must reject: %v %v", d.Allowed, err)
-	}
+	drainBurst(t, ctx, r, "t", limits, 2, "refill")
+	mustReject(t, ctx, r, "t", limits, "beyond refill must reject")
 	// And the burst refills fully over the minute.
 	clock = clock.Add(time.Minute)
 	mr.SetTime(clock)
-	for i := 0; i < 60; i++ {
-		if d, err := r.Allow(ctx, "t", limits, 0); err != nil || !d.Allowed {
-			t.Fatalf("full-refill request %d: allowed=%v err=%v", i, d.Allowed, err)
-		}
-	}
+	drainBurst(t, ctx, r, "t", limits, 60, "full-refill")
 }

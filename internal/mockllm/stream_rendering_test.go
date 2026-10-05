@@ -18,28 +18,11 @@ import (
 	"time"
 )
 
-func TestStreamNormalCompletion(t *testing.T) {
-	t.Parallel()
-	h := New(Options{})
-	rec := postCompletion(t, h, nil,
-		`{"model":"mock-gpt","stream":true,"messages":[{"role":"user","content":"a b c"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("content type = %q, want text/event-stream", ct)
-	}
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "data: [DONE]") {
-		t.Fatal("stream missing [DONE] terminator")
-	}
-
-	var (
-		contentWords int
-		sawStop      bool
-		usage        *usage
-	)
+// walkSSEChunks splits the raw event-stream payload into chunks and
+// tallies what the completion contract is checked against: the content
+// words delivered, whether a stop frame appeared and the usage block.
+func walkSSEChunks(t *testing.T, body string) (contentWords int, sawStop bool, usage *usage) {
+	t.Helper()
 	for _, event := range strings.Split(body, "\n\n") {
 		data, ok := strings.CutPrefix(event, "data: ")
 		if !ok || data == "[DONE]" {
@@ -61,6 +44,27 @@ func TestStreamNormalCompletion(t *testing.T) {
 			usage = chunk.Usage
 		}
 	}
+	return contentWords, sawStop, usage
+}
+
+func TestStreamNormalCompletion(t *testing.T) {
+	t.Parallel()
+	h := New(Options{})
+	rec := postCompletion(t, h, nil,
+		`{"model":"mock-gpt","stream":true,"messages":[{"role":"user","content":"a b c"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type = %q, want text/event-stream", ct)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Fatal("stream missing [DONE] terminator")
+	}
+
+	contentWords, sawStop, usage := walkSSEChunks(t, body)
 	if contentWords != defaultCompletionTokens {
 		t.Errorf("content chunks = %d, want %d", contentWords, defaultCompletionTokens)
 	}
@@ -107,16 +111,22 @@ func TestStreamAbortMidFlight(t *testing.T) {
 	}
 }
 
+// streamingRequest is the minimal streaming completion the stream
+// writer tests drive directly.
+func streamingRequest() completionRequest {
+	return completionRequest{
+		Model:    "mock-gpt",
+		Stream:   true,
+		Messages: []chatMessage{{Role: "user", Content: "hi"}},
+	}
+}
+
 // TestStreamAbortTruncatesWithoutDone drives the abort mode through the
 // writer directly: the generator terminates via http.ErrAbortHandler
 // after the second content chunk.
 func TestStreamAbortTruncatesWithoutDone(t *testing.T) {
 	t.Parallel()
-	req := completionRequest{
-		Model:    "mock-gpt",
-		Stream:   true,
-		Messages: []chatMessage{{Role: "user", Content: "hi"}},
-	}
+	req := streamingRequest()
 
 	defer func() {
 		if r := recover(); r != http.ErrAbortHandler {
@@ -158,11 +168,7 @@ type bareWriter struct {
 // support chunk delivery cannot be guaranteed, so the writer refuses.
 func TestStreamRequiresFlusher(t *testing.T) {
 	t.Parallel()
-	req := completionRequest{
-		Model:    "mock-gpt",
-		Stream:   true,
-		Messages: []chatMessage{{Role: "user", Content: "hi"}},
-	}
+	req := streamingRequest()
 	err := writeStream(context.Background(), bareWriter{httptest.NewRecorder()}, req, Faults{})
 	if !errors.Is(err, errNoFlusher) {
 		t.Fatalf("err = %v, want errNoFlusher", err)
@@ -194,11 +200,7 @@ func (scriptedWriter) Flush() {}
 // each position must surface the write error.
 func TestStreamWriteFailureStopsRendering(t *testing.T) {
 	t.Parallel()
-	req := completionRequest{
-		Model:    "mock-gpt",
-		Stream:   true,
-		Messages: []chatMessage{{Role: "user", Content: "hi"}},
-	}
+	req := streamingRequest()
 
 	for q := 0; q < 5; q++ {
 		err := writeStream(context.Background(), &scriptedWriter{remaining: q}, req,
@@ -217,11 +219,7 @@ func TestStreamWriteFailureStopsRendering(t *testing.T) {
 // with the context's error.
 func TestStreamStopsWhenClientLeavesMidChunks(t *testing.T) {
 	t.Parallel()
-	req := completionRequest{
-		Model:    "mock-gpt",
-		Stream:   true,
-		Messages: []chatMessage{{Role: "user", Content: "hi"}},
-	}
+	req := streamingRequest()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 

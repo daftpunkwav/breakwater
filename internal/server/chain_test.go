@@ -22,10 +22,6 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/quota"
-	"github.com/daftpunkwav/breakwater/internal/relay"
-	"github.com/daftpunkwav/breakwater/internal/retry"
-	"github.com/daftpunkwav/breakwater/internal/router"
-	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
 const (
@@ -37,7 +33,7 @@ const (
 // handler with in-memory backends and the shared test upstream.
 func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handler {
 	t.Helper()
-	identity, err := auth.NewStatic(auth.StaticConfig{
+	identity := mustIdentity(t, auth.StaticConfig{
 		Tiers: []auth.StaticTier{
 			{ID: "free", RPM: 2, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}},
 		},
@@ -46,9 +42,6 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 			{ID: "t2", Name: "Tenant Two", Tier: "free", Keys: []string{keyT2}},
 		},
 	})
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
 	return buildChainWithIdentity(t, backendURL, ledger, identity)
 }
 
@@ -56,39 +49,15 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 // given identity store.
 func buildChainWithIdentity(t *testing.T, backendURL string, ledger quota.Ledger, identity auth.Store) http.Handler {
 	t.Helper()
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backendURL})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
-	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-	relayer := relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))
-
-	stages := []pipeline.Middleware{
-		pipeline.CarrierStage(),
-		pipeline.RequestIDStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		pipeline.AuthStage(identity),
-		pipeline.ModelAuthzStage(),
-		limiter.Middleware(limiter.NewMemory(), nil),
-		quota.Middleware(ledger, nil),
-	}
-	return pipeline.Chain(stages...)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
+	return pipeline.Chain(governanceStages(identity, ledger)...,
+	)(NewInference(protocol.FormatOpenAIChat, testRouter(t, backendURL), singleAttemptRelay()))
 }
 
 // completionRequest fires one POST through the chain and returns the
 // status, body and Retry-After header.
 func completionRequest(t *testing.T, handler http.Handler, key, body string) (int, string, string) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := post(t, handler, "/v1/chat/completions", key, body)
 	return rec.Code, rec.Body.String(), rec.Header().Get("Retry-After")
 }
 
@@ -114,12 +83,8 @@ func TestChainAuthenticatesAndForwards(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	if err := ledger.SetBalance(context.Background(), "t2", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	seedBalance(t, ledger, "t1", 1_000_000)
+	seedBalance(t, ledger, "t2", 1_000_000)
 	handler := buildChain(t, backend.URL, ledger)
 
 	status, body, _ := completionRequest(t, handler, keyT1, okBody)
@@ -140,11 +105,7 @@ func TestChainEchoesRequestID(t *testing.T) {
 	t.Parallel()
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
-	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	handler := buildChain(t, backend.URL, ledger)
+	handler := buildChain(t, backend.URL, seededLedger(t, "t1", 1_000_000))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
 		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
@@ -172,8 +133,7 @@ func TestChainEchoesRequestID(t *testing.T) {
 func TestChainRejectsMissingAndUnknownKeys(t *testing.T) {
 	t.Parallel()
 	backend, hits := countingBackend(t)
-	ledger := quota.NewMemory()
-	handler := buildChain(t, backend.URL, ledger)
+	handler := buildChain(t, backend.URL, quota.NewMemory())
 
 	status, body, _ := completionRequest(t, handler, "", okBody)
 	if status != http.StatusUnauthorized || !strings.Contains(body, "missing_api_key") {
@@ -194,11 +154,7 @@ func TestChainRejectsMissingAndUnknownKeys(t *testing.T) {
 func TestChainRateLimitsWithRetryAfter(t *testing.T) {
 	t.Parallel()
 	backend, hits := countingBackend(t)
-	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	handler := buildChain(t, backend.URL, ledger)
+	handler := buildChain(t, backend.URL, seededLedger(t, "t1", 1_000_000))
 
 	// Tier RPM = 2: the first two pass, everything after is rejected.
 	for i := 0; i < 2; i++ {
@@ -235,10 +191,7 @@ func TestChainFailedRequestSettlesAtZero(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"boom"}}`))
 	}))
 	defer failing.Close()
-	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	ledger := seededLedger(t, "t1", 1_000_000)
 	handler := buildChain(t, failing.URL, ledger)
 
 	status, _, _ := completionRequest(t, handler, keyT1, okBody)
@@ -256,12 +209,9 @@ func TestChainFailedRequestSettlesAtZero(t *testing.T) {
 func TestChainQuotaExhaustionIsPaymentRequired(t *testing.T) {
 	t.Parallel()
 	backend, hits := countingBackend(t)
-	ledger := quota.NewMemory()
 	// The estimate of okBody (1 prompt word + clamped 50) is 51 tokens;
 	// ten cannot cover it.
-	if err := ledger.SetBalance(context.Background(), "t2", 10); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	ledger := seededLedger(t, "t2", 10)
 	handler := buildChain(t, backend.URL, ledger)
 
 	status, body, _ := completionRequest(t, handler, keyT2, okBody)
@@ -288,41 +238,39 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	t.Parallel()
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
-	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 
-	identity, err := auth.NewStatic(auth.StaticConfig{
-		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}}},
-		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{keyT1}}},
-	})
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backend.URL})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
-	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-	relayer := relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))
+	identity := tenantIdentity(t, 100, 1_000_000, []string{"*"}, "t1", keyT1)
+	// The flusher-survival assembly: governance without the model
+	// authorization stage, as this deployment mode mounts it.
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.RequestIDStage(),
 		pipeline.FormatStage(protocol.FormatOpenAIChat),
 		pipeline.AuthStage(identity),
 		limiter.Middleware(limiter.NewMemory(), nil),
-		quota.Middleware(ledger, nil),
-	)(NewInference(protocol.FormatOpenAIChat, priority, relayer))
+		quota.Middleware(seededLedger(t, "t1", 1_000_000), nil),
+	)(NewInference(protocol.FormatOpenAIChat, testRouter(t, backend.URL), singleAttemptRelay()))
 
+	resp := openStream(t, handler, streamBody)
+	defer func() { _ = resp.Body.Close() }()
+
+	raw := readSSE(t, resp)
+	if !strings.Contains(raw, `"content":"hi"`) || !strings.HasSuffix(raw, "data: [DONE]\n\n") {
+		t.Fatalf("stream = %q", raw)
+	}
+}
+
+// streamBody is the streaming completion the SSE tests post.
+const streamBody = `{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`
+
+// openStream POSTs a streaming completion through handler served on a
+// live HTTP server and returns the response; the caller owns the body.
+func openStream(t *testing.T, handler http.Handler, body string) *http.Response {
+	t.Helper()
 	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
+	t.Cleanup(srv.Close)
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions",
-		strings.NewReader(`{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+		strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -331,8 +279,13 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	return resp
+}
 
+// readSSE asserts the response streams as text/event-stream and drains
+// the body.
+func readSSE(t *testing.T, resp *http.Response) string {
+	t.Helper()
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content type = %q", ct)
 	}
@@ -340,9 +293,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(string(raw), `"content":"hi"`) || !strings.HasSuffix(string(raw), "data: [DONE]\n\n") {
-		t.Fatalf("stream = %q", raw)
-	}
+	return string(raw)
 }
 
 // TestChainDeniesModelOutsideTier is the tier-authorization evidence:
@@ -351,22 +302,11 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 func TestChainDeniesModelOutsideTier(t *testing.T) {
 	t.Parallel()
 	backend, hits := countingBackend(t)
-	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	ledger := seededLedger(t, "t1", 1_000_000)
 
-	identity, err := auth.NewStatic(auth.StaticConfig{
-		Tiers: []auth.StaticTier{
-			// Explicit list without the wildcard: only m1 may be called,
-			// and an empty list would allow nothing (fail-closed).
-			{ID: "free", RPM: 10, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"m1"}},
-		},
-		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{keyT1}}},
-	})
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
+	// Explicit list without the wildcard: only m1 may be called, and
+	// an empty list would allow nothing (fail-closed).
+	identity := tenantIdentity(t, 10, 10_000, []string{"m1"}, "t1", keyT1)
 	handler := buildChainWithIdentity(t, backend.URL, ledger, identity)
 
 	status, body, _ := completionRequest(t, handler, keyT1, okBody)
@@ -402,6 +342,38 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 	const reservation = int64(51)
 
 	sawCancel := make(chan struct{}, 1)
+	backend := endlessStreamBackend(t, sawCancel)
+	ledger := &settleWitness{Ledger: seededLedger(t, "t1", initial)}
+	handler := buildChain(t, backend.URL, ledger)
+
+	// Read the head of the stream, then walk away mid-flight.
+	resp := openStream(t, handler, streamBody)
+	if _, err := io.ReadFull(resp.Body, make([]byte, 64)); err != nil {
+		t.Fatalf("read stream head: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	awaitUpstreamCancel(t, sawCancel)
+	// The balance move alone cannot distinguish a usage settlement from
+	// an abandoned open lease (the reservation already deducted it), so
+	// the Settle call itself is the evidence this test exists to pin.
+	// The correction lands asynchronously after next() returns, so poll
+	// for it instead of reading the witness once.
+	deadline := time.Now().Add(5 * time.Second)
+	for ledger.settles.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no Settle call succeeded: the lease never settled by usage")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	awaitSettlement(t, ledger, "t1", initial, reservation)
+}
+
+// endlessStreamBackend serves an SSE stream that never ends on its own;
+// it reports on sawCancel when the exchange observes the client (or the
+// write side) going away.
+func endlessStreamBackend(t *testing.T, sawCancel chan struct{}) *httptest.Server {
+	t.Helper()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -421,46 +393,47 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}))
-	defer backend.Close()
+	t.Cleanup(backend.Close)
+	return backend
+}
 
-	ledger := quota.NewMemory()
-	if err := ledger.SetBalance(context.Background(), "t1", initial); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	handler := buildChain(t, backend.URL, ledger)
-
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions",
-		strings.NewReader(`{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+keyT1)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	// Read the head of the stream, then walk away mid-flight.
-	if _, err := io.ReadFull(resp.Body, make([]byte, 64)); err != nil {
-		t.Fatalf("read stream head: %v", err)
-	}
-	_ = resp.Body.Close()
-
-	// The disconnect must reach the upstream exchange.
+// awaitUpstreamCancel fails the test unless the upstream exchange
+// observes the client disconnect within the wait window.
+func awaitUpstreamCancel(t *testing.T, sawCancel <-chan struct{}) {
+	t.Helper()
 	select {
 	case <-sawCancel:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream exchange never observed the client disconnect")
 	}
+}
 
-	// Settlement runs detached from the cancelled request context; poll
-	// until it lands. Anything below the initial balance proves tokens
-	// were actually consumed; the floor proves no surcharge happened.
+// settleWitness wraps a ledger and counts the Settle calls that ended
+// successfully, so a test can prove settlement ran instead of inferring
+// it from a balance the reservation alone already explains.
+type settleWitness struct {
+	quota.Ledger
+	settles atomic.Int64
+}
+
+func (w *settleWitness) Settle(ctx context.Context, leaseID string, usedTokens int64) error {
+	err := w.Ledger.Settle(ctx, leaseID, usedTokens)
+	if err == nil {
+		w.settles.Add(1)
+	}
+	return err
+}
+
+// awaitSettlement polls until the lease settles below the initial
+// balance: anything below proves tokens were consumed, the floor proves
+// the disconnected request was never surcharged past the reservation.
+// The balance alone cannot prove settlement — the reservation itself
+// already deducts it — so pair this helper with the witness's count.
+func awaitSettlement(t *testing.T, ledger quota.Ledger, tenantID string, initial, reservation int64) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		bal, err := ledger.Balance(context.Background(), "t1")
+		bal, err := ledger.Balance(context.Background(), tenantID)
 		if err != nil {
 			t.Fatalf("balance: %v", err)
 		}
@@ -468,7 +441,7 @@ func TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage(t *testing.T) {
 			if floor := initial - reservation; bal < floor {
 				t.Fatalf("balance = %d, below the reserved worst case %d: the settle surcharged a disconnected request", bal, floor)
 			}
-			break
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("balance = %d still full after the disconnect: the lease never settled by usage", bal)

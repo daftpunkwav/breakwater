@@ -8,19 +8,13 @@ package quota
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestMemoryReserveSettleRefundsDifference(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 1000)
 
 	lease, err := m.Reserve(ctx, "t", 400)
 	if err != nil {
@@ -39,11 +33,7 @@ func TestMemoryReserveSettleRefundsDifference(t *testing.T) {
 
 func TestMemorySettleNeverSurcharges(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 1000)
 
 	lease, _ := m.Reserve(ctx, "t", 100)
 	if err := m.Settle(ctx, lease.ID, 500); err != nil {
@@ -56,11 +46,7 @@ func TestMemorySettleNeverSurcharges(t *testing.T) {
 
 func TestMemoryInsufficientBalanceAndNoOverDraft(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 100); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 100)
 
 	if _, err := m.Reserve(ctx, "t", 200); err != ErrInsufficientBalance {
 		t.Fatalf("oversized reserve err = %v, want ErrInsufficientBalance", err)
@@ -78,11 +64,7 @@ func TestMemoryInsufficientBalanceAndNoOverDraft(t *testing.T) {
 
 func TestMemoryCancelReleasesFullReservation(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 100); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 100)
 
 	lease, _ := m.Reserve(ctx, "t", 100)
 	if err := m.Cancel(ctx, lease.ID); err != nil {
@@ -95,11 +77,7 @@ func TestMemoryCancelReleasesFullReservation(t *testing.T) {
 
 func TestMemoryTerminalTransitionsAreNoOps(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 300); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 300)
 
 	lease, _ := m.Reserve(ctx, "t", 300)
 	if err := m.Settle(ctx, lease.ID, 100); err != nil {
@@ -119,11 +97,7 @@ func TestMemoryTerminalTransitionsAreNoOps(t *testing.T) {
 
 func TestMemorySweeperReclaimsAbandonedLeases(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 1000)
 
 	if _, err := m.Reserve(ctx, "t", 400); err != nil {
 		t.Fatalf("reserve: %v", err)
@@ -177,11 +151,7 @@ func TestMemoryBalanceUnknownTenant(t *testing.T) {
 // balances again, and with a late settle of a purged lease surfaced.
 func TestMemoryTerminalLeasesPurgeAfterAuditWindow(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(context.Background(), "t", 1000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 1000)
 
 	first, err := m.Reserve(ctx, "t", 100)
 	if err != nil {
@@ -248,52 +218,10 @@ func TestMemoryTerminalLeasesPurgeAfterAuditWindow(t *testing.T) {
 func TestMemoryConcurrentDrainReconciles(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
-	ctx := context.Background()
 
-	const (
-		initial    = int64(1_000_000)
-		reserveAmt = int64(100)
-		workers    = 64
-		rounds     = 25
-	)
-	if err := m.SetBalance(context.Background(), "t", initial); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	var consumed atomic.Int64
-	var wg sync.WaitGroup
-	errs := make(chan error, workers*rounds)
-	for w := range workers {
-		wg.Add(1)
-		go func(worker int) {
-			defer wg.Done()
-			for round := range rounds {
-				lease, err := m.Reserve(ctx, "t", reserveAmt)
-				if err != nil {
-					errs <- err
-					continue
-				}
-				// Vary usage deterministically across the refund range.
-				used := int64((worker + round) % 101)
-				if err := m.Settle(ctx, lease.ID, used); err != nil {
-					errs <- err
-					continue
-				}
-				consumed.Add(used)
-			}
-		}(w)
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Fatalf("concurrent drain error: %v", err)
-	}
-
-	final, err := m.Balance(ctx, "t")
-	if err != nil {
-		t.Fatalf("balance: %v", err)
-	}
-	if want := initial - consumed.Load(); final != want {
+	const initial = int64(1_000_000)
+	consumed, final := runConcurrentDrain(t, m, initial, 100)
+	if want := initial - consumed; final != want {
 		t.Fatalf("reconciliation error: balance = %d, want %d (drift %d)",
 			final, want, final-want)
 	}

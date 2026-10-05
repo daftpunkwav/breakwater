@@ -106,10 +106,13 @@ func TestIngestResponsesContentMustBeTextParts(t *testing.T) {
 	}
 }
 
-func TestIngestResponsesStreamRequestsUsage(t *testing.T) {
-	t.Parallel()
-	result, err := Ingest(FormatOpenAIResponses, []byte(
-		`{"model":"m","stream":true,"input":"hi","max_output_tokens":16}`))
+// requireIngestedStreamRequestsUsage ingests a stream request of the
+// given format and pins the rule both translated wires apply on top of
+// the canonical schema: the forwardable body re-encodes
+// stream_options.include_usage, the settlement signal.
+func requireIngestedStreamRequestsUsage(t *testing.T, format Format, body string) {
+	t.Helper()
+	result, err := Ingest(format, []byte(body))
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -120,6 +123,12 @@ func TestIngestResponsesStreamRequestsUsage(t *testing.T) {
 	if chat.StreamOptions == nil || !chat.StreamOptions.IncludeUsage {
 		t.Fatalf("canonical body = %s, want stream_options.include_usage", result.UpstreamBody)
 	}
+}
+
+func TestIngestResponsesStreamRequestsUsage(t *testing.T) {
+	t.Parallel()
+	requireIngestedStreamRequestsUsage(t, FormatOpenAIResponses,
+		`{"model":"m","stream":true,"input":"hi","max_output_tokens":16}`)
 }
 
 func TestIngestAnthropicRejectsNonTextBlocks(t *testing.T) {

@@ -250,9 +250,12 @@ func TestLimiterMiddlewareRejectsOversizedBody413(t *testing.T) {
 	}
 }
 
-func TestLimiterMiddlewareRejectsUnreadableBody400(t *testing.T) {
-	t.Parallel()
-	req := chatRequest(t, limiterTenant, failingBody{})
+// assertUnreadableBodyRejected drives one request whose body cannot be
+// served and pins the 400 invalid_request rejection with no reservation
+// taken. because completes the no-reservation failure message.
+func assertUnreadableBodyRejected(t *testing.T, body io.Reader, because string) {
+	t.Helper()
+	req := chatRequest(t, limiterTenant, body)
 	lim := &stubLimiter{decision: Decision{Allowed: true}}
 	rec, _, _ := serveThroughLimiter(t, lim, nil, req, 0)
 
@@ -263,23 +266,16 @@ func TestLimiterMiddlewareRejectsUnreadableBody400(t *testing.T) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 	if lim.allowCalls != 0 {
-		t.Fatal("no reservation may happen for an unreadable body")
+		t.Fatal(because)
 	}
+}
+
+func TestLimiterMiddlewareRejectsUnreadableBody400(t *testing.T) {
+	t.Parallel()
+	assertUnreadableBodyRejected(t, failingBody{}, "no reservation may happen for an unreadable body")
 }
 
 func TestLimiterMiddlewareRejectsMalformedBody400(t *testing.T) {
 	t.Parallel()
-	req := chatRequest(t, limiterTenant, strings.NewReader("{not json"))
-	lim := &stubLimiter{decision: Decision{Allowed: true}}
-	rec, _, _ := serveThroughLimiter(t, lim, nil, req, 0)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "invalid_request") {
-		t.Fatalf("body = %s", rec.Body.String())
-	}
-	if lim.allowCalls != 0 {
-		t.Fatal("no reservation may happen for an unparseable body")
-	}
+	assertUnreadableBodyRejected(t, strings.NewReader("{not json"), "no reservation may happen for an unparseable body")
 }

@@ -21,24 +21,12 @@ func TestMemoryBurstAndRefill(t *testing.T) {
 	clock := time.Now()
 	m.WithClock(func() time.Time { return clock })
 
-	for i := 0; i < 60; i++ {
-		if d, err := m.Allow(ctx, "t", limits, 0); err != nil || !d.Allowed {
-			t.Fatalf("burst request %d: allowed=%v err=%v", i, d.Allowed, err)
-		}
-	}
-	if d, err := m.Allow(ctx, "t", limits, 0); err != nil || d.Allowed {
-		t.Fatalf("post-burst must reject: %v %v", d.Allowed, err)
-	}
+	drainBurst(t, ctx, m, "t", limits, 60, "burst")
+	mustReject(t, ctx, m, "t", limits, "post-burst must reject")
 
 	clock = clock.Add(2 * time.Second)
-	for i := 0; i < 2; i++ {
-		if d, err := m.Allow(ctx, "t", limits, 0); err != nil || !d.Allowed {
-			t.Fatalf("refill request %d: allowed=%v err=%v", i, d.Allowed, err)
-		}
-	}
-	if d, err := m.Allow(ctx, "t", limits, 0); err != nil || d.Allowed {
-		t.Fatalf("beyond refill must reject: %v %v", d.Allowed, err)
-	}
+	drainBurst(t, ctx, m, "t", limits, 2, "refill")
+	mustReject(t, ctx, m, "t", limits, "beyond refill must reject")
 }
 
 func TestMemoryTPMRefund(t *testing.T) {

@@ -15,19 +15,30 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestPGSnapshotStoreIntegration(t *testing.T) {
+// openIntegrationPG dials the DSN-gated integration database, skipping
+// the test when BREAKWATER_TEST_POSTGRES_DSN is unset, and returns the
+// bounded context, the connection and the DSN.
+func openIntegrationPG(t *testing.T) (context.Context, *pgx.Conn, string) {
+	t.Helper()
 	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer func() { _ = conn.Close(ctx) }()
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+	return ctx, conn, dsn
+}
+
+// applySnapshotSchema ensures the quota_snapshots table exists with the
+// columns the store reads and writes.
+func applySnapshotSchema(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+	t.Helper()
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS quota_snapshots (
 		id         BIGSERIAL PRIMARY KEY,
 		tenant_id  TEXT NOT NULL,
@@ -42,6 +53,11 @@ func TestPGSnapshotStoreIntegration(t *testing.T) {
 	if _, err := conn.Exec(ctx, `ALTER TABLE quota_snapshots ADD COLUMN IF NOT EXISTS debited BIGINT NOT NULL DEFAULT 0`); err != nil {
 		t.Fatalf("apply snapshot table: %v", err)
 	}
+}
+
+func TestPGSnapshotStoreIntegration(t *testing.T) {
+	ctx, conn, dsn := openIntegrationPG(t)
+	applySnapshotSchema(t, ctx, conn)
 
 	store, err := NewPGSnapshotStore(ctx, dsn)
 	if err != nil {

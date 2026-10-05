@@ -13,16 +13,31 @@ import (
 	"testing"
 )
 
-func TestModelsEndpointListsSortedNames(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(newRootHandler(nil, nil, nil, "test", nil, []string{"zeta", "alpha", "mid"}))
-	defer srv.Close()
+// modelsServer serves the discovery endpoint over the given
+// client-facing names (nil configures no models) on a live server.
+func modelsServer(t *testing.T, models []string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(newRootHandler(nil, nil, nil, "test", nil, models))
+	t.Cleanup(srv.Close)
+	return srv
+}
 
+// getModels GETs the discovery route and returns the response; the
+// body is closed with the test.
+func getModels(t *testing.T, srv *httptest.Server) *http.Response {
+	t.Helper()
 	resp, err := http.Get(srv.URL + "/v1/models")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+func TestModelsEndpointListsSortedNames(t *testing.T) {
+	t.Parallel()
+	resp := getModels(t, modelsServer(t, []string{"zeta", "alpha", "mid"}))
+
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -66,14 +81,8 @@ func TestModelsEndpointListsSortedNames(t *testing.T) {
 // something.
 func TestModelsEndpointAbsentWithoutModels(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(newRootHandler(nil, nil, nil, "test", nil, nil))
-	defer srv.Close()
+	resp := getModels(t, modelsServer(t, nil))
 
-	resp, err := http.Get(srv.URL + "/v1/models")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for an unregistered route", resp.StatusCode)
 	}
@@ -81,8 +90,7 @@ func TestModelsEndpointAbsentWithoutModels(t *testing.T) {
 
 func TestModelsEndpointRejectsWrites(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(newRootHandler(nil, nil, nil, "test", nil, []string{"m1"}))
-	defer srv.Close()
+	srv := modelsServer(t, []string{"m1"})
 
 	resp, err := http.Post(srv.URL+"/v1/models", "application/json", nil)
 	if err != nil {

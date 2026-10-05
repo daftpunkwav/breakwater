@@ -9,8 +9,6 @@ package relay
 
 import (
 	"context"
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,9 +21,7 @@ import (
 func TestBufferedPassthroughWithUsage(t *testing.T) {
 	t.Parallel()
 	body := `{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`
-	cand := &stubUpstream{id: "a", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, body), nil
-	}}
+	cand := jsonStubUpstream(t, "a", http.StatusOK, body)
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
@@ -67,10 +63,7 @@ func TestRetryRecoversFromServerError(t *testing.T) {
 func TestClientErrorIsTerminalPassthrough(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	cand := &stubUpstream{id: "a", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		calls++
-		return jsonResponse(t, http.StatusUnauthorized, `{"error":{"code":"invalid_key"}}`), nil
-	}}
+	cand := countedStubUpstream(t, &calls, "a", http.StatusUnauthorized, `{"error":{"code":"invalid_key"}}`)
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
@@ -87,9 +80,7 @@ func TestClientErrorIsTerminalPassthrough(t *testing.T) {
 
 func TestAllCandidatesFailingPassesThroughLastStatus(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "a", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusTooManyRequests, `{"error":{}}`), nil
-	}}
+	cand := jsonStubUpstream(t, "a", http.StatusTooManyRequests, `{"error":{}}`)
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
@@ -119,15 +110,7 @@ func TestNoCandidatesRendersGatewayError(t *testing.T) {
 // that renders as the gateway envelope once the attempt cap is reached.
 func TestBufferedBodyReadFailureFailsClosed(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "a", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "application/json")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(errReader{}),
-		}, nil
-	}}
+	cand := unreadableStubUpstream("a", http.StatusOK)
 	exec := New(retry.Policy{MaxAttempts: 1}, nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
@@ -138,12 +121,6 @@ func TestBufferedBodyReadFailureFailsClosed(t *testing.T) {
 		t.Fatalf("body = %q, want gateway envelope", result.Body)
 	}
 }
-
-// errReader fails every read, simulating a connection reset under the
-// buffered exchange.
-type errReader struct{}
-
-func (errReader) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
 
 // TestReadBoundedRejectsOversizedBody pins the fail-closed body cap: a
 // body past maxResponseBytes is refused, never truncated into a lie.

@@ -7,7 +7,6 @@
 package relay
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,12 +17,8 @@ import (
 
 func TestFailoverWalksCandidates(t *testing.T) {
 	t.Parallel()
-	primary := &stubUpstream{id: "primary", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusServiceUnavailable, `{}`), nil
-	}}
-	fallback := &stubUpstream{id: "fallback", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{"usage":{"total_tokens":5}}`), nil
-	}}
+	primary := jsonStubUpstream(t, "primary", http.StatusServiceUnavailable, `{}`)
+	fallback := jsonStubUpstream(t, "fallback", http.StatusOK, `{"usage":{"total_tokens":5}}`)
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{primary, fallback}, false, "{}")
@@ -40,12 +35,8 @@ func TestFailoverWalksCandidates(t *testing.T) {
 // switch records the failover pair.
 func TestFailoverObservesRetryAndFailoverMetrics(t *testing.T) {
 	t.Parallel()
-	primary := &stubUpstream{id: "primary", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusInternalServerError, `{}`), nil
-	}}
-	fallback := &stubUpstream{id: "fallback", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusOK, `{"usage":{"total_tokens":5}}`), nil
-	}}
+	primary := jsonStubUpstream(t, "primary", http.StatusInternalServerError, `{}`)
+	fallback := jsonStubUpstream(t, "fallback", http.StatusOK, `{"usage":{"total_tokens":5}}`)
 	metrics := obs.NewMetrics()
 	exec := New(testPolicy(), nil, WithMetrics(metrics))
 
@@ -72,9 +63,7 @@ func TestFailoverObservesRetryAndFailoverMetrics(t *testing.T) {
 func TestFailoverRehitReportsNoFailover(t *testing.T) {
 	t.Parallel()
 	metrics := obs.NewMetrics()
-	cand := &stubUpstream{id: "only", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusInternalServerError, `{}`), nil
-	}}
+	cand := jsonStubUpstream(t, "only", http.StatusInternalServerError, `{}`)
 	exec := New(testPolicy(), nil, WithMetrics(metrics))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")

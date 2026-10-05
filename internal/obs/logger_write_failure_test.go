@@ -39,11 +39,7 @@ func TestLoggerCountsFailedWritesAsDropped(t *testing.T) {
 	l := NewLogger(failingWriter{}, 8)
 	l.Record(Entry{Status: 200})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushWithTimeout(t, l)
 	if got := l.Dropped(); got != 1 {
 		t.Fatalf("dropped = %d, want 1 (the failed write counted)", got)
 	}
@@ -116,11 +112,7 @@ func TestLoggerClampsCapacityToAtLeastOne(t *testing.T) {
 	}
 
 	l.Record(Entry{Status: 200})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := l.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushWithTimeout(t, l)
 	if l.Written() != 1 {
 		t.Fatalf("written = %d, want 1", l.Written())
 	}

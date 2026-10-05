@@ -22,14 +22,27 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
-func TestAdminRoutingView(t *testing.T) {
-	t.Parallel()
+// switchAdmin builds the admin surface wired to a fresh routing switch
+// over the m1 model and the u1 upstream.
+func switchAdmin() (*router.Switch, *Admin) {
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	admin := NewAdmin("", nil, nil, nil, WithRouting(sw))
+	return sw, NewAdmin("", nil, nil, nil, WithRouting(sw))
+}
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/routing", nil)
+// adminRequest fires one request at the admin endpoint and returns the
+// recorder.
+func adminRequest(admin *Admin, method, target, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	admin.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAdminRoutingView(t *testing.T) {
+	t.Parallel()
+	_, admin := switchAdmin()
+
+	rec := adminRequest(admin, http.MethodGet, "/admin/routing", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -43,24 +56,16 @@ func TestAdminRoutingView(t *testing.T) {
 
 	// Without an installed switch the endpoint closes.
 	bare := NewAdmin("", nil, nil, nil)
-	req = httptest.NewRequest(http.MethodGet, "/admin/routing", nil)
-	rec = httptest.NewRecorder()
-	bare.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
+	if rec := adminRequest(bare, http.MethodGet, "/admin/routing", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("bare switch status = %d, want 404", rec.Code)
 	}
 }
 
 func TestAdminModelSwitchEndpoint(t *testing.T) {
 	t.Parallel()
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	admin := NewAdmin("", nil, nil, nil, WithRouting(sw))
-
+	sw, admin := switchAdmin()
 	put := func(model, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/admin/models/"+model, strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		admin.ServeHTTP(rec, req)
-		return rec
+		return adminRequest(admin, http.MethodPut, "/admin/models/"+model, body)
 	}
 
 	// A typo'd extra member must fail the write loudly — never a silent
@@ -80,10 +85,7 @@ func TestAdminModelSwitchEndpoint(t *testing.T) {
 	}
 
 	// A non-PUT method is rejected like every other admin write.
-	req := httptest.NewRequest(http.MethodGet, "/admin/models/m1", nil)
-	rec := httptest.NewRecorder()
-	admin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
+	if rec := adminRequest(admin, http.MethodGet, "/admin/models/m1", ""); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status = %d, want 405", rec.Code)
 	}
 
@@ -101,10 +103,7 @@ func TestAdminModelSwitchEndpoint(t *testing.T) {
 	// Without an installed switch the endpoints close.
 	bare := NewAdmin("", nil, nil, nil)
 	for _, path := range []string{"/admin/models/m1", "/admin/upstreams/u1"} {
-		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"enabled":false}`))
-		rec := httptest.NewRecorder()
-		bare.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
+		if rec := adminRequest(bare, http.MethodPut, path, `{"enabled":false}`); rec.Code != http.StatusNotFound {
 			t.Fatalf("%s without a switch = %d, want 404", path, rec.Code)
 		}
 	}
@@ -112,38 +111,28 @@ func TestAdminModelSwitchEndpoint(t *testing.T) {
 
 func TestAdminUpstreamSwitchEndpoint(t *testing.T) {
 	t.Parallel()
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	admin := NewAdmin("", nil, nil, nil, WithRouting(sw))
+	sw, admin := switchAdmin()
+	put := func(path, body string) *httptest.ResponseRecorder {
+		return adminRequest(admin, http.MethodPut, path, body)
+	}
 
-	req := httptest.NewRequest(http.MethodPut, "/admin/upstreams/u1", strings.NewReader(`{"enabled":false}`))
-	rec := httptest.NewRecorder()
-	admin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || sw.UpstreamEnabled("u1") {
+	if rec := put("/admin/upstreams/u1", `{"enabled":false}`); rec.Code != http.StatusOK || sw.UpstreamEnabled("u1") {
 		t.Fatalf("status = %d body = %s, want the upstream disabled", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPut, "/admin/upstreams/typo", strings.NewReader(`{"enabled":false}`))
-	rec = httptest.NewRecorder()
-	admin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
+	if rec := put("/admin/upstreams/typo", `{"enabled":false}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown upstream status = %d, want 404", rec.Code)
 	}
 
 	// A malformed switch payload is a 400 and never touches the switch.
-	req = httptest.NewRequest(http.MethodPut, "/admin/upstreams/u1", strings.NewReader(`not json`))
-	rec = httptest.NewRecorder()
-	admin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
+	if rec := put("/admin/upstreams/u1", `not json`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad payload status = %d, want 400", rec.Code)
 	}
 	if sw.UpstreamEnabled("u1") {
 		t.Fatal("a rejected payload toggled the switch")
 	}
 
-	req = httptest.NewRequest(http.MethodPut, "/admin/upstreams/", strings.NewReader(`{"enabled":false}`))
-	rec = httptest.NewRecorder()
-	admin.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
+	if rec := put("/admin/upstreams/", `{"enabled":false}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("empty upstream id status = %d, want 404", rec.Code)
 	}
 }

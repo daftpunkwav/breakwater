@@ -28,6 +28,28 @@ func testRegistry(t *testing.T, mutate func(*Config), opts ...Option) (*Registry
 	return b, func(d time.Duration) { clock = clock.Add(d) }
 }
 
+// reportFaults drives n calls through key and reports each as a server
+// fault; it fails the test if the closed breaker denies one.
+func reportFaults(t *testing.T, b *Registry, key string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		p, ok := b.Allow(context.Background(), key)
+		if !ok {
+			t.Fatalf("call %d denied while the breaker was closed", i)
+		}
+		p.Report(OutcomeServerFault)
+	}
+}
+
+// tripOpen runs the failure count past the threshold and advances the
+// clock past the cooldown, leaving the breaker half-open and ready to
+// admit one probe.
+func tripOpen(t *testing.T, b *Registry, advance func(time.Duration)) {
+	t.Helper()
+	reportFaults(t, b, "u", 3)
+	advance(2 * time.Second) // cooldown elapses
+}
+
 func TestBreakerOpensAfterSustainedFailures(t *testing.T) {
 	t.Parallel()
 	b, _ := testRegistry(t, nil)
@@ -54,10 +76,7 @@ func TestBreakerSuccessResetsFailureCount(t *testing.T) {
 	b, _ := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 2 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
+	reportFaults(t, b, "u", 2)
 	p, _ := b.Allow(ctx, "u")
 	p.Report(OutcomeSuccess)
 	// The count restarted: two more faults stay under the threshold of 3.
@@ -96,10 +115,7 @@ func TestBreakerGatewayTerminationIsNotEvidence(t *testing.T) {
 
 	// Closed: two real faults, then a gateway-cut stream. The counter
 	// must still be at 2 — one more fault opens, a termination does not.
-	for range 2 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
+	reportFaults(t, b, "u", 2)
 	p, _ := b.Allow(ctx, "u")
 	p.Report(OutcomeGatewayTerminated)
 	p, _ = b.Allow(ctx, "u")
@@ -130,16 +146,7 @@ func TestBreakerHalfOpenAdmitsSingleProbe(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second) // cooldown elapses
-
-	probe, ok := b.Allow(ctx, "u")
-	if !ok {
-		t.Fatal("half-open denied the probe")
-	}
+	probe := openThenProbe(t, b, advance)
 	// Concurrent arrivals are denied, never queued.
 	for range 5 {
 		if _, ok := b.Allow(ctx, "u"); ok {
@@ -157,15 +164,7 @@ func TestBreakerFailedProbeReopens(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second)
-	probe, ok := b.Allow(ctx, "u")
-	if !ok {
-		t.Fatal("half-open denied the probe")
-	}
+	probe := openThenProbe(t, b, advance)
 	probe.Report(OutcomeServerFault)
 	if got := b.StateOf(ctx, "u"); got != StateOpen {
 		t.Fatalf("state = %s, want open after failed probe", got)
@@ -181,14 +180,7 @@ func TestBreakerReclaimsAbandonedProbe(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second)
-	if _, ok := b.Allow(ctx, "u"); !ok {
-		t.Fatal("half-open denied the probe")
-	}
+	openThenProbe(t, b, advance) // the probe is abandoned below
 	// The probe holder vanishes (panic, hang): time passes the probe
 	// deadline without a Report.
 	advance(2 * time.Second)
@@ -207,12 +199,7 @@ func TestBreakerDoubleReportAbsorbed(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second)
-	probe, _ := b.Allow(ctx, "u")
+	probe := openThenProbe(t, b, advance)
 	probe.Report(OutcomeSuccess) // closes
 	probe.Report(OutcomeServerFault)
 	if got := b.StateOf(ctx, "u"); got != StateClosed {
@@ -258,11 +245,7 @@ func TestBreakerReadThenAllowProbes(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second) // cooldown elapses
+	tripOpen(t, b, advance)
 
 	// The router's pre-filter sees half-open and keeps the upstream as a
 	// candidate.
@@ -288,11 +271,7 @@ func TestBreakerConcurrentProbesExactlyOne(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second)
+	tripOpen(t, b, advance)
 
 	var granted atomic.Int64
 	var wg sync.WaitGroup
@@ -321,11 +300,7 @@ func TestBreakerStaleProbeReportDoesNotHijack(t *testing.T) {
 	b, advance := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "u")
-		p.Report(OutcomeServerFault)
-	}
-	advance(2 * time.Second)
+	tripOpen(t, b, advance)
 	stale, ok := b.Allow(ctx, "u") // probe A
 	if !ok {
 		t.Fatal("half-open denied the first probe")
@@ -358,10 +333,7 @@ func TestBreakerUpstreamsAreIndependent(t *testing.T) {
 	b, _ := testRegistry(t, nil)
 	ctx := context.Background()
 
-	for range 3 {
-		p, _ := b.Allow(ctx, "a")
-		p.Report(OutcomeServerFault)
-	}
+	reportFaults(t, b, "a", 3)
 	if got := b.StateOf(ctx, "a"); got != StateOpen {
 		t.Fatalf("a = %s, want open", got)
 	}

@@ -74,6 +74,20 @@ func executeJob(t *testing.T, exec *Executor, job Job) capturedResult {
 	return capturedResult{Result: result, Body: rec.Body.Bytes(), Header: rec.Header()}
 }
 
+// submitFallbackJob runs the standard primary-model body job against
+// exec: candidates as the first batch, fallbacks as the chain, and
+// resolve (when non-nil) as the chain's resolver.
+func submitFallbackJob(t *testing.T, exec *Executor, candidates []upstream.Upstream, fallbacks []string, resolve func(context.Context, string) ([]upstream.Upstream, error)) capturedResult {
+	t.Helper()
+	return executeJob(t, exec, Job{
+		Model:      "m1",
+		Body:       []byte(`{}`),
+		Candidates: candidates,
+		Fallbacks:  fallbacks,
+		Resolve:    resolve,
+	})
+}
+
 func TestFallbackAdvancesWhenCandidatesExhausted(t *testing.T) {
 	t.Parallel()
 	primary := &scriptedUpstream{id: "u1", status: http.StatusServiceUnavailable}
@@ -81,16 +95,11 @@ func TestFallbackAdvancesWhenCandidatesExhausted(t *testing.T) {
 	resolved := []string{}
 	exec := New(retry.Policy{MaxAttempts: 3}, nil)
 
-	result := executeJob(t, exec, Job{
-		Model:      "m1",
-		Body:       []byte(`{}`),
-		Candidates: []upstream.Upstream{primary},
-		Fallbacks:  []string{"m2"},
-		Resolve: func(_ context.Context, model string) ([]upstream.Upstream, error) {
+	result := submitFallbackJob(t, exec, []upstream.Upstream{primary}, []string{"m2"},
+		func(_ context.Context, model string) ([]upstream.Upstream, error) {
 			resolved = append(resolved, model)
 			return []upstream.Upstream{fallback}, nil
-		},
-	})
+		})
 
 	if result.Status != http.StatusOK || result.UpstreamID != "u2" {
 		t.Fatalf("status = %d upstream = %q body = %s, want 200 from u2", result.Status, result.UpstreamID, result.Body)
@@ -122,18 +131,13 @@ func TestFallbackSkipsUnresolvableModels(t *testing.T) {
 	final := &scriptedUpstream{id: "u3", status: http.StatusOK}
 	exec := New(retry.Policy{MaxAttempts: 3}, nil)
 
-	result := executeJob(t, exec, Job{
-		Model:      "m1",
-		Body:       []byte(`{}`),
-		Candidates: []upstream.Upstream{primary},
-		Fallbacks:  []string{"m2", "m3"},
-		Resolve: func(_ context.Context, model string) ([]upstream.Upstream, error) {
+	result := submitFallbackJob(t, exec, []upstream.Upstream{primary}, []string{"m2", "m3"},
+		func(_ context.Context, model string) ([]upstream.Upstream, error) {
 			if model == "m2" {
 				return nil, errors.New("disabled")
 			}
 			return []upstream.Upstream{final}, nil
-		},
-	})
+		})
 
 	if result.Status != http.StatusOK || result.UpstreamID != "u3" {
 		t.Fatalf("status = %d upstream = %q, want 200 from u3 past the dead hop", result.Status, result.UpstreamID)
@@ -150,18 +154,13 @@ func TestFallbackCycleGuard(t *testing.T) {
 	resolved := map[string]int{}
 	exec := New(retry.Policy{MaxAttempts: 3}, nil)
 
-	result := executeJob(t, exec, Job{
-		Model:      "m1",
-		Body:       []byte(`{}`),
-		Candidates: []upstream.Upstream{primary},
-		// The chain names the primary model again and duplicates its
-		// own entry: neither may resolve twice.
-		Fallbacks: []string{"m2", "m1", "m2"},
-		Resolve: func(_ context.Context, model string) ([]upstream.Upstream, error) {
+	// The chain names the primary model again and duplicates its own
+	// entry: neither may resolve twice.
+	result := submitFallbackJob(t, exec, []upstream.Upstream{primary}, []string{"m2", "m1", "m2"},
+		func(_ context.Context, model string) ([]upstream.Upstream, error) {
 			resolved[model]++
 			return []upstream.Upstream{fallback}, nil
-		},
-	})
+		})
 
 	if result.Status != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want the 503 passthrough after the chain drains", result.Status)
@@ -226,15 +225,10 @@ func TestFallbackDoesNotWaitForHint(t *testing.T) {
 	exec := New(retry.Policy{MaxAttempts: 2}, nil)
 
 	start := time.Now()
-	result := executeJob(t, exec, Job{
-		Model:      "m1",
-		Body:       []byte(`{}`),
-		Candidates: []upstream.Upstream{primary},
-		Fallbacks:  []string{"m2"},
-		Resolve: func(context.Context, string) ([]upstream.Upstream, error) {
+	result := submitFallbackJob(t, exec, []upstream.Upstream{primary}, []string{"m2"},
+		func(context.Context, string) ([]upstream.Upstream, error) {
 			return []upstream.Upstream{fallback}, nil
-		},
-	})
+		})
 
 	if result.Status != http.StatusOK || result.UpstreamID != "u2" {
 		t.Fatalf("status = %d upstream = %q, want 200 from u2", result.Status, result.UpstreamID)
@@ -280,12 +274,7 @@ func TestFallbackNilResolverClamps(t *testing.T) {
 	primary := &scriptedUpstream{id: "u1", status: http.StatusServiceUnavailable}
 	exec := New(retry.Policy{MaxAttempts: 3}, nil)
 
-	result := executeJob(t, exec, Job{
-		Model:      "m1",
-		Body:       []byte(`{}`),
-		Candidates: []upstream.Upstream{primary},
-		Fallbacks:  []string{"m2"},
-	})
+	result := submitFallbackJob(t, exec, []upstream.Upstream{primary}, []string{"m2"}, nil)
 
 	if result.Status != http.StatusServiceUnavailable || result.Attempts != 3 {
 		t.Fatalf("status = %d attempts = %d, want 3 clamped attempts on u1", result.Status, result.Attempts)

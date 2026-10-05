@@ -62,24 +62,34 @@ func (f *fakeTx) Commit(context.Context) error {
 	return f.commit
 }
 
+// scriptedCreateKeyTx runs createKeyTx for user against a fakeTx that
+// answers with the scripted rows in call order; the fake comes back so
+// tests can inspect the commits, the call count and the recorded SQL.
+// Every test in this file issues the same key name.
+func scriptedCreateKeyTx(user string, answers ...scriptedRow) (*fakeTx, error) {
+	tx := &fakeTx{answers: answers}
+	_, err := createKeyTx(context.Background(), tx, user, "name")
+	return tx, err
+}
+
 // TestCreateKeyTxLockFailureIsWrapped: a lock query that fails for a
 // reason other than a missing row surfaces as a wrapped error, never
 // as a sentinel or a silent success.
 func TestCreateKeyTxLockFailureIsWrapped(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{{err: errors.New("connection reset")}}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); err == nil || !strings.Contains(err.Error(), "lock user") {
+	_, err := scriptedCreateKeyTx("u1", scriptedRow{err: errors.New("connection reset")})
+	if err == nil || !strings.Contains(err.Error(), "lock user") {
 		t.Fatalf("err = %v, want the wrapped lock failure", err)
 	}
 }
 
 func TestCreateKeyTxCountFailureIsWrapped(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{
-		{values: []any{"u1"}},             // lock acquired
-		{err: errors.New("read timeout")}, // count query dies
-	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); err == nil || !strings.Contains(err.Error(), "count keys") {
+	_, err := scriptedCreateKeyTx("u1",
+		scriptedRow{values: []any{"u1"}},             // lock acquired
+		scriptedRow{err: errors.New("read timeout")}, // count query dies
+	)
+	if err == nil || !strings.Contains(err.Error(), "count keys") {
 		t.Fatalf("err = %v, want the wrapped count failure", err)
 	}
 }
@@ -89,12 +99,12 @@ func TestCreateKeyTxCountFailureIsWrapped(t *testing.T) {
 // one store error, not a partial key.
 func TestCreateKeyTxInsertFailureIsWrapped(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{
-		{values: []any{"u1"}},                      // lock acquired
-		{values: []any{int64(0)}},                  // count: under the cap
-		{err: errors.New("serialisation failure")}, // insert dies
-	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); err == nil || !strings.Contains(err.Error(), "create key") {
+	tx, err := scriptedCreateKeyTx("u1",
+		scriptedRow{values: []any{"u1"}},                      // lock acquired
+		scriptedRow{values: []any{int64(0)}},                  // count: under the cap
+		scriptedRow{err: errors.New("serialisation failure")}, // insert dies
+	)
+	if err == nil || !strings.Contains(err.Error(), "create key") {
 		t.Fatalf("err = %v, want the wrapped create failure", err)
 	}
 	if tx.commits != 0 {
@@ -106,14 +116,13 @@ func TestCreateKeyTxInsertFailureIsWrapped(t *testing.T) {
 // runs exactly once after the insert answer.
 func TestCreateKeyTxCommitSuccessOrdering(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{
-		{values: []any{"u1"}},
-		{values: []any{int64(0)}},
-		{err: errors.New("no scripted insert row")},
-	}}
 	// The insert's row is scripted to fail here, so commit must not
 	// have run — pinning that commit happens only after a clean insert.
-	_, err := createKeyTx(context.Background(), tx, "u1", "name")
+	tx, err := scriptedCreateKeyTx("u1",
+		scriptedRow{values: []any{"u1"}},
+		scriptedRow{values: []any{int64(0)}},
+		scriptedRow{err: errors.New("no scripted insert row")},
+	)
 	if err == nil {
 		t.Fatal("expected the scripted insert failure")
 	}
@@ -127,8 +136,8 @@ func TestCreateKeyTxCommitSuccessOrdering(t *testing.T) {
 // one query earlier.
 func TestCreateKeyTxUnknownUserIsTheSentinel(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{{err: pgx.ErrNoRows}}}
-	if _, err := createKeyTx(context.Background(), tx, "ghost", "name"); !errors.Is(err, ErrUnknownUser) {
+	tx, err := scriptedCreateKeyTx("ghost", scriptedRow{err: pgx.ErrNoRows})
+	if !errors.Is(err, ErrUnknownUser) {
 		t.Fatalf("err = %v, want ErrUnknownUser", err)
 	}
 	if tx.calls != 1 {
@@ -140,11 +149,11 @@ func TestCreateKeyTxUnknownUserIsTheSentinel(t *testing.T) {
 // insert — the ceiling cannot be raced past the transaction.
 func TestCreateKeyTxTooManyKeys(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{
-		{values: []any{"u1"}},
-		{values: []any{int64(MaxKeysPerUser)}},
-	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); !errors.Is(err, ErrTooManyKeys) {
+	tx, err := scriptedCreateKeyTx("u1",
+		scriptedRow{values: []any{"u1"}},
+		scriptedRow{values: []any{int64(MaxKeysPerUser)}},
+	)
+	if !errors.Is(err, ErrTooManyKeys) {
 		t.Fatalf("err = %v, want ErrTooManyKeys", err)
 	}
 	if tx.calls != 2 {
@@ -158,12 +167,12 @@ func TestCreateKeyTxTooManyKeys(t *testing.T) {
 // forever, locking the user out of fresh issuance.
 func TestCreateKeyTxCountsActiveKeysOnly(t *testing.T) {
 	t.Parallel()
-	tx := &fakeTx{answers: []scriptedRow{
-		{values: []any{"u1"}},                  // lock acquired
-		{values: []any{int64(MaxKeysPerUser)}}, // active keys under... at the cap
-		{err: errors.New("no scripted insert row")},
-	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); !errors.Is(err, ErrTooManyKeys) {
+	tx, err := scriptedCreateKeyTx("u1",
+		scriptedRow{values: []any{"u1"}},                  // lock acquired
+		scriptedRow{values: []any{int64(MaxKeysPerUser)}}, // active keys under... at the cap
+		scriptedRow{err: errors.New("no scripted insert row")},
+	)
+	if !errors.Is(err, ErrTooManyKeys) {
 		t.Fatalf("err = %v, want ErrTooManyKeys at the active cap", err)
 	}
 	if len(tx.sqls) < 2 {
