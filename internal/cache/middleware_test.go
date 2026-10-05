@@ -173,6 +173,28 @@ func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
 	}
 }
 
+// TestCacheReplayDropsIllegalHeaderValues pins the replay's half of the
+// upstream boundary: a store is an injected port, so a value it returns
+// that is not a legal header field value is dropped rather than copied —
+// the rule the live passthrough applies, and the one that keeps HTTP/1's
+// space-replacement and HTTP/2's silent drop from diverging.
+func TestCacheReplayDropsIllegalHeaderValues(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
+	header.Set("Retry-After", "3\r\nSet-Cookie: injected=1")
+
+	rec := httptest.NewRecorder()
+	replay(rec, Entry{Status: http.StatusTooManyRequests, Header: header, Body: []byte("{}")})
+
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("replayed Retry-After = %q, want the illegal value dropped", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("replayed content type = %q, want the legal value forwarded", got)
+	}
+}
+
 // TestCacheReplayReplacesDocumentContentType pins the other half of the
 // replay contract: the media type is not trusted from the store. A store
 // is an injected port, so an entry need not be one this gateway

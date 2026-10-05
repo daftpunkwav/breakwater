@@ -185,19 +185,19 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 // client — a hit that drops it invites the immediate retry the upstream
 // asked to wait out. One list, two consumers: neither can drift.
 //
-// The media type goes through the same policy as the live passthrough
-// rather than being copied verbatim: a store is an injected port, so the
-// entry is not provably one this gateway captured. The body is opaque
-// upstream bytes replayed unchanged — the label above them is what keeps
-// them from executing in a browser, and the gateway never relays a
-// document media type.
+// Nothing is copied verbatim. A store is an injected port, so an entry is
+// not provably one this gateway captured: every value goes through the
+// legality check the live passthrough applies, and the media type through
+// its policy as well. The body is opaque upstream bytes replayed
+// unchanged — the label above them is what keeps them from executing in a
+// browser, and the gateway never relays a document media type.
 func replay(w http.ResponseWriter, entry Entry) {
 	header := w.Header()
 	for _, name := range protocol.PassthroughHeaderNames() {
 		if name == "Content-Type" {
 			continue
 		}
-		if v := entry.Header.Get(name); v != "" {
+		if v := entry.Header.Get(name); v != "" && protocol.ValidHeaderValue(v) {
 			header.Set(name, v)
 		}
 	}
