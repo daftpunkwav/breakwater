@@ -456,7 +456,7 @@ func TestSeedBalancesProvisionsTenants(t *testing.T) {
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", RPM: 10, TPM: 1000, MaxTokens: 64, MonthlyQuota: 1000}},
 		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{"k1"}}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}

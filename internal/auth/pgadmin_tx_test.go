@@ -68,7 +68,7 @@ func (f *fakeTx) Commit(context.Context) error {
 func TestCreateKeyTxLockFailureIsWrapped(t *testing.T) {
 	t.Parallel()
 	tx := &fakeTx{answers: []scriptedRow{{err: errors.New("connection reset")}}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); err == nil || !strings.Contains(err.Error(), "lock user") {
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name", ""); err == nil || !strings.Contains(err.Error(), "lock user") {
 		t.Fatalf("err = %v, want the wrapped lock failure", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestCreateKeyTxCountFailureIsWrapped(t *testing.T) {
 		{values: []any{"u1"}},             // lock acquired
 		{err: errors.New("read timeout")}, // count query dies
 	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); err == nil || !strings.Contains(err.Error(), "count keys") {
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name", ""); err == nil || !strings.Contains(err.Error(), "count keys") {
 		t.Fatalf("err = %v, want the wrapped count failure", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestCreateKeyTxInsertFailureIsWrapped(t *testing.T) {
 		{values: []any{int64(0)}},                  // count: under the cap
 		{err: errors.New("serialisation failure")}, // insert dies
 	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); err == nil || !strings.Contains(err.Error(), "create key") {
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name", ""); err == nil || !strings.Contains(err.Error(), "create key") {
 		t.Fatalf("err = %v, want the wrapped create failure", err)
 	}
 	if tx.commits != 0 {
@@ -113,7 +113,7 @@ func TestCreateKeyTxCommitSuccessOrdering(t *testing.T) {
 	}}
 	// The insert's row is scripted to fail here, so commit must not
 	// have run — pinning that commit happens only after a clean insert.
-	_, err := createKeyTx(context.Background(), tx, "u1", "name")
+	_, err := createKeyTx(context.Background(), tx, "u1", "name", "")
 	if err == nil {
 		t.Fatal("expected the scripted insert failure")
 	}
@@ -128,7 +128,7 @@ func TestCreateKeyTxCommitSuccessOrdering(t *testing.T) {
 func TestCreateKeyTxUnknownUserIsTheSentinel(t *testing.T) {
 	t.Parallel()
 	tx := &fakeTx{answers: []scriptedRow{{err: pgx.ErrNoRows}}}
-	if _, err := createKeyTx(context.Background(), tx, "ghost", "name"); !errors.Is(err, ErrUnknownUser) {
+	if _, err := createKeyTx(context.Background(), tx, "ghost", "name", ""); !errors.Is(err, ErrUnknownUser) {
 		t.Fatalf("err = %v, want ErrUnknownUser", err)
 	}
 	if tx.calls != 1 {
@@ -144,7 +144,7 @@ func TestCreateKeyTxTooManyKeys(t *testing.T) {
 		{values: []any{"u1"}},
 		{values: []any{int64(MaxKeysPerUser)}},
 	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); !errors.Is(err, ErrTooManyKeys) {
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name", ""); !errors.Is(err, ErrTooManyKeys) {
 		t.Fatalf("err = %v, want ErrTooManyKeys", err)
 	}
 	if tx.calls != 2 {
@@ -163,7 +163,7 @@ func TestCreateKeyTxCountsActiveKeysOnly(t *testing.T) {
 		{values: []any{int64(MaxKeysPerUser)}}, // active keys under... at the cap
 		{err: errors.New("no scripted insert row")},
 	}}
-	if _, err := createKeyTx(context.Background(), tx, "u1", "name"); !errors.Is(err, ErrTooManyKeys) {
+	if _, err := createKeyTx(context.Background(), tx, "u1", "name", ""); !errors.Is(err, ErrTooManyKeys) {
 		t.Fatalf("err = %v, want ErrTooManyKeys at the active cap", err)
 	}
 	if len(tx.sqls) < 2 {

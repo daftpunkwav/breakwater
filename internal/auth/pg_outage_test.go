@@ -24,7 +24,7 @@ func TestPGOutageLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	store, err := NewPGStore(ctx, unreachableDSN)
+	store, err := NewPGStore(ctx, unreachableDSN, "")
 	if err != nil {
 		t.Fatalf("NewPGStore with a syntactically valid dsn: %v", err)
 	}

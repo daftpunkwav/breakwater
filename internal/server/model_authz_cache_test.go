@@ -49,7 +49,7 @@ func TestCacheHitCannotBypassTierModelAuthorization(t *testing.T) {
 			{ID: "tw", Name: "Wide", Tier: "wide", Keys: []string{keyT1}},
 			{ID: "tn", Name: "Narrow", Tier: "narrow", Keys: []string{keyT2}},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}

@@ -222,7 +222,7 @@ func staticIdentity(t *testing.T) auth.Store {
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}}},
 		Tenants: []auth.StaticTenant{{ID: "t2", Name: "T2", Tier: "free", Keys: []string{keyT2}}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}

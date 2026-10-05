@@ -146,6 +146,7 @@ quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` �
 | `BREAKWATER_FALLBACKS`                | _(无)_         | 模型 → 有序 fallback 模型的 JSON 映射，在主模型每个候选耗尽后尝试（`{"gpt-4o":["gpt-4o-mini"]}`）；键与目标必须指向已配置的 client-facing 模型 |
 | `BREAKWATER_CONTEXT_LIMITS`           | _(无)_         | 模型 → 最大输入 token 估算的 JSON 映射；超出上限的 prompt 提前拒绝该模型的全部候选，返回 `413 context_window_exceeded`，而不是注定失败的 upstream 交换 |
 | `BREAKWATER_IDENTITY`                 | _(无)_         | JSON identity 集合（`tiers`、带 `role` 与用户级 `overrides` 的 `tenants`；未知成员拒绝启动，tenant id 限 `[A-Za-z0-9._-]{1,128}`）；武装 governance pipeline。也接受 `file://<路径>`，从文件加载 JSON，避免明文 API key 进入进程环境 |
+| `BREAKWATER_KEY_PEPPER`               | _(无)_         | auth 包对 API key 做 HMAC 哈希所用密钥（查找与持久化的 `key_hash` 列共用）。留空等价空密钥；设置后，泄露的 `key_hash` 无法被离线暴力还原弱 key。必须在第一把 key 落地前固定——事后更换会让所有已存哈希失效 |
 | `BREAKWATER_POSTGRES_DSN`             | _(无)_         | 身份 system of record（覆盖静态集合）                        |
 | `BREAKWATER_REDIS_ADDR`               | _(无)_         | 启用 Redis backend；不设则 in-memory                         |
 | `BREAKWATER_REDIS_TLS`                | _(关)_         | 用 TLS 包裹 Redis 连接；证书须能通过系统根证书校验，server name 取自地址 host。否则余额与限流状态明文过网 |

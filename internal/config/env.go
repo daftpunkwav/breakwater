@@ -85,6 +85,7 @@ const (
 	envStreamIdleTimeout   = "BREAKWATER_STREAM_IDLE_TIMEOUT"
 	envReconcileInterval   = "BREAKWATER_RECONCILE_INTERVAL"
 	envIdentity            = "BREAKWATER_IDENTITY"
+	envKeyPepper           = "BREAKWATER_KEY_PEPPER"
 
 	envCacheEnabled  = "BREAKWATER_CACHE_ENABLED"
 	envCacheTTL      = "BREAKWATER_CACHE_TTL"
@@ -136,7 +137,8 @@ func defaultConfig() Config {
 		Postgres: Postgres{
 			DSN: strings.TrimSpace(os.Getenv(envPostgresDSN)),
 		},
-		Identity: strings.TrimSpace(os.Getenv(envIdentity)),
+		Identity:  strings.TrimSpace(os.Getenv(envIdentity)),
+		KeyPepper: strings.TrimSpace(os.Getenv(envKeyPepper)),
 		Obs: Obs{
 			AccessLogQueueSize: defaultAccessLogQueue,
 			AccessLogPath:      strings.TrimSpace(os.Getenv(envAccessLogPath)),

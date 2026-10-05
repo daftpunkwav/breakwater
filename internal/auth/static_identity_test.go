@@ -50,7 +50,7 @@ func TestNewStaticRejectsBrokenIdentitySets(t *testing.T) {
 			cfg := validStaticConfig()
 			tc.mutate(&cfg)
 
-			store, err := NewStatic(cfg)
+			store, err := NewStatic(cfg, "")
 			if err == nil {
 				t.Fatalf("NewStatic accepted a broken set, store %+v", store)
 			}
@@ -66,7 +66,7 @@ func TestNewStaticRejectsBrokenIdentitySets(t *testing.T) {
 func TestStaticResolve(t *testing.T) {
 	t.Parallel()
 
-	store, err := NewStatic(validStaticConfig())
+	store, err := NewStatic(validStaticConfig(), "")
 	if err != nil {
 		t.Fatalf("NewStatic: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestStaticResolve(t *testing.T) {
 func TestStaticTenantsSortedAndDeduped(t *testing.T) {
 	t.Parallel()
 
-	store, err := NewStatic(validStaticConfig())
+	store, err := NewStatic(validStaticConfig(), "")
 	if err != nil {
 		t.Fatalf("NewStatic: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestStaticTenantsSortedAndDeduped(t *testing.T) {
 func TestStaticTenantByID(t *testing.T) {
 	t.Parallel()
 
-	store, err := NewStatic(validStaticConfig())
+	store, err := NewStatic(validStaticConfig(), "")
 	if err != nil {
 		t.Fatalf("NewStatic: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestNewStaticRejectsInvalidTenantID(t *testing.T) {
 	for _, id := range []string{"a/b", "a b", "a:b", strings.Repeat("a", 129)} {
 		cfg := validStaticConfig()
 		cfg.Tenants[0].ID = id
-		if _, err := NewStatic(cfg); err == nil || !strings.Contains(err.Error(), "invalid id") {
+		if _, err := NewStatic(cfg, ""); err == nil || !strings.Contains(err.Error(), "invalid id") {
 			t.Errorf("id %q: err = %v, want an invalid-id rejection", id, err)
 		}
 	}

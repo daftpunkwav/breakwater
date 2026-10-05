@@ -1,8 +1,12 @@
 -- Local development seed: one tier, two tenants, two API keys.
--- The key_hash column holds SHA-256 of the raw key. The raw values are
--- the loadtest scenarios' default API_KEYs: 'bw-local-t1' (local-1)
--- and 'bw-local-t2' (local-2). The README quick start uses a separate
--- BREAKWATER_IDENTITY key and does not need this seed.
+-- The key_hash column holds HMAC-SHA256 of the raw key, keyed by
+-- BREAKWATER_KEY_PEPPER. The digests below assume the pepper is unset
+-- (the empty key) at seed time; a deployment that sets a pepper must
+-- recompute them (TestSeedKeyHashMatchesHashKey pins the Go side).
+-- The raw values are the loadtest scenarios' default API_KEYs:
+-- 'bw-local-t1' (local-1) and 'bw-local-t2' (local-2). The README
+-- quick start uses a separate BREAKWATER_IDENTITY key and does not
+-- need this seed.
 -- docker-compose.yml mounts this file as 02-seed.sql so the first boot
 -- applies it after the schema; it stays idempotent if applied manually:
 --   docker compose -f deploy/docker-compose.yml exec -T postgres \
@@ -22,7 +26,7 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO api_keys (id, tenant_id, key_hash)
 VALUES ('key-local-1', 'local-1',
-        '8480a628527425db68d2d00ddb40662af3e08f1f70e986f184b985ebabb94834'),
+        'dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088'),
        ('key-local-2', 'local-2',
-        '77b067bf9a831837114736fca7c5eacf293138e63fffcc865d848d0ddfe2891b')
+        'a544711afeb45d9c00135b1c18c3e05582f59bd78272137fd30fc204aed2fd76')
 ON CONFLICT (id) DO NOTHING;

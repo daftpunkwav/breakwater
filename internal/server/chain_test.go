@@ -45,7 +45,7 @@ func buildChain(t *testing.T, backendURL string, ledger quota.Ledger) http.Handl
 			{ID: "t1", Name: "Tenant One", Tier: "free", Keys: []string{keyT1}},
 			{ID: "t2", Name: "Tenant Two", Tier: "free", Keys: []string{keyT2}},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestChainStreamedThroughGovernance(t *testing.T) {
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}}},
 		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{keyT1}}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestChainDeniesModelOutsideTier(t *testing.T) {
 			{ID: "free", RPM: 10, TPM: 10_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"m1"}},
 		},
 		Tenants: []auth.StaticTenant{{ID: "t1", Name: "T1", Tier: "free", Keys: []string{keyT1}}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}

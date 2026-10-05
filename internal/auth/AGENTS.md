@@ -2,9 +2,9 @@
 
 Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
 
-- Store and look up API keys only as SHA-256 hashes, in PostgreSQL and
-  in the static set. The raw secret appears only in the `CreateKey`
-  response.
+- Store and look up API keys only as HMAC-SHA256 digests keyed by
+  `BREAKWATER_KEY_PEPPER`, in PostgreSQL and in the static set. The raw
+  secret appears only in the `CreateKey` response.
 - `ParseStaticConfig` rejects malformed JSON and unknown fields.
   Startup fails when that parse fails.
 - `GenerateKey` uses the `bw-` prefix. `MaxKeysPerUser` is 5.
