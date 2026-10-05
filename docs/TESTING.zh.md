@@ -33,6 +33,7 @@
 | -------- | ----- | ------------- |
 | 被拒请求绝不抵达 upstream | `internal/server`、`internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`、`TestChainRateLimitsWithRetryAfter`、`TestChainQuotaExhaustionIsPaymentRequired`、`TestChainDeniesModelOutsideTier` |
 | 同一 cache key 的并发冷请求恰好一次上游回源 | `internal/cache` | `TestFlightSingleFetchUnderStampede`、`TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
+| 中途离场的发起者既不取消共享回源，也不使其上的 waiter 失败 | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`、`TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
 | panic 的回源释放其 waiter 而非卡死它们 | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | 请求绝不超出 attempt 上限，重试绝不超出全局 in-flight 预算 | `internal/retry` | `TestExecuteCapsAttempts`、`TestBudgetCapsInFlightRetries`、`TestBudgetReleaseAbsorbsImbalance` |
 | 第一个响应字节之后，loop 绝不重试 | `internal/retry`、`internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`、`TestMessagesRouteStreamAbortTerminatesHonestly` |

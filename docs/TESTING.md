@@ -36,6 +36,7 @@ are the index — run any of them to check the property directly.
 | -------- | ----- | ------------- |
 | A rejected request never reaches an upstream | `internal/server`, `internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`, `TestChainRateLimitsWithRetryAfter`, `TestChainQuotaExhaustionIsPaymentRequired`, `TestChainDeniesModelOutsideTier` |
 | Concurrent cold requests for one cache key cause exactly one upstream fetch | `internal/cache` | `TestFlightSingleFetchUnderStampede`, `TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
+| A starter that walks away mid-fetch neither cancels the shared fetch nor fails the waiters riding it | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`, `TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
 | A panicking fetch releases its waiters instead of wedging them | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | A request never exceeds its attempt cap, and retries never exceed the global in-flight budget | `internal/retry` | `TestExecuteCapsAttempts`, `TestBudgetCapsInFlightRetries`, `TestBudgetReleaseAbsorbsImbalance` |
 | After the first response byte, the loop never retries | `internal/retry`, `internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
