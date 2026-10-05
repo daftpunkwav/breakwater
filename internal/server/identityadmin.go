@@ -37,38 +37,20 @@ import (
 func (a *Admin) serveIdentity(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/admin/users":
-		switch r.Method {
-		case http.MethodPost:
-			a.guarded(w, r, http.MethodPost, a.serveCreateUser)
-		case http.MethodGet:
-			a.guarded(w, r, http.MethodGet, a.serveListUsers)
-		default:
-			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
+		a.guardedPair(w, r, http.MethodPost, a.serveListUsers, a.serveCreateUser)
 	case strings.HasPrefix(r.URL.Path, "/admin/users/"):
 		rest := strings.TrimPrefix(r.URL.Path, "/admin/users/")
 		switch {
 		case strings.HasSuffix(rest, "/limits"):
 			id := strings.TrimSuffix(rest, "/limits")
 			a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-				a.serveUserLimits(w, r, id)
+				a.serveLimitsReplace(w, r, "user", id)
 			})
 		case strings.HasSuffix(rest, "/keys"):
 			id := strings.TrimSuffix(rest, "/keys")
-			switch r.Method {
-			case http.MethodPost:
-				a.guarded(w, r, http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
-					a.serveCreateKey(w, r, id)
-				})
-			case http.MethodGet:
-				a.guarded(w, r, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-					a.serveListKeys(w, r, id)
-				})
-			default:
-				w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
+			a.guardedPair(w, r, http.MethodPost,
+				func(w http.ResponseWriter, r *http.Request) { a.serveListKeys(w, r, id) },
+				func(w http.ResponseWriter, r *http.Request) { a.serveCreateKey(w, r, id) })
 		default:
 			http.NotFound(w, r)
 		}
@@ -78,7 +60,7 @@ func (a *Admin) serveIdentity(w http.ResponseWriter, r *http.Request) {
 		case strings.HasSuffix(rest, "/limits"):
 			id := strings.TrimSuffix(rest, "/limits")
 			a.guarded(w, r, http.MethodPut, func(w http.ResponseWriter, r *http.Request) {
-				a.serveKeyLimits(w, r, id)
+				a.serveLimitsReplace(w, r, "key", id)
 			})
 		case strings.HasSuffix(rest, "/status"):
 			id := strings.TrimSuffix(rest, "/status")
@@ -149,12 +131,14 @@ func (a *Admin) serveListUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
-// serveUserLimits handles PUT /admin/users/{id}/limits: the body is a
-// full LimitOverride document and replaces the user's layer. Every key
-// of the user resolves through it; changes surface within the auth
+// serveLimitsReplace handles PUT /admin/users/{id}/limits and PUT
+// /admin/keys/{id}/limits, which differ only by the override layer
+// they address (kind: "user" or "key"): the body is a full
+// LimitOverride document and replaces that layer. Every key of the
+// subject resolves through it; changes surface within the auth
 // cache TTL.
-func (a *Admin) serveUserLimits(w http.ResponseWriter, r *http.Request, userID string) {
-	if a.identity == nil || userID == "" {
+func (a *Admin) serveLimitsReplace(w http.ResponseWriter, r *http.Request, kind, id string) {
+	if a.identity == nil || id == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -162,11 +146,18 @@ func (a *Admin) serveUserLimits(w http.ResponseWriter, r *http.Request, userID s
 	if !ok {
 		return
 	}
-	if err := a.identity.SetUserLimits(r.Context(), userID, o); err != nil {
+	var err error
+	switch kind {
+	case "user":
+		err = a.identity.SetUserLimits(r.Context(), id, o)
+	case "key":
+		err = a.identity.SetKeyLimits(r.Context(), id, o)
+	}
+	if err != nil {
 		a.renderIdentityError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": userID, "overrides": o})
+	writeJSON(w, http.StatusOK, map[string]any{kind: id, "overrides": o})
 }
 
 // serveCreateKey handles POST /admin/users/{id}/keys. The raw key is
@@ -209,24 +200,8 @@ func (a *Admin) serveListKeys(w http.ResponseWriter, r *http.Request, userID str
 	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 }
 
-// serveKeyLimits handles PUT /admin/keys/{id}/limits: the body is a
-// full LimitOverride document for the key's layer.
-func (a *Admin) serveKeyLimits(w http.ResponseWriter, r *http.Request, keyID string) {
-	if a.identity == nil || keyID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	o, ok := decodeOverride(w, r)
-	if !ok {
-		return
-	}
-	if err := a.identity.SetKeyLimits(r.Context(), keyID, o); err != nil {
-		a.renderIdentityError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": keyID, "overrides": o})
-}
-
+// serveKeyStatus handles PUT /admin/keys/{id}/status: the body is
+// {"enabled": bool} and flips the key's active flag.
 func (a *Admin) serveKeyStatus(w http.ResponseWriter, r *http.Request, keyID string) {
 	if a.identity == nil || keyID == "" {
 		http.NotFound(w, r)
