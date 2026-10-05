@@ -7,6 +7,7 @@
 package relay
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -68,6 +69,24 @@ func TestContentLengthHint(t *testing.T) {
 	for _, tc := range cases {
 		if got := contentLengthHint(tc.header); got != tc.want {
 			t.Errorf("%s: hint = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestGrowSeedCapsBeforeNarrowing(t *testing.T) {
+	cases := []struct {
+		name     string
+		sizeHint int64
+		want     int
+	}{
+		{"small hint keeps headroom", 4, 4 + readSeedHeadroom},
+		{"largest in-range hint", math.MaxInt - readSeedHeadroom, math.MaxInt},
+		{"first hint past the cap", math.MaxInt - readSeedHeadroom + 1, 0},
+		{"hint past the cap skips pre-sizing", math.MaxInt64, 0},
+	}
+	for _, tc := range cases {
+		if got := growSeed(tc.sizeHint); got != tc.want {
+			t.Errorf("%s: growSeed(%d) = %d, want %d", tc.name, tc.sizeHint, got, tc.want)
 		}
 	}
 }

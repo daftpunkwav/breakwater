@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -624,7 +625,7 @@ const readSeedHeadroom = 512
 func readBounded(body io.Reader, limit int64, sizeHint int64) ([]byte, error) {
 	var buf bytes.Buffer
 	if sizeHint > 0 && sizeHint <= limit {
-		buf.Grow(int(sizeHint) + readSeedHeadroom)
+		buf.Grow(growSeed(sizeHint))
 	}
 	if _, err := io.Copy(&buf, io.LimitReader(body, limit+1)); err != nil {
 		return nil, err
@@ -633,6 +634,19 @@ func readBounded(body io.Reader, limit int64, sizeHint int64) ([]byte, error) {
 		return nil, fmt.Errorf("relay: upstream body exceeds %d bytes", limit)
 	}
 	return buf.Bytes(), nil
+}
+
+// growSeed converts a validated size hint into the one Grow allocation
+// size, headroom included. The cap keeps the int64-to-int narrowing
+// overflow-free on platforms where int is 32-bit. A hint past it cannot
+// be honored by Grow anyway, so growSeed yields 0 — Grow(0) is a no-op
+// and the read falls back to the growth chain, costing throughput,
+// never correctness.
+func growSeed(sizeHint int64) int {
+	if sizeHint > math.MaxInt-readSeedHeadroom {
+		return 0
+	}
+	return int(sizeHint) + readSeedHeadroom
 }
 
 // contentLengthHint extracts the body size a response declares, or -1
