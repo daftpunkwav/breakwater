@@ -30,6 +30,11 @@ ON CONFLICT (id) DO NOTHING;
 -- to the shape the seed owns (tenant and hash): these two rows are the
 -- seed's own, and a stale hash or tenant from an older build would
 -- otherwise keep the loadtest keys rejected or misattributed.
+-- Identity changes made while a gateway is serving surface within its
+-- auth cache positive TTL (60s at the composition root) — the same
+-- revocation-latency contract as any admin write — so a reapply can
+-- govern requests by the pre-update tenant for that window. Restart
+-- the gateway (or wait out the TTL) if that matters to the run.
 INSERT INTO api_keys (id, tenant_id, key_hash)
 VALUES ('key-local-1', 'local-1',
         'dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088'),
