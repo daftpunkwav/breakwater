@@ -18,7 +18,7 @@ var envVars = []string{
 	envAccessLogQueue, envUpstreams,
 	envRetryMaxAttempts, envRetryAttemptTimeout, envRetryOverall,
 	envRetryBackoffInitial, envRetryBackoffMax, envRetryBudget,
-	envStreamTimeout, envReconcileInterval, envIdentity,
+	envStreamTimeout, envReconcileInterval, envIdentity, envKeyPepper,
 	envCacheEnabled, envCacheTTL, envCacheCapacity,
 	envCircuitEnabled, envCircuitStrategy, envCircuitThreshold, envCircuitCooldown, envCircuitProbe,
 	envCircuitSlowRatio, envCircuitSlowThresh,
@@ -123,6 +123,7 @@ func setOverrideEnv(t *testing.T) {
 	t.Setenv(envAccessLogQueue, "8192")
 	t.Setenv(envAccessLogPath, "  /var/log/bw.jsonl  ")
 	t.Setenv(envAdminToken, "  admin-secret  ")
+	t.Setenv(envKeyPepper, "  pepper-secret  ")
 	t.Setenv(envUpstreams, `[{"id":"u1","base_url":"http://127.0.0.1:8090","api_key":"k","probe_url":"/healthz","models":["m1","*"]}]`)
 	t.Setenv(envRetryMaxAttempts, "5")
 	t.Setenv(envRetryAttemptTimeout, "10s")
@@ -165,9 +166,10 @@ func assertOverrides(t *testing.T, cfg Config) {
 	}
 	// Free-form string values are trimmed; structured JSON is not.
 	if cfg.Postgres.DSN != "postgres://db.local/bw" || cfg.Identity != `{"tiers":[]}` ||
-		cfg.Obs.AccessLogPath != "/var/log/bw.jsonl" || cfg.Security.AdminToken != "admin-secret" {
-		t.Fatalf("trimmed strings = dsn %q identity %q path %q token %q",
-			cfg.Postgres.DSN, cfg.Identity, cfg.Obs.AccessLogPath, cfg.Security.AdminToken)
+		cfg.Obs.AccessLogPath != "/var/log/bw.jsonl" || cfg.Security.AdminToken != "admin-secret" ||
+		cfg.KeyPepper != "pepper-secret" {
+		t.Fatalf("trimmed strings = dsn %q identity %q path %q token %q pepper %q",
+			cfg.Postgres.DSN, cfg.Identity, cfg.Obs.AccessLogPath, cfg.Security.AdminToken, cfg.KeyPepper)
 	}
 	if cfg.Obs.AccessLogQueueSize != 8192 {
 		t.Fatalf("queue size = %d", cfg.Obs.AccessLogQueueSize)
