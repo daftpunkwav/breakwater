@@ -37,7 +37,7 @@ func TestGenerateKeyShape(t *testing.T) {
 // database exchange, so a bad role fails even against a dead store.
 func TestCreateUserRejectsUnknownRole(t *testing.T) {
 	t.Parallel()
-	store, err := NewPGStore(context.Background(), unreachableDSN)
+	store, err := NewPGStore(context.Background(), unreachableDSN, "")
 	if err != nil {
 		t.Fatalf("NewPGStore: %v", err)
 	}

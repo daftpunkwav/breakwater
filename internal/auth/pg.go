@@ -8,8 +8,9 @@
  * - Nothing else: caching belongs to the LRU decorator, enforcement to
  *   the governance layers
  *
- * Keys are stored and looked up hashed, so the database never holds a
- * usable credential. Revocation is a status flip whose effect surfaces
+ * Keys are stored and looked up as keyed hashes (HMAC-SHA256 over the
+ * deployment's pepper), so the database never holds a usable
+ * credential. Revocation is a status flip whose effect surfaces
  * within the auth cache TTL — how long a write becomes visible to live traffic.
  */
 package auth
@@ -28,6 +29,10 @@ import (
 // concurrent use.
 type PGStore struct {
 	pool *pgxpool.Pool
+	// keyPepper keys the API-key hash; it must match the deployment's
+	// BREAKWATER_KEY_PEPPER so lookups agree with the persisted
+	// key_hash column.
+	keyPepper string
 }
 
 // poolMaxConns bounds the identity pool. The gateway opens up to three
@@ -40,7 +45,7 @@ type PGStore struct {
 const poolMaxConns = 8
 
 // NewPGStore connects the pool; connection failures surface at assembly.
-func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
+func NewPGStore(ctx context.Context, dsn, keyPepper string) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("auth: connect identity database: %w", err)
@@ -50,7 +55,7 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: connect identity database: %w", err)
 	}
-	return &PGStore{pool: pool}, nil
+	return &PGStore{pool: pool, keyPepper: keyPepper}, nil
 }
 
 // Ping reports database health for readiness probes.
@@ -88,7 +93,7 @@ func (s *PGStore) Resolve(ctx context.Context, apiKey string) (Tenant, error) {
 		JOIN tenants t  ON t.id = k.tenant_id
 		JOIN tiers  tr  ON tr.id = t.tier_id
 		WHERE k.key_hash = $1 AND k.status = 'active'`,
-		hashKey(apiKey))
+		hashKey(s.keyPepper, apiKey))
 	return resolveTenantRow(rows)
 }
 

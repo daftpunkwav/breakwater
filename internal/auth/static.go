@@ -9,14 +9,18 @@
  *   lifetime; deployments with a real system of record wrap the pg
  *   store in the LRU cache instead
  *
- * Keys are stored hashed so a config leak does not leak usable keys,
- * mirroring the schema's key_hash discipline.
+ * Keys are stored only as keyed hashes — HMAC-SHA256 over the optional
+ * BREAKWATER_KEY_PEPPER, mirroring the schema's key_hash discipline: a
+ * leak of the lookup map or the database alone yields no usable key,
+ * and a pepper set at deployment time also takes offline brute-force
+ * of weak keys off the table.
  */
 package auth
 
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -65,7 +69,8 @@ type StaticTenant struct {
 // Static resolves keys against the configured identity set. It is
 // immutable after construction and safe for concurrent use.
 type Static struct {
-	byKey map[string]Tenant
+	keyPepper string
+	byKey     map[string]Tenant
 }
 
 // validTenantID reports whether a tenant id stays inside the character
@@ -93,8 +98,10 @@ func ParseStaticConfig(raw []byte) (StaticConfig, error) {
 }
 
 // NewStatic builds the store, rejecting unknown tier references and
-// duplicate keys at assembly time.
-func NewStatic(cfg StaticConfig) (*Static, error) {
+// duplicate keys at assembly time. keyPepper keys the API-key hash;
+// it must match the deployment's BREAKWATER_KEY_PEPPER so lookups and
+// any persisted key_hash agree.
+func NewStatic(cfg StaticConfig, keyPepper string) (*Static, error) {
 	tiers := make(map[string]Tier, len(cfg.Tiers))
 	for _, t := range cfg.Tiers {
 		if t.ID == "" {
@@ -106,7 +113,7 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 		tiers[t.ID] = Tier(t)
 	}
 
-	s := &Static{byKey: make(map[string]Tenant, len(cfg.Tenants)*2)}
+	s := &Static{keyPepper: keyPepper, byKey: make(map[string]Tenant, len(cfg.Tenants)*2)}
 	for _, tn := range cfg.Tenants {
 		if tn.ID == "" {
 			return nil, fmt.Errorf("auth: static tenant without id")
@@ -135,7 +142,7 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 			if raw == "" {
 				return nil, fmt.Errorf("auth: tenant %s has an empty api key", tn.ID)
 			}
-			hash := hashKey(raw)
+			hash := hashKey(keyPepper, raw)
 			if _, dup := s.byKey[hash]; dup {
 				return nil, fmt.Errorf("auth: duplicate api key for tenant %s", tn.ID)
 			}
@@ -147,7 +154,7 @@ func NewStatic(cfg StaticConfig) (*Static, error) {
 
 // Resolve implements Store.
 func (s *Static) Resolve(_ context.Context, apiKey string) (Tenant, error) {
-	tenant, ok := s.byKey[hashKey(apiKey)]
+	tenant, ok := s.byKey[hashKey(s.keyPepper, apiKey)]
 	if !ok {
 		return Tenant{}, ErrUnauthorized
 	}
@@ -180,8 +187,14 @@ func (s *Static) TenantByID(id string) (Tenant, bool) {
 	return Tenant{}, false
 }
 
-// hashKey derives the lookup hash of a raw API key.
-func hashKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+// hashKey derives the lookup hash of a raw API key: HMAC-SHA256 keyed
+// by the deployment's pepper. The construction keeps lookups O(1) and
+// cheap like a plain digest, while a non-empty pepper stops offline
+// brute-force of weak keys from a leaked key_hash. The empty-pepper
+// form is the stable default the seed script's digests are pinned to
+// (TestSeedKeyHashMatchesHashKey).
+func hashKey(keyPepper, raw string) string {
+	mac := hmac.New(sha256.New, []byte(keyPepper))
+	mac.Write([]byte(raw))
+	return hex.EncodeToString(mac.Sum(nil))
 }

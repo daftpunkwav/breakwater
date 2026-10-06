@@ -26,6 +26,13 @@ type Config struct {
 	// deployments without a database; its schema is owned by the auth
 	// package, keeping this package a leaf.
 	Identity string
+	// KeyPepper keys the HMAC the auth package hashes API keys with,
+	// lookup and persisted key_hash alike. Empty (the default) keys it
+	// with the empty secret; setting it takes offline brute-force of
+	// weak keys out of a leaked key_hash's reach. It must be fixed
+	// before the first keys are seeded or issued — changing it later
+	// invalidates every key_hash already stored.
+	KeyPepper string
 	// Fallbacks maps a client-facing model to the ordered list of
 	// fallback models tried when every candidate of the primary model
 	// is exhausted. Membership against the configured model names is

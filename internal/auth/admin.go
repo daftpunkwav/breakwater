@@ -95,7 +95,8 @@ type AdminStore interface {
 }
 
 // GenerateKey mints a fresh API key: a bw- prefixed random secret.
-// Callers persist only hashKey(raw).
+// Callers persist only hashKey(keyPepper, raw) under the deployment's
+// pepper.
 func GenerateKey() (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {

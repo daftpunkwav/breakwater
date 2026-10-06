@@ -68,7 +68,7 @@ func (f *fakeTx) Commit(context.Context) error {
 // Every test in this file issues the same key name.
 func scriptedCreateKeyTx(user string, answers ...scriptedRow) (*fakeTx, error) {
 	tx := &fakeTx{answers: answers}
-	_, err := createKeyTx(context.Background(), tx, user, "name")
+	_, err := createKeyTx(context.Background(), tx, user, "name", "")
 	return tx, err
 }
 

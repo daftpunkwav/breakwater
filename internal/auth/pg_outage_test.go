@@ -26,7 +26,7 @@ func newOutageStore(t *testing.T, timeout time.Duration) (context.Context, *PGSt
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	t.Cleanup(cancel)
-	store, err := NewPGStore(ctx, unreachableDSN)
+	store, err := NewPGStore(ctx, unreachableDSN, "")
 	if err != nil {
 		t.Fatalf("NewPGStore with a syntactically valid dsn: %v", err)
 	}

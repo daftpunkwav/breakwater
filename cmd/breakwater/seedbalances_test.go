@@ -24,7 +24,7 @@ func newSingleTenantIdentity(t *testing.T) *auth.Static {
 	identity, err := auth.NewStatic(auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", MonthlyQuota: 100}},
 		Tenants: []auth.StaticTenant{{ID: "t", Name: "T", Tier: "free", Keys: []string{"k"}}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}
@@ -36,7 +36,7 @@ func newSingleTenantIdentity(t *testing.T) *auth.Static {
 // inspect.
 func seedProvisionedLedger(t *testing.T, cfg auth.StaticConfig) *quota.Memory {
 	t.Helper()
-	identity, err := auth.NewStatic(cfg)
+	identity, err := auth.NewStatic(cfg, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}

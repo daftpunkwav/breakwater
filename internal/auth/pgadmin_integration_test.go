@@ -163,7 +163,7 @@ func newPGAdminStore(t *testing.T, ctx context.Context, dsn string) *PGStore {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	applyIdentitySchema(t, ctx, conn)
-	store, err := NewPGStore(ctx, dsn)
+	store, err := NewPGStore(ctx, dsn, "")
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}

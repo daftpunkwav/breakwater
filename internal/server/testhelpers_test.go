@@ -49,7 +49,7 @@ func singleAttemptRelay() *relay.Executor {
 // mustIdentity builds the static identity store or fails the test.
 func mustIdentity(t *testing.T, cfg auth.StaticConfig) auth.Store {
 	t.Helper()
-	identity, err := auth.NewStatic(cfg)
+	identity, err := auth.NewStatic(cfg, "")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}

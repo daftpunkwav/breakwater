@@ -41,12 +41,12 @@ func TestIdentifierCharsetRuleAgreesAcrossLayers(t *testing.T) {
 
 	// Layer 1: static tenant construction (internal/auth).
 	for _, id := range valid {
-		if _, err := auth.NewStatic(staticIdentityWithTenant(id)); err != nil {
+		if _, err := auth.NewStatic(staticIdentityWithTenant(id), ""); err != nil {
 			t.Errorf("auth.NewStatic(%q) = %v, want accepted", id, err)
 		}
 	}
 	for _, id := range invalid {
-		if _, err := auth.NewStatic(staticIdentityWithTenant(id)); err == nil {
+		if _, err := auth.NewStatic(staticIdentityWithTenant(id), ""); err == nil {
 			t.Errorf("auth.NewStatic(%q) accepted, want refused", id)
 		}
 	}

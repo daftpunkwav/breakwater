@@ -7,6 +7,7 @@
 package relay
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -38,6 +39,15 @@ func TestReadBoundedHintIsHintOnly(t *testing.T) {
 	if err != nil || string(got) != "hello upstream" {
 		t.Fatalf("no hint: got %q err %v", got, err)
 	}
+
+	// A hint past every platform's int range must read normally: the
+	// pre-size path caps it instead of narrowing it (removing the cap
+	// overflows the narrowing and panics inside Grow on a 64-bit build).
+	body = strings.NewReader("hello upstream")
+	got, err = readBounded(body, 1<<10, math.MaxInt64)
+	if err != nil || string(got) != "hello upstream" {
+		t.Fatalf("unrepresentable hint: got %q err %v", got, err)
+	}
 }
 
 func TestReadBoundedStillFailsClosedPastLimit(t *testing.T) {
@@ -68,6 +78,24 @@ func TestContentLengthHint(t *testing.T) {
 	for _, tc := range cases {
 		if got := contentLengthHint(tc.header); got != tc.want {
 			t.Errorf("%s: hint = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestGrowSeedCapsBeforeNarrowing(t *testing.T) {
+	cases := []struct {
+		name     string
+		sizeHint int64
+		want     int
+	}{
+		{"small hint keeps headroom", 4, 4 + readSeedHeadroom},
+		{"largest in-range hint", math.MaxInt32 - readSeedHeadroom, math.MaxInt32},
+		{"first hint past the cap", math.MaxInt32 - readSeedHeadroom + 1, 0},
+		{"hint past the cap skips pre-sizing", math.MaxInt64, 0},
+	}
+	for _, tc := range cases {
+		if got := growSeed(tc.sizeHint); got != tc.want {
+			t.Errorf("%s: growSeed(%d) = %d, want %d", tc.name, tc.sizeHint, got, tc.want)
 		}
 	}
 }
