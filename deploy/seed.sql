@@ -26,12 +26,15 @@ VALUES ('local-1', 'Local Tenant One', 'user', 'free', '{}'),
         '{"denied_models":["secret-model"],"concurrency":4}')
 ON CONFLICT (id) DO NOTHING;
 
--- Unlike the tiers and tenants above, a conflicting key row refreshes
--- its hash: these two rows are the seed's own, and a stale hash from an
--- older build would otherwise keep the loadtest keys rejected.
+-- Unlike the tiers and tenants above, a conflicting key row is restored
+-- to the shape the seed owns (tenant and hash): these two rows are the
+-- seed's own, and a stale hash or tenant from an older build would
+-- otherwise keep the loadtest keys rejected or misattributed.
 INSERT INTO api_keys (id, tenant_id, key_hash)
 VALUES ('key-local-1', 'local-1',
         'dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088'),
        ('key-local-2', 'local-2',
         'a544711afeb45d9c00135b1c18c3e05582f59bd78272137fd30fc204aed2fd76')
-ON CONFLICT (id) DO UPDATE SET key_hash = EXCLUDED.key_hash;
+ON CONFLICT (id) DO UPDATE
+SET tenant_id = EXCLUDED.tenant_id,
+    key_hash  = EXCLUDED.key_hash;
