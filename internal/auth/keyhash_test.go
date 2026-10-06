@@ -59,6 +59,14 @@ func TestSeedKeyHashMatchesHashKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seed.sql: %v", err)
 	}
+	// Scope the search to the INSERT INTO api_keys statement so a
+	// matching tuple left behind by a retargeted insert cannot keep the
+	// test green while no api_keys row is seeded.
+	stmt := regexp.MustCompile(`(?s)INSERT INTO api_keys\b.*?;`)
+	seeded := stmt.Find(sqlBytes)
+	if seeded == nil {
+		t.Fatal("seed.sql: no INSERT INTO api_keys statement found")
+	}
 	cases := []struct{ id, raw string }{
 		{"key-local-1", "bw-local-t1"},
 		{"key-local-2", "bw-local-t2"},
@@ -68,7 +76,7 @@ func TestSeedKeyHashMatchesHashKey(t *testing.T) {
 		// possibly wrapped across lines. The digests are the
 		// empty-pepper form the seed assumes.
 		re := regexp.MustCompile(`'` + tc.id + `',\s*'[^']*',\s*'([0-9a-f]{64})'`)
-		m := re.FindSubmatch(sqlBytes)
+		m := re.FindSubmatch(seeded)
 		if m == nil {
 			t.Fatalf("seed.sql: no 64-hex key_hash digest found for %s", tc.id)
 		}
