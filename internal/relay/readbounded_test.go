@@ -39,6 +39,15 @@ func TestReadBoundedHintIsHintOnly(t *testing.T) {
 	if err != nil || string(got) != "hello upstream" {
 		t.Fatalf("no hint: got %q err %v", got, err)
 	}
+
+	// A hint past every platform's int range must read normally: the
+	// pre-size path caps it instead of narrowing it (removing the cap
+	// overflows the narrowing and panics inside Grow on a 64-bit build).
+	body = strings.NewReader("hello upstream")
+	got, err = readBounded(body, 1<<10, math.MaxInt64)
+	if err != nil || string(got) != "hello upstream" {
+		t.Fatalf("unrepresentable hint: got %q err %v", got, err)
+	}
 }
 
 func TestReadBoundedStillFailsClosedPastLimit(t *testing.T) {
