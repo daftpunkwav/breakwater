@@ -9,7 +9,6 @@ package relay
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,13 +30,7 @@ func TestStreamPassthroughPreservesBytesAndScrapesUsage(t *testing.T) {
 		if !req.Stream {
 			t.Error("stream job forwarded with stream=false")
 		}
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(strings.NewReader(sseSample)),
-		}, nil
+		return sseResponse(strings.NewReader(sseSample)), nil
 	}}
 	exec := New(testPolicy(), nil)
 
@@ -56,21 +49,22 @@ func TestStreamPassthroughPreservesBytesAndScrapesUsage(t *testing.T) {
 	}
 }
 
+// commitHeaderUpstream returns a stub streaming 200 over a clean
+// [DONE] body whose reply header is customized by set — the fixture of
+// the commit-header tests.
+func commitHeaderUpstream(set func(http.Header)) *stubUpstream {
+	return &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
+		return stubResponse(http.StatusOK, strings.NewReader("data: [DONE]\n\n"), set), nil
+	}}
+}
+
 // TestStreamCommitReplacesDocumentContentType: an upstream that labels
 // its frames as a document a browser would render does not get that
 // label onto the client response. The frames are SSE, so the SSE default
 // is both the safe answer and the accurate one.
 func TestStreamCommitReplacesDocumentContentType(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/html")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-		}, nil
-	}}
+	cand := commitHeaderUpstream(func(h http.Header) { h.Set("Content-Type", "text/html") })
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
@@ -87,15 +81,7 @@ func TestStreamCommitReplacesDocumentContentType(t *testing.T) {
 // an upstream cache-control directive survives the commit.
 func TestStreamCommitHeadersFallBackAndPassThrough(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Cache-Control", "no-cache")
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     header,
-			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-		}, nil
-	}}
+	cand := commitHeaderUpstream(func(h http.Header) { h.Set("Cache-Control", "no-cache") })
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
@@ -112,9 +98,7 @@ func TestStreamCommitHeadersFallBackAndPassThrough(t *testing.T) {
 
 func TestStreamServerErrorBeforeFirstByteStaysHTTP(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return jsonResponse(t, http.StatusServiceUnavailable, `{"error":{}}`), nil
-	}}
+	cand := jsonStubUpstream(t, "s", http.StatusServiceUnavailable, `{"error":{}}`)
 	exec := New(testPolicy(), nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
@@ -128,15 +112,7 @@ func TestStreamServerErrorBeforeFirstByteStaysHTTP(t *testing.T) {
 // attempt instead of committing a broken stream.
 func TestStreamErrorBodyReadFailureFailsAttempt(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "application/json")
-		return &upstream.Response{
-			StatusCode: http.StatusServiceUnavailable,
-			Header:     header,
-			Body:       io.NopCloser(errReader{}),
-		}, nil
-	}}
+	cand := unreadableStubUpstream("s", http.StatusServiceUnavailable)
 	exec := New(retry.Policy{MaxAttempts: 1}, nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
@@ -152,9 +128,7 @@ func TestStreamErrorBodyReadFailureFailsAttempt(t *testing.T) {
 // Forward never answers (connection refused) fails without committing.
 func TestStreamForwardErrorFailsAttempt(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return nil, context.DeadlineExceeded
-	}}
+	cand := failingStubUpstream("s", context.DeadlineExceeded)
 	exec := New(retry.Policy{MaxAttempts: 1, AttemptTimeout: time.Second}, nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")

@@ -17,24 +17,13 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
-	"github.com/daftpunkwav/breakwater/internal/relay"
-	"github.com/daftpunkwav/breakwater/internal/retry"
-	"github.com/daftpunkwav/breakwater/internal/router"
-	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
 // buildAllRoutes mounts the three inference routes over one backend.
 func buildAllRoutes(t *testing.T, backendURL string) http.Handler {
 	t.Helper()
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backendURL})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
-	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-	relayer := relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))
+	priority := testRouter(t, backendURL)
+	relayer := singleAttemptRelay()
 
 	inference := make(map[protocol.Format]http.Handler, 3)
 	for _, format := range []protocol.Format{
@@ -49,18 +38,6 @@ func buildAllRoutes(t *testing.T, backendURL string) http.Handler {
 	return newRootHandler(inference, nil, nil, "test", nil, nil)
 }
 
-func post(t *testing.T, handler http.Handler, path, key, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	return rec
-}
-
 // servedRoutes mounts the three inference routes over one fresh test
 // upstream, cleaned up with the test.
 func servedRoutes(t *testing.T) http.Handler {
@@ -70,9 +47,10 @@ func servedRoutes(t *testing.T) http.Handler {
 	return buildAllRoutes(t, backend.URL)
 }
 
-// bufferedContract posts one buffered request against the served routes
-// and asserts the reply is a 200 carrying every wanted fragment.
-func bufferedContract(t *testing.T, path, body string, wants ...string) {
+// responseContract posts one request against the served routes and
+// asserts the reply is a 200 carrying every wanted fragment — buffered
+// or streamed, the 200-plus-fragments shape is the same.
+func responseContract(t *testing.T, path, body string, wants ...string) {
 	t.Helper()
 	rec := post(t, servedRoutes(t), path, "", body)
 	if rec.Code != http.StatusOK {
@@ -83,7 +61,7 @@ func bufferedContract(t *testing.T, path, body string, wants ...string) {
 
 func TestResponsesRouteNonStream(t *testing.T) {
 	t.Parallel()
-	bufferedContract(t, "/v1/responses", `{"model":"m1","input":"hello"}`,
+	responseContract(t, "/v1/responses", `{"model":"m1","input":"hello"}`,
 		`"object":"response"`, `"text":"hi"`)
 }
 
@@ -98,21 +76,9 @@ func assertContains(t *testing.T, body string, wants ...string) {
 	}
 }
 
-// streamContract posts one streaming request against the served routes
-// and asserts the reply carries every event of the format's stream
-// contract.
-func streamContract(t *testing.T, path, body string, wants ...string) {
-	t.Helper()
-	rec := post(t, servedRoutes(t), path, "", body)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	assertContains(t, rec.Body.String(), wants...)
-}
-
 func TestResponsesRouteStream(t *testing.T) {
 	t.Parallel()
-	streamContract(t, "/v1/responses", `{"model":"m1","stream":true,"input":"hello"}`,
+	responseContract(t, "/v1/responses", `{"model":"m1","stream":true,"input":"hello"}`,
 		"event: response.created",
 		"event: response.output_text.delta",
 		`"delta":"hi"`,
@@ -123,14 +89,14 @@ func TestResponsesRouteStream(t *testing.T) {
 
 func TestMessagesRouteNonStream(t *testing.T) {
 	t.Parallel()
-	bufferedContract(t, "/v1/messages",
+	responseContract(t, "/v1/messages",
 		`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
 		`"type":"message"`, `"stop_reason":"end_turn"`)
 }
 
 func TestMessagesRouteStream(t *testing.T) {
 	t.Parallel()
-	streamContract(t, "/v1/messages",
+	responseContract(t, "/v1/messages",
 		`{"model":"m1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
 		"event: message_start",
 		"event: content_block_delta",
@@ -144,21 +110,11 @@ func TestMessagesRouteHonorsXAPIKey(t *testing.T) {
 	backend := testUpstreamBackend(t)
 	defer backend.Close()
 
-	identity := staticIdentity(t)
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{ID: "test", BaseURL: backend.URL})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
-	priority, err := router.NewPriority([]router.Binding{{Models: []string{"*"}, Upstream: adapter}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-	relayer := relay.New(retry.Policy{MaxAttempts: 1}, retry.NewBudget(8))
 	handler := pipeline.Chain(
 		pipeline.CarrierStage(),
 		pipeline.FormatStage(protocol.FormatAnthropicMessages),
-		pipeline.AuthStage(identity),
-	)(NewInference(protocol.FormatAnthropicMessages, priority, relayer))
+		pipeline.AuthStage(staticIdentity(t)),
+	)(NewInference(protocol.FormatAnthropicMessages, testRouter(t, backend.URL), singleAttemptRelay()))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
 		strings.NewReader(`{"model":"m1","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`))
@@ -219,14 +175,7 @@ func TestMessagesRouteRejectsMissingMaxTokens(t *testing.T) {
 // staticIdentity builds the auth store used by the governance tests.
 func staticIdentity(t *testing.T) auth.Store {
 	t.Helper()
-	identity, err := auth.NewStatic(auth.StaticConfig{
-		Tiers:   []auth.StaticTier{{ID: "free", RPM: 100, TPM: 1_000_000, MaxTokens: 50, MonthlyQuota: 100_000, AllowedModels: []string{"*"}}},
-		Tenants: []auth.StaticTenant{{ID: "t2", Name: "T2", Tier: "free", Keys: []string{keyT2}}},
-	}, "")
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
-	return identity
+	return tenantIdentity(t, 100, 1_000_000, []string{"*"}, "t2", keyT2)
 }
 
 // abortingUpstreamBackend streams one chunk then cuts the connection.

@@ -17,10 +17,7 @@ import (
 )
 
 func TestPGResolveIntegration(t *testing.T) {
-	dsn := os.Getenv("BREAKWATER_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("integration: BREAKWATER_TEST_POSTGRES_DSN not set")
-	}
+	dsn := integrationDSN(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

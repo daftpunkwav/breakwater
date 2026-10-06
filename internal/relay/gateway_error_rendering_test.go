@@ -68,10 +68,7 @@ func TestCircuitOpenRendersServiceUnavailable(t *testing.T) {
 func TestRetryBudgetExhaustionRendersGatewayError(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	cand := &stubUpstream{id: "a", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		calls++
-		return jsonResponse(t, http.StatusInternalServerError, `{}`), nil
-	}}
+	cand := countedStubUpstream(t, &calls, "a", http.StatusInternalServerError, `{}`)
 	exec := New(testPolicy(), retry.NewBudget(0))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
@@ -91,9 +88,7 @@ func TestRetryBudgetExhaustionRendersGatewayError(t *testing.T) {
 // the upstream_unreachable 502.
 func TestUnreachableUpstreamRendersGatewayError(t *testing.T) {
 	t.Parallel()
-	cand := &stubUpstream{id: "a", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return nil, errors.New("connection refused")
-	}}
+	cand := failingStubUpstream("a", errors.New("connection refused"))
 	exec := New(retry.Policy{MaxAttempts: 1}, nil)
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
@@ -103,6 +98,24 @@ func TestUnreachableUpstreamRendersGatewayError(t *testing.T) {
 	if !strings.Contains(string(result.Body), `"code":"upstream_unreachable"`) {
 		t.Fatalf("body = %q, want gateway envelope", result.Body)
 	}
+}
+
+// executeDisconnectedClient submits the job under a dead client
+// context and pins the disconnect contract: the exchange reports
+// ClientGone and not one byte reaches the recorder. The caller asserts
+// the intended status.
+func executeDisconnectedClient(t *testing.T, ctx context.Context, cand upstream.Upstream, maxAttempts int, rec *discardingRecorder) Result {
+	t.Helper()
+	exec := New(retry.Policy{MaxAttempts: maxAttempts}, nil)
+
+	result := exec.Execute(ctx, Job{Model: "m", Candidates: []upstream.Upstream{cand}, Out: rec})
+	if !result.ClientGone {
+		t.Fatal("client disconnect not reported")
+	}
+	if len(rec.body) != 0 {
+		t.Fatalf("bytes written to a disconnected client: %q", rec.body)
+	}
+	return result
 }
 
 // TestClientDisconnectBeforeFirstByteReportsIntendedStatus pins the
@@ -116,17 +129,10 @@ func TestClientDisconnectBeforeFirstByteReportsIntendedStatus(t *testing.T) {
 		return nil, ctx.Err()
 	}}
 	rec := newDiscardingRecorder()
-	exec := New(retry.Policy{MaxAttempts: 1}, nil)
 
-	result := exec.Execute(ctx, Job{Model: "m", Candidates: []upstream.Upstream{cand}, Out: rec})
-	if !result.ClientGone {
-		t.Fatal("client disconnect not reported")
-	}
+	result := executeDisconnectedClient(t, ctx, cand, 1, rec)
 	if result.Status != http.StatusBadGateway {
 		t.Fatalf("status = %d, want the intended 502", result.Status)
-	}
-	if len(rec.body) != 0 {
-		t.Fatalf("bytes written to a disconnected client: %q", rec.body)
 	}
 }
 
@@ -142,17 +148,10 @@ func TestClientDisconnectWithTerminalErrorReportsTerminalStatus(t *testing.T) {
 		return jsonResponse(t, http.StatusUnauthorized, `{"error":{}}`), nil
 	}}
 	rec := newDiscardingRecorder()
-	exec := New(retry.Policy{MaxAttempts: 2}, nil)
 
-	result := exec.Execute(ctx, Job{Model: "m", Candidates: []upstream.Upstream{cand}, Out: rec})
-	if !result.ClientGone {
-		t.Fatal("client disconnect not reported")
-	}
+	result := executeDisconnectedClient(t, ctx, cand, 2, rec)
 	if result.Status != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want the terminal 401", result.Status)
-	}
-	if len(rec.body) != 0 {
-		t.Fatalf("bytes written to a disconnected client: %q", rec.body)
 	}
 }
 

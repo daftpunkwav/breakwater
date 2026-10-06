@@ -9,8 +9,6 @@ package relay
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -20,66 +18,6 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
-
-// dripStream returns a body reader that emits n data frames with a
-// delay between them, then a clean [DONE]. Like a real HTTP response
-// body, it fails with the context's error when the context is
-// cancelled mid-drip.
-func dripStream(ctx context.Context, n int, delay time.Duration) io.Reader {
-	pr, pw := io.Pipe()
-	go func() {
-		for i := 1; i <= n; i++ {
-			timer := time.NewTimer(delay)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				pw.CloseWithError(ctx.Err())
-				return
-			}
-			timer.Stop()
-			if _, err := fmt.Fprintf(pw, "data: {\"choices\":[{\"delta\":{\"content\":\"c%d\"}}]}\n\n", i); err != nil {
-				pw.CloseWithError(err)
-				return
-			}
-		}
-		_, _ = fmt.Fprint(pw, "data: [DONE]\n\n")
-		_ = pw.Close()
-	}()
-	return pr
-}
-
-// sseHeader is the header of a streaming reply.
-func sseHeader() http.Header {
-	header := http.Header{}
-	header.Set("Content-Type", "text/event-stream")
-	return header
-}
-
-// sseDripUpstream is one stub upstream answering a streaming 200 whose
-// body drips n frames one delay apart — the standard fixture of the
-// stream timing tests; the body dies with the request's context.
-func sseDripUpstream(n int, delay time.Duration) *stubUpstream {
-	return &stubUpstream{id: "s", fn: func(ctx context.Context, _ upstream.Request) (*upstream.Response, error) {
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     sseHeader(),
-			Body:       io.NopCloser(dripStream(ctx, n, delay)),
-		}, nil
-	}}
-}
-
-// sseUpstream is one stub upstream answering a streaming 200 with a
-// fixed body.
-func sseUpstream(body io.Reader) *stubUpstream {
-	return &stubUpstream{id: "s", fn: func(context.Context, upstream.Request) (*upstream.Response, error) {
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     sseHeader(),
-			Body:       io.NopCloser(body),
-		}, nil
-	}}
-}
 
 // TestStreamOutlivesAttemptTimeout pins the streaming time budget: the
 // attempt timeout bounds time-to-first-byte only — a body that keeps
@@ -114,11 +52,7 @@ func TestStreamTimeToFirstByteRetries(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		}
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     sseHeader(),
-			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-		}, nil
+		return sseResponse(strings.NewReader("data: [DONE]\n\n")), nil
 	}}
 	// The margins are deliberately wide: the ttft timer must win its
 	// race against the parked first attempt by seconds, and the second
@@ -149,11 +83,7 @@ func TestStreamTTFTExpiryDuringForwardRetries(t *testing.T) {
 			// milliseconds.
 			time.Sleep(250 * time.Millisecond)
 		}
-		return &upstream.Response{
-			StatusCode: http.StatusOK,
-			Header:     sseHeader(),
-			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-		}, nil
+		return sseResponse(strings.NewReader("data: [DONE]\n\n")), nil
 	}}
 	exec := New(retry.Policy{MaxAttempts: 2, AttemptTimeout: 30 * time.Millisecond}, nil)
 
@@ -223,10 +153,7 @@ func TestStreamCeilingBeforeHeadersFailsOver(t *testing.T) {
 		return nil, ctx.Err()
 	}}
 	healthy := &stubUpstream{id: "healthy", fn: func(_ context.Context, _ upstream.Request) (*upstream.Response, error) {
-		header := http.Header{}
-		header.Set("Content-Type", "text/event-stream")
-		return &upstream.Response{StatusCode: http.StatusOK, Header: header,
-			Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}, nil
+		return sseResponse(strings.NewReader("data: [DONE]\n\n")), nil
 	}}
 	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 2, Cooldown: time.Minute, ProbeTimeout: time.Second})
 	exec := New(retry.Policy{MaxAttempts: 2, AttemptTimeout: 2 * time.Second}, nil,

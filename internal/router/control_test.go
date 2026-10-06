@@ -7,7 +7,6 @@ package router
 
 import (
 	"errors"
-	"sync"
 	"testing"
 )
 
@@ -107,35 +106,36 @@ func TestSwitchViewListsEveryKnownName(t *testing.T) {
 	}
 }
 
+// manuallyEnable re-enables an upstream through the operator channel,
+// failing the test on error.
+func manuallyEnable(t *testing.T, s *Switch, id string) {
+	t.Helper()
+	if err := s.SetUpstream(id, true); err != nil {
+		t.Fatalf("manual enable: %v", err)
+	}
+}
+
 // TestSwitchConcurrentToggleAndRead runs operators against request
 // readers; under -race any unsynchronized access fails the test.
 func TestSwitchConcurrentToggleAndRead(t *testing.T) {
 	t.Parallel()
 	s := NewSwitch([]string{"m1"}, []string{"u1"})
 
-	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	contendAgainst(
+		func() {
 			for j := 0; j < 200; j++ {
 				_ = s.SetModel("m1", j%2 == 0)
 				_ = s.SetUpstream("u1", j%2 == 0)
 			}
-		}()
-	}
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		},
+		func() {
 			for j := 0; j < 200; j++ {
 				_ = s.ModelEnabled("m1")
 				_ = s.UpstreamEnabled("u1")
 				_ = s.View()
 			}
-		}()
-	}
-	wg.Wait()
+		},
+	)
 }
 
 func TestAutoDisableTakesUpstreamOutOfRotation(t *testing.T) {
@@ -193,9 +193,7 @@ func TestManualDecisionSubsumesAuto(t *testing.T) {
 	}
 
 	// Operator enable lifts everything.
-	if err := s.SetUpstream("u1", true); err != nil {
-		t.Fatalf("manual enable: %v", err)
-	}
+	manuallyEnable(t, s, "u1")
 	if !s.UpstreamEnabled("u1") {
 		t.Fatal("operator-enabled upstream still disabled")
 	}
@@ -211,9 +209,7 @@ func TestManualDecisionSubsumesAuto(t *testing.T) {
 	if err := s.SetUpstream("u1", false); err != nil {
 		t.Fatalf("manual disable: %v", err)
 	}
-	if err := s.SetUpstream("u1", true); err != nil {
-		t.Fatalf("manual enable: %v", err)
-	}
+	manuallyEnable(t, s, "u1")
 	if !s.UpstreamEnabled("u1") {
 		t.Fatal("upstream still disabled after the manual cycle lifted the auto record")
 	}

@@ -18,22 +18,12 @@ func TestMetricsRenderCountersAndGauges(t *testing.T) {
 	m.RateLimited("t2")
 	m.InflightAdd(3)
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	text := out.String()
-
-	for _, want := range []string{
+	assertExpositionContains(t, m,
 		"# TYPE breakwater_rate_limited_total counter",
 		`breakwater_rate_limited_total{tenant="t1"} 2`,
 		`breakwater_rate_limited_total{tenant="t2"} 1`,
 		"breakwater_inflight_requests 3",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("exposition missing %q\ngot:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestMetricsRenderHistogram(t *testing.T) {
@@ -42,23 +32,13 @@ func TestMetricsRenderHistogram(t *testing.T) {
 	m.ObserveDuration("u1", 0.004) // bucket .005
 	m.ObserveDuration("u1", 0.02)  // bucket .025
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	text := out.String()
-
-	for _, want := range []string{
+	assertExpositionContains(t, m,
 		"# TYPE breakwater_request_duration_seconds histogram",
 		`breakwater_request_duration_seconds_bucket{upstream="u1",le="0.005"} 1`,
 		`breakwater_request_duration_seconds_bucket{upstream="u1",le="0.025"} 2`,
 		`breakwater_request_duration_seconds_bucket{upstream="u1",le="+Inf"} 2`,
 		`breakwater_request_duration_seconds_count{upstream="u1"} 2`,
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("exposition missing %q\ngot:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestMetricsCircuitStateGauge(t *testing.T) {
@@ -67,11 +47,7 @@ func TestMetricsCircuitStateGauge(t *testing.T) {
 	m.CircuitOpened("u1")
 	m.CircuitState("u1", 2)
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	text := out.String()
+	text := renderExposition(t, m)
 	if !strings.Contains(text, `breakwater_circuit_state{upstream="u1"} 2`) {
 		t.Errorf("circuit gauge missing:\n%s", text)
 	}
@@ -88,12 +64,8 @@ func TestMetricsCircuitDeniedRenders(t *testing.T) {
 	m.CircuitDenied("u1")
 	m.CircuitDenied("u1")
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !strings.Contains(out.String(), `breakwater_circuit_denied_total{upstream="u1"} 2`) {
-		t.Errorf("circuit denied counter missing:\n%s", out.String())
+	if text := renderExposition(t, m); !strings.Contains(text, `breakwater_circuit_denied_total{upstream="u1"} 2`) {
+		t.Errorf("circuit denied counter missing:\n%s", text)
 	}
 }
 
@@ -105,21 +77,15 @@ func TestMetricsLogsDroppedRendersFromSync(t *testing.T) {
 	t.Parallel()
 	m := NewMetrics()
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !strings.Contains(out.String(), "breakwater_logs_dropped_total 0") {
-		t.Errorf("healthy zero missing from exposition:\n%s", out.String())
+	text := renderExposition(t, m)
+	if !strings.Contains(text, "breakwater_logs_dropped_total 0") {
+		t.Errorf("healthy zero missing from exposition:\n%s", text)
 	}
 
 	m.SetLogsDropped(7)
-	out.Reset()
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !strings.Contains(out.String(), "breakwater_logs_dropped_total 7") {
-		t.Errorf("drop counter missing from exposition:\n%s", out.String())
+	text = renderExposition(t, m)
+	if !strings.Contains(text, "breakwater_logs_dropped_total 7") {
+		t.Errorf("drop counter missing from exposition:\n%s", text)
 	}
 }
 
@@ -170,21 +136,12 @@ func TestMetricsRecoveryAndRotationRenders(t *testing.T) {
 	m.ConcurrencyLimited("tenant")
 	m.ObserveTTFT("u", 0.25)
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	text := out.String()
-	for _, want := range []string{
+	assertExpositionContains(t, m,
 		`breakwater_upstream_probe_total{upstream="u",result="ok"} 1`,
 		`breakwater_upstream_probe_total{upstream="u",result="fail"} 1`,
 		`breakwater_upstream_auto_disabled_total{upstream="u",reason="upstream_auth_failure"} 1`,
 		`breakwater_credential_retired_total{upstream="u",reason="upstream_auth_failure"} 1`,
 		`breakwater_concurrency_limited_total{tenant="tenant"} 1`,
 		`breakwater_upstream_ttft_seconds_count{upstream="u"} 1`,
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("exposition missing %q\ngot:\n%s", want, text)
-		}
-	}
+	)
 }

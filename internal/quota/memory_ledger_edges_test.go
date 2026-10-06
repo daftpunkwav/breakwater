@@ -80,11 +80,7 @@ func TestMemoryCancelUnknownLeaseSurfaces(t *testing.T) {
 // refunds at most what the lease reserved.
 func TestMemorySettleClampsNegativeUsage(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	if err := m.SetBalance(ctx, "t", 100); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	m, ctx := newSeededMemory(t, 100)
 	lease, err := m.Reserve(ctx, "t", 40)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)

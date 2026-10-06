@@ -25,6 +25,22 @@ func newTestIndex(ttl time.Duration) (*Index, *clock) {
 	return NewIndex(ttl, c.now), c
 }
 
+// seededIndex returns an index with "prefix" already recorded under
+// head a.
+func seededIndex(ttl time.Duration) (*Index, *clock) {
+	idx, c := newTestIndex(ttl)
+	idx.Pick("m", "prefix", []string{"a", "b"})
+	return idx, c
+}
+
+// wantNodes asserts the model trie holds exactly want recorded nodes.
+func wantNodes(t *testing.T, idx *Index, want int) {
+	t.Helper()
+	if got := idx.models["m"].nodes; got != want {
+		t.Fatalf("nodes = %d, want %d", got, want)
+	}
+}
+
 func TestPickSeedsOnMissAndMatchesNextTime(t *testing.T) {
 	idx, _ := newTestIndex(time.Minute)
 	// First pick: no state, order stands, but the decision is recorded.
@@ -63,8 +79,7 @@ func TestMatchFollowsSharedChunkDepth(t *testing.T) {
 }
 
 func TestExcludedUpstreamCannotWin(t *testing.T) {
-	idx, _ := newTestIndex(time.Minute)
-	idx.Pick("m", "prefix", []string{"a", "b"})
+	idx, _ := seededIndex(time.Minute)
 	// a holds the prefix but is not eligible this round: no hit, order
 	// stands, and the miss records the current head.
 	if got := idx.Pick("m", "prefix", []string{"b"}); got != -1 {
@@ -92,8 +107,7 @@ func TestDeepestMatchWinsOverShallowerPreference(t *testing.T) {
 }
 
 func TestTTLExpiryReleasesAffinity(t *testing.T) {
-	idx, c := newTestIndex(time.Minute)
-	idx.Pick("m", "prefix", []string{"a", "b"})
+	idx, c := seededIndex(time.Minute)
 	if got := idx.Pick("m", "prefix", []string{"b", "a"}); got != 1 {
 		t.Fatalf("pick = %d, want 1", got)
 	}
@@ -108,9 +122,7 @@ func TestTTLExpiryReleasesAffinity(t *testing.T) {
 	if got := idx.Pick("m", "prefix", []string{"a", "b"}); got != 1 {
 		t.Fatalf("pick = %d, want 1 (only b's fresh record survives)", got)
 	}
-	if idx.models["m"].nodes != 1 {
-		t.Fatalf("nodes = %d, want 1", idx.models["m"].nodes)
-	}
+	wantNodes(t, idx, 1)
 }
 
 func TestSharedPrefixKeepsInteriorAlive(t *testing.T) {
@@ -149,17 +161,13 @@ func TestNodeCeilingStopsRecording(t *testing.T) {
 	for i := 0; i < maxNodes/maxChunks; i++ {
 		idx.Pick("m", strings.Repeat(string(rune('A'+i)), maxChunks*chunkSize), []string{"a", "b"})
 	}
-	if got := idx.models["m"].nodes; got != maxNodes {
-		t.Fatalf("nodes = %d, want %d", got, maxNodes)
-	}
+	wantNodes(t, idx, maxNodes)
 	// A new prompt cannot record: the ceiling holds, the pick degrades
 	// to strategy order.
 	if got := idx.Pick("m", strings.Repeat("!", chunkSize), []string{"b", "a"}); got != -1 {
 		t.Fatalf("pick at ceiling = %d, want -1", got)
 	}
-	if got := idx.models["m"].nodes; got != maxNodes {
-		t.Fatalf("nodes = %d, want %d", got, maxNodes)
-	}
+	wantNodes(t, idx, maxNodes)
 	// Existing prefixes keep working at the ceiling.
 	if got := idx.Pick("m", strings.Repeat("A", maxChunks*chunkSize), []string{"b", "a"}); got != 1 {
 		t.Fatalf("pick = %d, want 1 (deep match survives)", got)

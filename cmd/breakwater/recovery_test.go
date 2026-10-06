@@ -87,23 +87,28 @@ func assertAutoDisabledCount(t *testing.T, metrics *obs.Metrics, want int) {
 	assertMetricLine(t, metrics, `breakwater_upstream_auto_disabled_total{upstream="u1",reason="upstream_auth_failure"} `, want)
 }
 
+// newProbeAdapter wraps a server URL in the u1 OpenAI adapter with the
+// probe endpoint pointed at the server's /healthz.
+func newProbeAdapter(t *testing.T, baseURL string) upstream.Upstream {
+	t.Helper()
+	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
+		ID: "u1", BaseURL: baseURL, ProbeURL: baseURL + "/healthz",
+	})
+	if err != nil {
+		t.Fatalf("adapter: %v", err)
+	}
+	return adapter
+}
+
 // newProbeTarget spins up an upstream whose probe endpoint answers
 // with the given status, together with its adapter.
-func newProbeTarget(t *testing.T, status int) (upstream.Upstream, *httptest.Server) {
+func newProbeTarget(t *testing.T, status int) upstream.Upstream {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 	}))
 	t.Cleanup(srv.Close)
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
-		ID:       "u1",
-		BaseURL:  srv.URL,
-		ProbeURL: srv.URL + "/healthz",
-	})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
-	return adapter, srv
+	return newProbeAdapter(t, srv.URL)
 }
 
 // waitFor polls cond until it holds or the deadline passes.
@@ -119,6 +124,50 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 	t.Fatal("condition not met in time")
 }
 
+// autoDisableUpstream takes an upstream out of rotation as the system's
+// own decision and fails the test when the switch refuses.
+func autoDisableUpstream(t *testing.T, sw *router.Switch, id, reason string) {
+	t.Helper()
+	if _, err := sw.AutoDisableUpstream(id, reason); err != nil {
+		t.Fatalf("auto disable: %v", err)
+	}
+}
+
+// startLoopRecovery arms the recovery loop with the tests' standard
+// cadence — 5ms ticks, a generous probe timeout — and the given
+// failed-probe backoff ceiling, consecutive-pass threshold and breaker.
+func startLoopRecovery(ctx context.Context, passes int, backoff time.Duration, breaker circuit.Breaker, routingSwitch *router.Switch, probes map[string]upstream.Upstream) {
+	startRecovery(ctx, 5*time.Millisecond, time.Second, backoff, passes,
+		breaker, routingSwitch, probes, obs.NewMetrics(), discardLogger())
+}
+
+// openedBreaker builds a breaker registry that has ejected u1: one
+// server-fault report past a fail threshold of one.
+func openedBreaker(t *testing.T, ctx context.Context, cooldown time.Duration) circuit.Breaker {
+	t.Helper()
+	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: cooldown})
+	perm, ok := breaker.Allow(ctx, "u1")
+	if !ok {
+		t.Fatal("closed breaker denied the setup call")
+	}
+	perm.Report(circuit.OutcomeServerFault)
+	return breaker
+}
+
+// newTwoKeyAdapter builds the u1 adapter carrying a two-credential ring
+// for the credential-retirement tests.
+func newTwoKeyAdapter(t *testing.T) *upstream.OpenAI {
+	t.Helper()
+	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
+		ID: "u1", BaseURL: "http://127.0.0.1:8090",
+		APIKeys: []string{"k1", "k2"},
+	})
+	if err != nil {
+		t.Fatalf("adapter: %v", err)
+	}
+	return adapter
+}
+
 // healthyRecoveryFixture boots the recovery loop over one
 // auto-disabled upstream whose probe endpoint answers 200, at the
 // given consecutive-pass threshold, and cleans the loop up with the
@@ -127,14 +176,12 @@ func healthyRecoveryFixture(t *testing.T, reason string, threshold int) *router.
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	adapter, _ := newProbeTarget(t, http.StatusOK)
+	adapter := newProbeTarget(t, http.StatusOK)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", reason); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
+	autoDisableUpstream(t, sw, "u1", reason)
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, threshold, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, threshold, 0, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 	return sw
 }
 
@@ -167,19 +214,12 @@ func TestRecoveryRequiresConsecutivePasses(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
-		ID: "u1", BaseURL: srv.URL, ProbeURL: srv.URL + "/healthz",
-	})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
+	adapter := newProbeAdapter(t, srv.URL)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
+	autoDisableUpstream(t, sw, "u1", "upstream_auth_failure")
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 2, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 2, 0, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	time.Sleep(80 * time.Millisecond)
 	if sw.UpstreamEnabled("u1") {
@@ -202,14 +242,12 @@ func TestRecoveryKeepsUnhealthyUpstreamOut(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusServiceUnavailable)
+	adapter := newProbeTarget(t, http.StatusServiceUnavailable)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_quota_exhausted"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
+	autoDisableUpstream(t, sw, "u1", "upstream_quota_exhausted")
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 1, 0, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	time.Sleep(40 * time.Millisecond)
 	if sw.UpstreamEnabled("u1") {
@@ -223,14 +261,14 @@ func TestRecoveryNeverLiftsManualDisable(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusOK)
+	adapter := newProbeTarget(t, http.StatusOK)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 	if err := sw.SetUpstream("u1", false); err != nil {
 		t.Fatalf("manual disable: %v", err)
 	}
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 1, 0, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	time.Sleep(40 * time.Millisecond)
 	if sw.UpstreamEnabled("u1") {
@@ -248,14 +286,12 @@ func TestRecoverySkipsUnprobeableUpstreams(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1", "u2"})
-	if _, err := sw.AutoDisableUpstream("u2", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
+	autoDisableUpstream(t, sw, "u2", "upstream_auth_failure")
 
 	// u1 is probe-capable but healthy-idle; u2 has no target.
-	adapter, _ := newProbeTarget(t, http.StatusOK)
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	adapter := newProbeTarget(t, http.StatusOK)
+	startLoopRecovery(ctx, 1, 0, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	time.Sleep(40 * time.Millisecond)
 	if sw.UpstreamEnabled("u2") {
@@ -270,20 +306,15 @@ func TestRecoveryRevivesBreakerEjectedUpstream(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusOK)
-	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Millisecond})
-	perm, ok := breaker.Allow(ctx, "u1")
-	if !ok {
-		t.Fatal("closed breaker denied the setup call")
-	}
-	perm.Report(circuit.OutcomeServerFault)
+	adapter := newProbeTarget(t, http.StatusOK)
+	breaker := openedBreaker(t, ctx, time.Millisecond)
 	if breaker.StateOf(ctx, "u1") != circuit.StateOpen {
 		t.Fatal("setup: breaker did not open")
 	}
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, breaker, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 1, 0, breaker, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	waitFor(t, 2*time.Second, func() bool { return breaker.StateOf(ctx, "u1") == circuit.StateClosed })
 }
@@ -295,17 +326,12 @@ func TestRecoveryWaitsOutBreakerCooldown(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusOK)
-	breaker := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Hour})
-	perm, ok := breaker.Allow(ctx, "u1")
-	if !ok {
-		t.Fatal("closed breaker denied the setup call")
-	}
-	perm.Report(circuit.OutcomeServerFault)
+	adapter := newProbeTarget(t, http.StatusOK)
+	breaker := openedBreaker(t, ctx, time.Hour)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, breaker, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 1, 0, breaker, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	time.Sleep(40 * time.Millisecond)
 	if state := breaker.StateOf(ctx, "u1"); state != circuit.StateOpen {
@@ -320,12 +346,14 @@ func TestStartRecoveryDisabledModes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	adapter, _ := newProbeTarget(t, http.StatusOK)
+	adapter := newProbeTarget(t, http.StatusOK)
 	targets := map[string]upstream.Upstream{"u1": adapter}
 
 	// Neither call may panic nor change state; both return immediately.
+	// The zero interval starts no loop: only the direct call pins that
+	// branch.
 	startRecovery(ctx, 0, time.Second, 0, 1, circuit.NopBreaker{}, sw, targets, obs.NewMetrics(), discardLogger())
-	startRecovery(ctx, 5*time.Millisecond, time.Second, 0, 1, circuit.NopBreaker{}, sw, nil, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 1, 0, circuit.NopBreaker{}, sw, nil)
 	time.Sleep(10 * time.Millisecond)
 	if !sw.UpstreamEnabled("u1") {
 		t.Fatal("disabled recovery must not change switch state")
@@ -339,13 +367,7 @@ func TestStartRecoveryDisabledModes(t *testing.T) {
 // upstream-level disable.
 func TestAutoDisableHookRetiresCredentialFirst(t *testing.T) {
 	t.Parallel()
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
-		ID: "u1", BaseURL: "http://127.0.0.1:8090",
-		APIKeys: []string{"k1", "k2"},
-	})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
+	adapter := newTwoKeyAdapter(t)
 	rings := map[string]upstream.CredentialPool{"u1": adapter}
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 	metrics := obs.NewMetrics()
@@ -396,13 +418,7 @@ func assertCredentialRetiredCount(t *testing.T, metrics *obs.Metrics, want int) 
 // the full ring, and disabling does not touch it.
 func TestSwitchEnableRevivesRing(t *testing.T) {
 	t.Parallel()
-	adapter, err := upstream.NewOpenAI(upstream.OpenAIConfig{
-		ID: "u1", BaseURL: "http://127.0.0.1:8090",
-		APIKeys: []string{"k1", "k2"},
-	})
-	if err != nil {
-		t.Fatalf("adapter: %v", err)
-	}
+	adapter := newTwoKeyAdapter(t)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"},
 		router.WithOnUpstreamEnable(reviveRing(map[string]upstream.CredentialPool{"u1": adapter}, discardLogger())))
 

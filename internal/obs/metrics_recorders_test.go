@@ -7,7 +7,6 @@
 package obs
 
 import (
-	"bytes"
 	"math"
 	"strings"
 	"sync"
@@ -46,12 +45,7 @@ func TestMetricsRecordersEmitSamples(t *testing.T) {
 	m := NewMetrics()
 	recordEverything(m)
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	text := out.String()
-	for _, want := range []string{
+	assertExpositionContains(t, m,
 		// The drift counter's HELP line is part of its published
 		// contract: semantic only — whether the reading should be zero
 		// is the ledger's health, not part of the metric's meaning.
@@ -76,11 +70,7 @@ func TestMetricsRecordersEmitSamples(t *testing.T) {
 		`breakwater_upstream_ttft_seconds_bucket{upstream="u1",le="0.5"} 1`,
 		`breakwater_upstream_ttft_seconds_count{upstream="u1"} 1`,
 		"breakwater_logs_dropped_total 4",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("exposition missing %q\ngot:\n%s", want, text)
-		}
-	}
+	)
 }
 
 // TestMetricsObserveDurationBeyondLargestBucket pins the histogram
@@ -91,20 +81,11 @@ func TestMetricsObserveDurationBeyondLargestBucket(t *testing.T) {
 	m := NewMetrics()
 	m.ObserveDuration("u1", 120) // past the 60s top bucket
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	text := out.String()
-	for _, want := range []string{
+	assertExpositionContains(t, m,
 		`breakwater_request_duration_seconds_bucket{upstream="u1",le="60"} 0`,
 		`breakwater_request_duration_seconds_bucket{upstream="u1",le="+Inf"} 1`,
 		`breakwater_request_duration_seconds_count{upstream="u1"} 1`,
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("exposition missing %q\ngot:\n%s", want, text)
-		}
-	}
+	)
 }
 
 // TestMetricsInflightAcceptsNegativeAdjustment pins the gauge contract:
@@ -116,12 +97,8 @@ func TestMetricsInflightAcceptsNegativeAdjustment(t *testing.T) {
 	m.InflightAdd(3)
 	m.InflightAdd(-5)
 
-	var out strings.Builder
-	if err := m.Render(&out); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !strings.Contains(out.String(), "breakwater_inflight_requests -2") {
-		t.Errorf("in-flight gauge wrong:\n%s", out.String())
+	if text := renderExposition(t, m); !strings.Contains(text, "breakwater_inflight_requests -2") {
+		t.Errorf("in-flight gauge wrong:\n%s", text)
 	}
 }
 
@@ -196,11 +173,7 @@ func TestSetInsightsDroppedRenders(t *testing.T) {
 	t.Parallel()
 	m := NewMetrics()
 	m.SetInsightsDropped(7)
-	var buf bytes.Buffer
-	if err := m.Render(&buf); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if !strings.Contains(buf.String(), "breakwater_insights_records_dropped_total 7") {
-		t.Fatalf("exposition missing the insights drop counter:\n%s", buf.String())
+	if text := renderExposition(t, m); !strings.Contains(text, "breakwater_insights_records_dropped_total 7") {
+		t.Fatalf("exposition missing the insights drop counter:\n%s", text)
 	}
 }

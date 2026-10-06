@@ -7,11 +7,21 @@
 package obs
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 	"testing"
 )
+
+// assertOverflowLeafRendered requires the exposition to name the
+// reserved overflow leaf the capped families route through. The capped
+// families here are labelled by upstream and by tenant, so their
+// overflow leaf is visible under those names.
+func assertOverflowLeafRendered(t *testing.T, out string) {
+	t.Helper()
+	if !strings.Contains(out, fmt.Sprintf("upstream=%q", labelCapOverflow)) {
+		t.Fatalf("exposition missing the overflow leaf:\n%s", out)
+	}
+}
 
 // TestChildCapCollapsesPastTheLimit pins the cardinality floor: past
 // maxChildren new label sets share one reserved overflow leaf, so the
@@ -33,15 +43,7 @@ func TestChildCapCollapsesPastTheLimit(t *testing.T) {
 	if len(f.children) != maxChildren+1 {
 		t.Fatalf("children = %d after repeat traffic, want the cap to hold", len(f.children))
 	}
-	var buf bytes.Buffer
-	if err := m.Render(&buf); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	// The capped families here are labelled by upstream and by tenant,
-	// so their overflow leaf is visible under those names.
-	if !strings.Contains(buf.String(), fmt.Sprintf("upstream=%q", labelCapOverflow)) {
-		t.Fatalf("exposition missing the overflow leaf:\n%s", buf.String())
-	}
+	assertOverflowLeafRendered(t, renderExposition(t, m))
 	ov := f.children[overflowKey]
 	if ov == nil {
 		t.Fatal("no overflow leaf")
@@ -97,15 +99,7 @@ func TestCappedRecordersStillCount(t *testing.T) {
 			t.Errorf("%s: overflow histogram leaf has no bucket storage", name)
 		}
 	}
-	var buf bytes.Buffer
-	if err := m.Render(&buf); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	// The capped families here are labelled by upstream and by tenant,
-	// so their overflow leaf is visible under those names.
-	if !strings.Contains(buf.String(), fmt.Sprintf("upstream=%q", labelCapOverflow)) {
-		t.Fatalf("exposition missing the overflow leaf:\n%s", buf.String())
-	}
+	assertOverflowLeafRendered(t, renderExposition(t, m))
 }
 
 // TestChildOfScrubsNULFromLabels: a client-controlled model label
@@ -126,14 +120,11 @@ func TestChildOfScrubsNULFromLabels(t *testing.T) {
 		t.Fatal("a NUL-carrying label must not reach the reserved overflow leaf")
 	}
 
-	var buf bytes.Buffer
-	if err := m.Render(&buf); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if out := buf.String(); strings.ContainsRune(out, '\x00') {
+	out := renderExposition(t, m)
+	if strings.ContainsRune(out, '\x00') {
 		t.Fatalf("a NUL byte reached the exposition payload: %q", out)
 	}
-	if !strings.Contains(buf.String(), `model="modelb"`) {
-		t.Fatalf("the scrubbed model label missing:\n%s", buf.String())
+	if !strings.Contains(out, `model="modelb"`) {
+		t.Fatalf("the scrubbed model label missing:\n%s", out)
 	}
 }

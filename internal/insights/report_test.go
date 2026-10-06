@@ -142,6 +142,17 @@ func summaryQueryer(requests, failures int64) *fakeQueryer {
 	}
 }
 
+// runReport folds a report over the fixed test window, failing the
+// test on the error path.
+func runReport(t *testing.T, q queryer) Report {
+	t.Helper()
+	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	return rep
+}
+
 func TestReportFoldsSummaryAndDimensions(t *testing.T) {
 	t.Parallel()
 	q := summaryQueryer(10, 2)
@@ -151,10 +162,7 @@ func TestReportFoldsSummaryAndDimensions(t *testing.T) {
 		{{}}, {{}}, {{}}, {{}}, // dimensions
 	}
 
-	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
-	if err != nil {
-		t.Fatalf("report: %v", err)
-	}
+	rep := runReport(t, q)
 	if rep.Summary.Requests != 10 || rep.Summary.Failures != 2 {
 		t.Fatalf("summary = %+v", rep.Summary)
 	}
@@ -185,10 +193,7 @@ func TestReportFoldsSummaryAndDimensions(t *testing.T) {
 func TestReportSkipsFailureMixWithoutFailures(t *testing.T) {
 	t.Parallel()
 	q := summaryQueryer(10, 0)
-	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
-	if err != nil {
-		t.Fatalf("report: %v", err)
-	}
+	rep := runReport(t, q)
 	if len(rep.Summary.FailureMix) != 0 {
 		t.Fatalf("failure mix = %v, want none on a clean window", rep.Summary.FailureMix)
 	}
@@ -199,10 +204,7 @@ func TestReportSkipsFailureMixWithoutFailures(t *testing.T) {
 func TestReportRendersEmptyListsAsEmpty(t *testing.T) {
 	t.Parallel()
 	q := summaryQueryer(0, 0)
-	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
-	if err != nil {
-		t.Fatalf("report: %v", err)
-	}
+	rep := runReport(t, q)
 	for name, rows := range map[string][]Dimension{
 		"by_tenant": rep.ByTenant, "by_key": rep.ByKey,
 		"by_model": rep.ByModel, "by_upstream": rep.ByUpstream,
@@ -246,10 +248,7 @@ func TestReportFailureMixClassification(t *testing.T) {
 		{{}},                   // timeline
 		{{}}, {{}}, {{}}, {{}}, // dimensions
 	}
-	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
-	if err != nil {
-		t.Fatalf("report: %v", err)
-	}
+	rep := runReport(t, q)
 	if len(rep.Summary.FailureMix) != 2 || rep.Summary.FailureMix[0].Code != "circuit_open" {
 		t.Fatalf("mix = %+v", rep.Summary.FailureMix)
 	}
@@ -266,10 +265,7 @@ func TestReportDimensionFolding(t *testing.T) {
 		{{}}, // model
 		{{}}, // upstream
 	}
-	rep, err := report(context.Background(), q, time.Unix(0, 0), time.Unix(3600, 0).UTC())
-	if err != nil {
-		t.Fatalf("report: %v", err)
-	}
+	rep := runReport(t, q)
 	if len(rep.ByTenant) != 2 || rep.ByTenant[0].Name != "tenant-a" || rep.ByTenant[0].P95MS != 120.5 {
 		t.Fatalf("by tenant = %+v", rep.ByTenant)
 	}

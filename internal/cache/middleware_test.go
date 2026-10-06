@@ -74,12 +74,37 @@ func fireRequest(handler http.Handler, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// cacheableChatBody is the canonical cold-start chat request the cache
+// tests fire: temperature 0, so the request is eligible for caching.
+const cacheableChatBody = `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+
+// errUpstream answers every request with the given upstream error,
+// mirroring the inference handler's contract: the relay result is on
+// the carrier by the time the cache stage stores. retryAfter, when
+// non-empty, rides the response headers.
+func errUpstream(fetches *atomic.Int64, status int, body, retryAfter string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		pipeline.CarrierFrom(r.Context()).Relay = &relay.Result{
+			Status:     status,
+			UpstreamID: "u1",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(status)
+		// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- test fixture writes an opaque response body; no HTML is rendered
+		_, _ = w.Write([]byte(body))
+	})
+}
+
 func TestCacheMiddlewareHitRefetchesNothing(t *testing.T) {
 	t.Parallel()
 	var fetches atomic.Int64
 	handler := cacheStage(t, countingUpstream(t, &fetches, blockingOpen()))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 	first := fireRequest(handler, body)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first status = %d", first.Code)
@@ -110,7 +135,7 @@ func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
 	handler := cacheStage(t, countingUpstream(t, &fetches, start))
 
 	const callers = 32
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 
 	var wg sync.WaitGroup
 	codes := make(chan int, callers)
@@ -146,19 +171,8 @@ func TestCacheMiddlewareConcurrentColdStartsFetchOnce(t *testing.T) {
 func TestCacheMiddlewareNegativeCachesUpstreamErrors(t *testing.T) {
 	t.Parallel()
 	var fetches atomic.Int64
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetches.Add(1)
-		// Mirror the inference handler's contract: the relay result is
-		// on the carrier by the time the cache stage stores.
-		pipeline.CarrierFrom(r.Context()).Relay = &relay.Result{
-			Status:     http.StatusNotFound,
-			UpstreamID: "u1",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":{"message":"no such model"}}`))
-	})
-	handler := cacheStage(t, upstream)
+	handler := cacheStage(t, errUpstream(&fetches,
+		http.StatusNotFound, `{"error":{"message":"no such model"}}`, ""))
 
 	body := `{"model":"ghost","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
 	if rec := fireRequest(handler, body); rec.Code != http.StatusNotFound {
@@ -238,20 +252,10 @@ func TestCacheReplayReplacesDocumentContentType(t *testing.T) {
 func TestCacheMiddlewareReplayCarriesRetryAfter(t *testing.T) {
 	t.Parallel()
 	var fetches atomic.Int64
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetches.Add(1)
-		pipeline.CarrierFrom(r.Context()).Relay = &relay.Result{
-			Status:     http.StatusTooManyRequests,
-			UpstreamID: "u1",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Retry-After", "7")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"error":{"message":"slow down"}}`))
-	})
-	handler := cacheStage(t, upstream)
+	handler := cacheStage(t, errUpstream(&fetches,
+		http.StatusTooManyRequests, `{"error":{"message":"slow down"}}`, "7"))
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 	if rec := fireRequest(handler, body); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("first status = %d, want 429", rec.Code)
 	}
@@ -281,7 +285,7 @@ func TestCacheMiddlewareNeverNegativeCachesGatewayEnvelopes(t *testing.T) {
 	})
 	handler := cacheStage(t, upstream)
 
-	body := `{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}]}`
+	body := cacheableChatBody
 	fireRequest(handler, body)
 	fireRequest(handler, body)
 	if got := fetches.Load(); got != 2 {
@@ -348,11 +352,7 @@ func abortingUpstream(fetches *atomic.Int64) http.Handler {
 func TestCacheMiddlewareNeverStoresAbortedStreams(t *testing.T) {
 	t.Parallel()
 	var fetches atomic.Int64
-	handler := pipeline.Chain(
-		pipeline.CarrierStage(),
-		pipeline.FormatStage(protocol.FormatOpenAIChat),
-		Middleware(NewMemory(), NewFlight(), time.Minute, nil, time.Minute),
-	)(abortingUpstream(&fetches))
+	handler := cacheStage(t, abortingUpstream(&fetches))
 
 	body := `{"model":"m","stream":true,"temperature":0,"messages":[{"role":"user","content":"hi"}]}`
 	for i := range 2 {

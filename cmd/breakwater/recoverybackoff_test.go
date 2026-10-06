@@ -84,49 +84,65 @@ func runRecoveryPass(timeout, backoff time.Duration, sw *router.Switch, probes m
 		sw, probes, book, metrics, discardLogger())
 }
 
+// backoffFixture bundles the loop-body inputs the direct-call backoff
+// tests drive: u1 auto-disabled behind a permanently failing probe.
+type backoffFixture struct {
+	sw      *router.Switch
+	book    probeBook
+	probes  map[string]upstream.Upstream
+	metrics *obs.Metrics
+}
+
+// newBackoffFixture assembles the fixture.
+func newBackoffFixture(t *testing.T) backoffFixture {
+	t.Helper()
+	adapter := newProbeTarget(t, http.StatusServiceUnavailable)
+	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
+	autoDisableUpstream(t, sw, "u1", "upstream_auth_failure")
+	return backoffFixture{
+		sw:      sw,
+		book:    probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)},
+		probes:  map[string]upstream.Upstream{"u1": adapter},
+		metrics: obs.NewMetrics(),
+	}
+}
+
 // TestRecoveryBackoffSkipsUndueUpstreams drives the loop body directly:
 // a failed probe schedules the next attempt one ladder rung out, ticks
 // inside that window skip the upstream, and expiry re-probes onto the
 // next rung.
 func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	t.Parallel()
-	adapter, _ := newProbeTarget(t, http.StatusServiceUnavailable)
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
-	metrics := obs.NewMetrics()
-	book := probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
-	probes := map[string]upstream.Upstream{"u1": adapter}
+	fx := newBackoffFixture(t)
 
 	// First failure: probed, and the next attempt lands one interval
 	// out.
-	runRecoveryPass(time.Second, backoffCeiling, sw, probes, book, metrics)
-	if got := probeFailCount(t, metrics, "u1"); got != 1 {
+	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
 		t.Fatalf("probe count = %d, want 1", got)
 	}
-	r := book.retries["u1"]
+	r := fx.book.retries["u1"]
 	if r.fails != 1 || !r.next.After(time.Now()) {
 		t.Fatalf("schedule after first failure = %+v, want fails 1 and a future next", r)
 	}
 
 	// A pass inside the backoff window must skip the upstream: no new
 	// probe, schedule untouched.
-	runRecoveryPass(time.Second, backoffCeiling, sw, probes, book, metrics)
-	if got := probeFailCount(t, metrics, "u1"); got != 1 {
+	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
 		t.Fatalf("probe count after undue pass = %d, want 1", got)
 	}
-	if book.retries["u1"] != r {
-		t.Fatalf("schedule changed on a skipped pass: %+v", book.retries["u1"])
+	if fx.book.retries["u1"] != r {
+		t.Fatalf("schedule changed on a skipped pass: %+v", fx.book.retries["u1"])
 	}
 
 	// Once due, the probe fires onto the next rung: double the wait.
-	book.retries["u1"] = probeRetry{fails: r.fails, next: time.Now().Add(-time.Millisecond)}
-	runRecoveryPass(time.Second, backoffCeiling, sw, probes, book, metrics)
-	if got := probeFailCount(t, metrics, "u1"); got != 2 {
+	fx.book.retries["u1"] = probeRetry{fails: r.fails, next: time.Now().Add(-time.Millisecond)}
+	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	if got := probeFailCount(t, fx.metrics, "u1"); got != 2 {
 		t.Fatalf("probe count after due pass = %d, want 2", got)
 	}
-	r2 := book.retries["u1"]
+	r2 := fx.book.retries["u1"]
 	if r2.fails != 2 {
 		t.Fatalf("fails = %d, want 2", r2.fails)
 	}
@@ -139,19 +155,12 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 // due check never skips — every pass probes, whatever the failures.
 func TestRecoveryBackoffZeroKeepsFixedPace(t *testing.T) {
 	t.Parallel()
-	adapter, _ := newProbeTarget(t, http.StatusServiceUnavailable)
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
-	metrics := obs.NewMetrics()
-	book := probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)}
-	probes := map[string]upstream.Upstream{"u1": adapter}
+	fx := newBackoffFixture(t)
 
 	for i := 0; i < 3; i++ {
-		runRecoveryPass(time.Second, 0, sw, probes, book, metrics)
+		runRecoveryPass(time.Second, 0, fx.sw, fx.probes, fx.book, fx.metrics)
 	}
-	if got := probeFailCount(t, metrics, "u1"); got != 3 {
+	if got := probeFailCount(t, fx.metrics, "u1"); got != 3 {
 		t.Fatalf("probe count = %d, want 3 (no backoff, no skips)", got)
 	}
 }
@@ -163,14 +172,12 @@ func TestRecoveryBackoffStillRestores(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusOK)
+	adapter := newProbeTarget(t, http.StatusOK)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
+	autoDisableUpstream(t, sw, "u1", "upstream_auth_failure")
 
-	startRecovery(ctx, 5*time.Millisecond, time.Second, time.Second, 1, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, obs.NewMetrics(), discardLogger())
+	startLoopRecovery(ctx, 1, time.Second, circuit.NopBreaker{}, sw,
+		map[string]upstream.Upstream{"u1": adapter})
 
 	waitFor(t, 2*time.Second, func() bool { return sw.UpstreamEnabled("u1") })
 }
@@ -181,20 +188,15 @@ func TestRecoveryBackoffPacesTheRealLoop(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter, _ := newProbeTarget(t, http.StatusServiceUnavailable)
-	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
-	if _, err := sw.AutoDisableUpstream("u1", "upstream_auth_failure"); err != nil {
-		t.Fatalf("auto disable: %v", err)
-	}
-	metrics := obs.NewMetrics()
+	fx := newBackoffFixture(t)
 
-	startRecovery(ctx, 10*time.Millisecond, time.Second, 80*time.Millisecond, 1, circuit.NopBreaker{}, sw,
-		map[string]upstream.Upstream{"u1": adapter}, metrics, discardLogger())
+	startRecovery(ctx, 10*time.Millisecond, time.Second, 80*time.Millisecond, 1, circuit.NopBreaker{}, fx.sw,
+		fx.probes, fx.metrics, discardLogger())
 
 	time.Sleep(150 * time.Millisecond)
 	// The ladder allows probes at ~0, 10, 30, 70, 150ms; a missing
 	// backoff would probe every 10ms tick (~15 times).
-	if got := probeFailCount(t, metrics, "u1"); got > 8 {
+	if got := probeFailCount(t, fx.metrics, "u1"); got > 8 {
 		t.Fatalf("probe count = %d, want the backoff ladder (<= 8)", got)
 	}
 }

@@ -52,6 +52,37 @@ func feed(t *testing.T, reg *RatioRegistry, id string, n int) {
 	}
 }
 
+// expectAdmitted grants one call at the current draw and fails the test
+// with msg if the guard denies; the returned permission is the caller's
+// to report on.
+func expectAdmitted(t *testing.T, reg *RatioRegistry, id, msg string) Permission {
+	t.Helper()
+	p, ok := reg.Allow(context.Background(), id)
+	if !ok || p == nil {
+		t.Fatal(msg)
+	}
+	return p
+}
+
+// expectDenied grants one call at the current draw and fails the test
+// with msg if the guard admits.
+func expectDenied(t *testing.T, reg *RatioRegistry, id, msg string) {
+	t.Helper()
+	if p, ok := reg.Allow(context.Background(), id); ok || p != nil {
+		t.Fatal(msg)
+	}
+}
+
+// windowAtOrigin builds a fixture, takes the machine for id at the
+// clock origin, and returns the registry, that state and the origin
+// time for direct ring manipulation.
+func windowAtOrigin(t *testing.T, id string) (*RatioRegistry, *ratioState, time.Time) {
+	t.Helper()
+	reg, clock, _ := newRatioFixture(t)
+	now := clock.Now()
+	return reg, reg.stateOf(id, now), now
+}
+
 // TestRatioProtectionAdmitsTinyWindows: five or fewer events can never
 // deny, and the sixth failure switches the guard on.
 func TestRatioProtectionAdmitsTinyWindows(t *testing.T) {
@@ -61,17 +92,13 @@ func TestRatioProtectionAdmitsTinyWindows(t *testing.T) {
 
 	feed(t, reg, id, 5)
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("guard denied a five-event window")
-	}
+	expectAdmitted(t, reg, id, "guard denied a five-event window")
 
 	// One more failure lifts the window past the protection floor.
 	draw.v = 1
 	feed(t, reg, id, 1)
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); ok || p != nil {
-		t.Fatal("guard admitted a window whose deny ratio is positive at draw 0")
-	}
+	expectDenied(t, reg, id, "guard admitted a window whose deny ratio is positive at draw 0")
 }
 
 // TestRatioDenialTracksFailureShare: a failure-dominated window denies
@@ -85,14 +112,9 @@ func TestRatioDenialTracksFailureShare(t *testing.T) {
 	feed(t, reg, id, 20)
 
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
-		t.Fatal("expected a denial at draw 0")
-	}
+	expectDenied(t, reg, id, "expected a denial at draw 0")
 	draw.v = 0.8
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("expected admission at draw 0.8")
-	}
+	expectAdmitted(t, reg, id, "expected admission at draw 0.8")
 }
 
 // TestRatioWorkingBucketsDilute: trailing healthy buckets shrink the
@@ -119,9 +141,7 @@ func TestRatioWorkingBucketsDilute(t *testing.T) {
 	// buckets it is ≈ 0.292, so a 0.3 draw passes only because the
 	// healthy buckets diluted it.
 	draw.v = 0.3
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("expected the working buckets to dilute the ratio below 0.3")
-	}
+	expectAdmitted(t, reg, id, "expected the working buckets to dilute the ratio below 0.3")
 }
 
 // TestRatioForcePassAdmitsOnePerInterval: while the guard denies, one
@@ -135,36 +155,22 @@ func TestRatioForcePassAdmitsOnePerInterval(t *testing.T) {
 	feed(t, reg, id, 10)
 	draw.v = 0
 
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
-		t.Fatal("expected a denial before any forced pass")
-	}
+	expectDenied(t, reg, id, "expected a denial before any forced pass")
 
 	clock.Advance(ratioForcePass / 2)
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
-		t.Fatal("expected a denial within the forced-pass interval")
-	}
+	expectDenied(t, reg, id, "expected a denial within the forced-pass interval")
 
 	clock.Advance(ratioForcePass / 2)
-	p, ok := reg.Allow(context.Background(), id)
-	if !ok || p == nil {
-		t.Fatal("expected the forced pass to admit one call")
-	}
+	p := expectAdmitted(t, reg, id, "expected the forced pass to admit one call")
 	// The probe's outcome is failure evidence like any other; the
 	// pressure stays on.
 	p.Report(OutcomeServerFault)
 
 	clock.Advance(9 * ratioForcePass / 10)
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
-		t.Fatal("expected the forced pass to admit at most one call per interval")
-	}
+	expectDenied(t, reg, id, "expected the forced pass to admit at most one call per interval")
 
 	clock.Advance(ratioForcePass / 5)
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("expected the next forced pass after a full interval")
-	}
+	expectAdmitted(t, reg, id, "expected the next forced pass after a full interval")
 }
 
 // TestRatioSuccessesRelaxTheGuard: enough healthy answers drive the
@@ -176,10 +182,7 @@ func TestRatioSuccessesRelaxTheGuard(t *testing.T) {
 
 	feed(t, reg, id, 20)
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
-		t.Fatal("expected a denial before recovery")
-	}
+	expectDenied(t, reg, id, "expected a denial before recovery")
 
 	// The window holds 20 faults plus the injected denial from the
 	// check above. With the accepts weight at 1.5, the numerator
@@ -193,9 +196,7 @@ func TestRatioSuccessesRelaxTheGuard(t *testing.T) {
 		p.Report(OutcomeSuccess)
 	}
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("expected full admission after sustained successes")
-	}
+	expectAdmitted(t, reg, id, "expected full admission after sustained successes")
 }
 
 // TestRatioWindowExpiry: a window with no recent events admits
@@ -208,20 +209,15 @@ func TestRatioWindowExpiry(t *testing.T) {
 	feed(t, reg, id, 20)
 	clock.Advance(10*ratioBucketSpan*ratioBuckets + ratioBucketSpan)
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("expected a fully expired window to admit")
-	}
+	expectAdmitted(t, reg, id, "expected a fully expired window to admit")
 }
 
 // TestRatioHistorySkipsExpiredWithoutResetting: reads see span-skipped
 // history; only a write rolls the ring.
 func TestRatioHistorySkipsExpiredWithoutResetting(t *testing.T) {
 	t.Parallel()
-	reg, clock, _ := newRatioFixture(t)
-	const id = "u1"
-	now := clock.Now()
+	_, s, now := windowAtOrigin(t, "u1")
 
-	s := reg.stateOf(id, now)
 	s.add(now, 0, 3, 0)
 	later := now.Add(ratioBucketSpan)
 	s.add(later, 2, 0, 0)
@@ -249,11 +245,8 @@ func TestRatioHistorySkipsExpiredWithoutResetting(t *testing.T) {
 // bucket boundary.
 func TestRatioRollResetsAndAligns(t *testing.T) {
 	t.Parallel()
-	reg, clock, _ := newRatioFixture(t)
-	const id = "u1"
-	now := clock.Now()
+	_, s, now := windowAtOrigin(t, "u1")
 
-	s := reg.stateOf(id, now)
 	s.add(now, 1, 0, 0)
 	s.add(now.Add(ratioBucketSpan), 0, 2, 0)
 
@@ -281,25 +274,16 @@ func TestRatioRollResetsAndAligns(t *testing.T) {
 // gateway cuts record nothing, and a double report is absorbed.
 func TestRatioOutcomeAccounting(t *testing.T) {
 	t.Parallel()
-	reg, clock, _ := newRatioFixture(t)
-	const id = "u1"
-	now := clock.Now()
+	reg, s, now := windowAtOrigin(t, "u1")
 
-	s := reg.stateOf(id, now)
-	p, ok := reg.Allow(context.Background(), id)
-	if !ok {
-		t.Fatal("expected admission")
-	}
+	p := expectAdmitted(t, reg, "u1", "expected admission")
 	p.Report(OutcomeClientFault)
 	p.Report(OutcomeClientFault) // absorbed
 
-	p2, ok := reg.Allow(context.Background(), id)
-	if !ok {
-		t.Fatal("expected admission")
-	}
+	p2 := expectAdmitted(t, reg, "u1", "expected admission")
 	p2.Report(OutcomeGatewayTerminated)
 
-	p3, _ := reg.Allow(context.Background(), id)
+	p3, _ := reg.Allow(context.Background(), "u1")
 	p3.Report(OutcomeServerFault)
 
 	h := s.history(now)
@@ -321,10 +305,7 @@ func TestRatioDenialRecordedAndObserved(t *testing.T) {
 
 	feed(t, reg, id, 10)
 	draw.v = 0
-	if p, ok := reg.Allow(context.Background(), id); ok {
-		_ = p
-		t.Fatal("expected a denial")
-	}
+	expectDenied(t, reg, id, "expected a denial")
 	if len(denied) != 1 || denied[0] != id {
 		t.Fatalf("denial observer = %v, want exactly [%s]", denied, id)
 	}
@@ -358,9 +339,7 @@ func TestRatioResetEmptiesTheWindow(t *testing.T) {
 	feed(t, reg, id, 20)
 	draw.v = 0
 	reg.Reset(context.Background(), id)
-	if p, ok := reg.Allow(context.Background(), id); !ok || p == nil {
-		t.Fatal("expected admission after Reset")
-	}
+	expectAdmitted(t, reg, id, "expected admission after Reset")
 
 	s := reg.stateOf(id, clock.Now())
 	h := s.history(clock.Now())
@@ -404,15 +383,9 @@ func TestRatioConcurrentUse(t *testing.T) {
 // window as a healthy answer — it feeds accepts, not failures.
 func TestRatioSlowOutcomeRecordsHealthy(t *testing.T) {
 	t.Parallel()
-	reg, clock, _ := newRatioFixture(t)
-	const id = "u1"
-	now := clock.Now()
+	reg, s, now := windowAtOrigin(t, "u1")
 
-	s := reg.stateOf(id, now)
-	p, ok := reg.Allow(context.Background(), id)
-	if !ok {
-		t.Fatal("expected admission")
-	}
+	p := expectAdmitted(t, reg, "u1", "expected admission")
 	p.Report(OutcomeSlow)
 
 	h := s.history(now)

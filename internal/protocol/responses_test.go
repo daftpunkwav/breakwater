@@ -106,14 +106,23 @@ func TestResponsesWireRenderSuccess(t *testing.T) {
 	}
 }
 
-func TestResponsesStreamSequence(t *testing.T) {
-	t.Parallel()
+// startResponsesStream opens the Responses stream transcoder and emits
+// the response.created preamble onto rec; the recorder stays with the
+// test so it can drive deltas and read the emitted frames.
+func startResponsesStream(t *testing.T, rec *httptest.ResponseRecorder) StreamTranscoder {
+	t.Helper()
 	transcoder := WireFor(FormatOpenAIResponses).Stream()
-	rec := httptest.NewRecorder()
-
 	if err := transcoder.Start(rec, "m"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	return transcoder
+}
+
+func TestResponsesStreamSequence(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	transcoder := startResponsesStream(t, rec)
+
 	if err := transcoder.Delta(rec, []byte(`{"choices":[{"delta":{"content":"he"}}]}`)); err != nil {
 		t.Fatalf("delta: %v", err)
 	}
@@ -146,11 +155,8 @@ func TestResponsesStreamSequence(t *testing.T) {
 
 func TestResponsesStreamAbort(t *testing.T) {
 	t.Parallel()
-	transcoder := WireFor(FormatOpenAIResponses).Stream()
 	rec := httptest.NewRecorder()
-	if err := transcoder.Start(rec, "m"); err != nil {
-		t.Fatalf("start: %v", err)
-	}
+	transcoder := startResponsesStream(t, rec)
 	if err := transcoder.Abort(rec, CodeUpstreamReset, "connection reset"); err != nil {
 		t.Fatalf("abort: %v", err)
 	}

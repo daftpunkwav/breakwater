@@ -17,21 +17,25 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
+// observedEntries pushes the carrier through a fresh observation stage
+// at status and returns the entries its fresh sink recorded.
+func observedEntries(t *testing.T, carrier *Carrier, status int) []obs.Entry {
+	t.Helper()
+	sink := &recordingSink{}
+	serveThroughObservation(t, obs.NewMetrics(), sink, carrier, status)
+	return sink.snapshot()
+}
+
 // TestObservationRecordsRejectionTaxonomy: a request a governance
 // stage refused carries its rejection code and the resolving key into
 // the entry.
 func TestObservationRecordsRejectionTaxonomy(t *testing.T) {
 	t.Parallel()
-	metrics := obs.NewMetrics()
-	sink := &recordingSink{}
-	carrier := &Carrier{
+	entries := observedEntries(t, &Carrier{
 		Tenant:     auth.Tenant{ID: "tenant-1", KeyID: "key-9"},
 		RejectCode: "rate_limited",
-	}
+	}, http.StatusTooManyRequests)
 
-	serveThroughObservation(t, metrics, sink, carrier, http.StatusTooManyRequests)
-
-	entries := sink.snapshot()
 	if len(entries) != 1 {
 		t.Fatalf("sink recorded %d entries, want 1", len(entries))
 	}
@@ -50,35 +54,27 @@ func TestObservationRecordsRejectionTaxonomy(t *testing.T) {
 // so its status classifies it.
 func TestObservationRefinesWithRelayErrorCode(t *testing.T) {
 	t.Parallel()
-	metrics := obs.NewMetrics()
-
-	sink := &recordingSink{}
-	serveThroughObservation(t, metrics, sink, &Carrier{
+	if got := observedEntries(t, &Carrier{
 		Tenant: auth.Tenant{ID: "t"},
 		Relay:  &relay.Result{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
-	}, http.StatusServiceUnavailable)
-	if got := sink.snapshot()[0].ErrorCode; got != "circuit_open" {
+	}, http.StatusServiceUnavailable)[0].ErrorCode; got != "circuit_open" {
 		t.Fatalf("gateway code = %q, want circuit_open", got)
 	}
 
-	sink = &recordingSink{}
-	serveThroughObservation(t, metrics, sink, &Carrier{
+	if got := observedEntries(t, &Carrier{
 		Tenant: auth.Tenant{ID: "t"},
 		Relay:  &relay.Result{UpstreamID: "u", Status: 502},
-	}, http.StatusBadGateway)
-	if got := sink.snapshot()[0].ErrorCode; got != "" {
+	}, http.StatusBadGateway)[0].ErrorCode; got != "" {
 		t.Fatalf("passthrough code = %q, want empty (status classifies)", got)
 	}
 
 	// A rejection code wins over the relay's: the earlier verdict is
 	// the cause, the forward never happened.
-	sink = &recordingSink{}
-	serveThroughObservation(t, metrics, sink, &Carrier{
+	if got := observedEntries(t, &Carrier{
 		Tenant:     auth.Tenant{ID: "t"},
 		RejectCode: "insufficient_quota",
 		Relay:      &relay.Result{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
-	}, http.StatusPaymentRequired)
-	if got := sink.snapshot()[0].ErrorCode; got != "insufficient_quota" {
+	}, http.StatusPaymentRequired)[0].ErrorCode; got != "insufficient_quota" {
 		t.Fatalf("code = %q, want the rejection's insufficient_quota", got)
 	}
 }
@@ -89,10 +85,9 @@ func TestObservationRefinesWithRelayErrorCode(t *testing.T) {
 // failure — instead of the metric-invisible status 0.
 func TestObservationMapsMissingStatusToDisconnect(t *testing.T) {
 	t.Parallel()
-	metrics := obs.NewMetrics()
 	sink := &recordingSink{}
 
-	handler := ObservationStage(metrics, sink)(http.HandlerFunc(
+	handler := ObservationStage(obs.NewMetrics(), sink)(http.HandlerFunc(
 		func(_ http.ResponseWriter, _ *http.Request) {}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -109,16 +104,12 @@ func TestObservationMapsMissingStatusToDisconnect(t *testing.T) {
 // the request_log columns settle and stream.
 func TestObservationCarriesSettlementAndStream(t *testing.T) {
 	t.Parallel()
-	metrics := obs.NewMetrics()
-	sink := &recordingSink{}
-
-	serveThroughObservation(t, metrics, sink, &Carrier{
+	e := observedEntries(t, &Carrier{
 		Tenant:   auth.Tenant{ID: "t"},
 		Consumed: 137,
 		Relay:    &relay.Result{UpstreamID: "u", Status: 200, Streamed: true},
-	}, http.StatusOK)
+	}, http.StatusOK)[0]
 
-	e := sink.snapshot()[0]
 	if e.Tokens != 137 {
 		t.Fatalf("tokens = %d, want 137", e.Tokens)
 	}

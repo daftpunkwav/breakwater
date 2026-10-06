@@ -11,6 +11,8 @@ package quota
 import (
 	"context"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // memSnapshotStore is the in-memory SnapshotStore the tests drive.
@@ -32,17 +34,26 @@ func (m *memSnapshotStore) Append(_ context.Context, snap Snapshot) error {
 	return nil
 }
 
+// newReconciledLedger seeds a Redis ledger and wires its reconciler
+// over the in-memory snapshot store.
+func newReconciledLedger(t *testing.T, balance int64) (*Redis, *miniredis.Miniredis, *Reconciler, context.Context) {
+	t.Helper()
+	r, mr, ctx := newSeededRedisLedger(t, balance)
+	return r, mr, NewReconciler(r, []string{"t"}, newMemSnapshotStore()), ctx
+}
+
+// requireCleanInterval reconciles once and fails when the interval
+// reports any drift; label names the interval in the failure message.
+func requireCleanInterval(t *testing.T, rec *Reconciler, ctx context.Context, label string) {
+	t.Helper()
+	if _, _, drifts, err := rec.ReconcileOnce(ctx); err != nil || len(drifts) != 0 {
+		t.Fatalf("%s drifts = %v err = %v, want none", label, drifts, err)
+	}
+}
+
 func TestReconcileCleanIntervalsHaveNoDrift(t *testing.T) {
 	t.Parallel()
-	r, _ := newTestLedger(t)
-	ctx := context.Background()
-
-	if err := r.SetBalance(ctx, "t", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	store := newMemSnapshotStore()
-	rec := NewReconciler(r, []string{"t"}, store)
+	r, _, rec, ctx := newReconciledLedger(t, 1_000_000)
 
 	// Interval 1: reserve and settle some usage.
 	lease, err := r.Reserve(ctx, "t", 100)
@@ -80,14 +91,7 @@ func TestReconcileCleanIntervalsHaveNoDrift(t *testing.T) {
 // debited/refunded counters together — ledger facts, never drift.
 func TestReconcileToleratesInFlightLeasesAndOverage(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestLedger(t)
-	ctx := context.Background()
-
-	if err := r.SetBalance(ctx, "t", 1_000_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	store := newMemSnapshotStore()
-	rec := NewReconciler(r, []string{"t"}, store)
+	r, mr, rec, ctx := newReconciledLedger(t, 1_000_000)
 
 	if _, _, _, err := rec.ReconcileOnce(ctx); err != nil {
 		t.Fatalf("baseline: %v", err)
@@ -99,17 +103,13 @@ func TestReconcileToleratesInFlightLeasesAndOverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	if _, _, drifts, err := rec.ReconcileOnce(ctx); err != nil || len(drifts) != 0 {
-		t.Fatalf("in-flight interval drifts = %v err = %v, want none", drifts, err)
-	}
+	requireCleanInterval(t, rec, ctx, "in-flight interval")
 
 	// Interval 2: that lease settles with a refund after the boundary.
 	if err := r.Settle(ctx, inFlight.ID, 60); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
-	if _, _, drifts, err := rec.ReconcileOnce(ctx); err != nil || len(drifts) != 0 {
-		t.Fatalf("settle-after-boundary drifts = %v err = %v, want none", drifts, err)
-	}
+	requireCleanInterval(t, rec, ctx, "settle-after-boundary")
 
 	// Interval 3: an overage settle (usage above the reservation, no
 	// refund) and a cancelled lease.
@@ -127,9 +127,7 @@ func TestReconcileToleratesInFlightLeasesAndOverage(t *testing.T) {
 	if err := r.Cancel(ctx, released.ID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	if _, _, drifts, err := rec.ReconcileOnce(ctx); err != nil || len(drifts) != 0 {
-		t.Fatalf("overage/release interval drifts = %v err = %v, want none", drifts, err)
-	}
+	requireCleanInterval(t, rec, ctx, "overage/release interval")
 
 	// The exact identity still catches corruption from outside the
 	// ledger protocol.
@@ -142,14 +140,7 @@ func TestReconcileToleratesInFlightLeasesAndOverage(t *testing.T) {
 
 func TestReconcileDetectsInjectedDrift(t *testing.T) {
 	t.Parallel()
-	r, mr := newTestLedger(t)
-	ctx := context.Background()
-
-	if err := r.SetBalance(ctx, "t", 100_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	store := newMemSnapshotStore()
-	rec := NewReconciler(r, []string{"t"}, store)
+	r, mr, rec, ctx := newReconciledLedger(t, 100_000)
 
 	lease, _ := r.Reserve(ctx, "t", 100)
 	if err := r.Settle(ctx, lease.ID, 40); err != nil {
@@ -178,14 +169,7 @@ func TestReconcileDetectsInjectedDrift(t *testing.T) {
 
 func TestReconcileSkipsIntervalAcrossManualCorrection(t *testing.T) {
 	t.Parallel()
-	r, _ := newTestLedger(t)
-	ctx := context.Background()
-
-	if err := r.SetBalance(ctx, "t", 10_000); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	store := newMemSnapshotStore()
-	rec := NewReconciler(r, []string{"t"}, store)
+	r, _, rec, ctx := newReconciledLedger(t, 10_000)
 
 	if _, _, _, err := rec.ReconcileOnce(ctx); err != nil {
 		t.Fatalf("baseline: %v", err)

@@ -30,33 +30,53 @@ func freePort(t *testing.T) string {
 	return addr
 }
 
+// runInBackground starts Run on its own goroutine over a fresh
+// cancellable context and returns the cancel and Run's result channel.
+func runInBackground(opts Options) (context.CancelFunc, <-chan error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- Run(ctx, opts)
+	}()
+	return cancel, runErr
+}
+
+// awaitReady GETs the URL until it answers or the deadline expires; it
+// returns the first successful response (caller closes the body) or
+// the last dial error.
+func awaitReady(url string, timeout time.Duration) (*http.Response, error) {
+	deadline := time.Now().Add(timeout)
+	var err error
+	for {
+		var resp *http.Response
+		resp, err = http.Get(url)
+		if err == nil {
+			return resp, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestRunServesAndDrains(t *testing.T) {
 	t.Parallel()
 	addr := freePort(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	runErr := make(chan error, 1)
-	go func() {
-		runErr <- Run(ctx, Options{
-			Addr:    addr,
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		})
-	}()
+	cancel, runErr := runInBackground(Options{
+		Addr:    addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+	})
+	defer cancel()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		resp, err := http.Get("http://" + addr + "/")
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("status = %d, want 200", resp.StatusCode)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("server never became ready: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
+	resp, err := awaitReady("http://"+addr+"/", 5*time.Second)
+	if err != nil {
+		t.Fatalf("server never became ready: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
 	cancel()
@@ -114,25 +134,14 @@ func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 		<-release
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	runErr := make(chan error, 1)
-	go func() {
-		runErr <- Run(ctx, Options{Addr: addr, Handler: handler, ShutdownGrace: 150 * time.Millisecond})
-	}()
+	cancel, runErr := runInBackground(Options{Addr: addr, Handler: handler, ShutdownGrace: 150 * time.Millisecond})
 
 	// Open one in-flight request so Shutdown has a connection to wait
 	// for. Ephemeral-port reuse can refuse the first dial on Windows,
 	// so dialing retries until the handler is serving.
 	go func() {
-		client := &http.Client{Timeout: 2 * time.Second}
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			resp, err := client.Get("http://" + addr + "/")
-			if err == nil {
-				_ = resp.Body.Close()
-				return
-			}
-			time.Sleep(20 * time.Millisecond)
+		if resp, err := awaitReady("http://"+addr+"/", 10*time.Second); err == nil {
+			_ = resp.Body.Close()
 		}
 	}()
 
@@ -155,6 +164,7 @@ func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not return after the drain window")
 	}
-	// The stuck request goroutine finishes on the client timeout or at
-	// cleanup (release closed); it must not block the test's exit path.
+	// The stuck request goroutine finishes once the drain force-close
+	// errors its connection or at cleanup (release closed); it must not
+	// block the test's exit path.
 }

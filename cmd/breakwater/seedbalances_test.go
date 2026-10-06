@@ -16,21 +16,45 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/quota"
 )
 
+// newSingleTenantIdentity builds the one-tenant static identity the
+// seeder and governance-assembly tests share: tier "free" with a
+// 100-token monthly quota, tenant "t" holding key "k".
+func newSingleTenantIdentity(t *testing.T) *auth.Static {
+	t.Helper()
+	identity, err := auth.NewStatic(auth.StaticConfig{
+		Tiers:   []auth.StaticTier{{ID: "free", MonthlyQuota: 100}},
+		Tenants: []auth.StaticTenant{{ID: "t", Name: "T", Tier: "free", Keys: []string{"k"}}},
+	}, "")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	return identity
+}
+
+// seedProvisionedLedger provisions a fresh memory ledger from the given
+// static identity configuration, the shape the provisioning tests
+// inspect.
+func seedProvisionedLedger(t *testing.T, cfg auth.StaticConfig) *quota.Memory {
+	t.Helper()
+	identity, err := auth.NewStatic(cfg, "")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	ledger := quota.NewMemory()
+	seedBalances(context.Background(), identity, ledger, slog.New(slog.DiscardHandler))
+	return ledger
+}
+
 // TestSeedBalancesProvisionsZeroQuotaTiers: a tier may legitimately
 // budget nothing. Provisioning a zero balance is what keeps that a
 // spending decision (402, the budget is gone) rather than a provisioning
 // fault (503, the tenant has no ledger) — the seeder must not skip it.
 func TestSeedBalancesProvisionsZeroQuotaTiers(t *testing.T) {
 	t.Parallel()
-	identity, err := auth.NewStatic(auth.StaticConfig{
+	ledger := seedProvisionedLedger(t, auth.StaticConfig{
 		Tiers:   []auth.StaticTier{{ID: "free", MonthlyQuota: 0}},
 		Tenants: []auth.StaticTenant{{ID: "t0", Name: "T0", Tier: "free", Keys: []string{"k"}}},
-	}, "")
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
-	ledger := quota.NewMemory()
-	seedBalances(context.Background(), identity, ledger, slog.New(slog.DiscardHandler))
+	})
 
 	ctx := context.Background()
 	if bal, err := ledger.Balance(ctx, "t0"); err != nil || bal != 0 {
@@ -64,13 +88,7 @@ type seedLedgerOpaque struct {
 func TestSeedBalancesEdgeLedgers(t *testing.T) {
 	t.Parallel()
 	logger := slog.New(slog.DiscardHandler)
-	identity, err := auth.NewStatic(auth.StaticConfig{
-		Tiers:   []auth.StaticTier{{ID: "free", MonthlyQuota: 100}},
-		Tenants: []auth.StaticTenant{{ID: "t", Name: "T", Tier: "free", Keys: []string{"k"}}},
-	}, "")
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
+	identity := newSingleTenantIdentity(t)
 
 	// A failing seeder is logged, never panics.
 	seedBalances(context.Background(), identity,

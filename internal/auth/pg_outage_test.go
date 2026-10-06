@@ -18,17 +18,26 @@ import (
 // it fine and only fails when a connection is actually needed.
 const unreachableDSN = "postgres://breakwater:secret@127.0.0.1:1/breakwater"
 
-// TestPGOutageLifecycle: Ping and Resolve fail loudly against a dead
-// system of record, and Close releases the pool cleanly.
-func TestPGOutageLifecycle(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
+// newOutageStore assembles the store against the unreachable DSN under
+// the given bound; assembly must succeed because the pool connects
+// lazily. On the way out the store closes before the context is
+// released — the same order the tests' own defers held.
+func newOutageStore(t *testing.T, timeout time.Duration) (context.Context, *PGStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
 	store, err := NewPGStore(ctx, unreachableDSN, "")
 	if err != nil {
 		t.Fatalf("NewPGStore with a syntactically valid dsn: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(store.Close)
+	return ctx, store
+}
+
+// TestPGOutageLifecycle: Ping and Resolve fail loudly against a dead
+// system of record, and Close releases the pool cleanly.
+func TestPGOutageLifecycle(t *testing.T) {
+	ctx, store := newOutageStore(t, 10*time.Second)
 
 	if err := store.Ping(ctx); err == nil {
 		t.Fatal("Ping against a dead database must fail")
