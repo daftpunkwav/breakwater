@@ -14,7 +14,9 @@
 --   docker compose -f deploy/docker-compose.yml exec -T postgres \
 --     psql -U breakwater -d breakwater < deploy/seed.sql
 
-INSERT INTO tiers (id, rpm, tpm, monthly_quota, per_request_max_tokens, allowed_models)
+INSERT INTO tiers (
+    id, rpm, tpm, monthly_quota, per_request_max_tokens, allowed_models
+)
 VALUES ('free', 60, 200000, 10000000, 4096, ARRAY['*'])
 ON CONFLICT (id) DO NOTHING;
 
@@ -22,8 +24,10 @@ ON CONFLICT (id) DO NOTHING;
 -- every key of the tenant plus a concurrency ceiling of 4.
 INSERT INTO tenants (id, name, role, tier_id, overrides)
 VALUES ('local-1', 'Local Tenant One', 'user', 'free', '{}'),
-       ('local-2', 'Local Tenant Two', 'user', 'free',
-        '{"denied_models":["secret-model"],"concurrency":4}')
+(
+    'local-2', 'Local Tenant Two', 'user', 'free',
+    '{"denied_models":["secret-model"],"concurrency":4}'
+)
 ON CONFLICT (id) DO NOTHING;
 
 -- Unlike the tiers and tenants above, a conflicting key row is restored
@@ -36,10 +40,15 @@ ON CONFLICT (id) DO NOTHING;
 -- govern requests by the pre-update tenant for that window. Restart
 -- the gateway (or wait out the TTL) if that matters to the run.
 INSERT INTO api_keys (id, tenant_id, key_hash)
-VALUES ('key-local-1', 'local-1',
-        'dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088'),
-       ('key-local-2', 'local-2',
-        'a544711afeb45d9c00135b1c18c3e05582f59bd78272137fd30fc204aed2fd76')
+VALUES (
+    'key-local-1', 'local-1',
+    'dbd756faa78508795443155672311944720bab34224dcdde87e6a1bfb2838088'
+),
+(
+    'key-local-2', 'local-2',
+    'a544711afeb45d9c00135b1c18c3e05582f59bd78272137fd30fc204aed2fd76'
+)
 ON CONFLICT (id) DO UPDATE
-SET tenant_id = EXCLUDED.tenant_id,
-    key_hash  = EXCLUDED.key_hash;
+    SET
+        tenant_id = excluded.tenant_id,
+        key_hash = excluded.key_hash;
