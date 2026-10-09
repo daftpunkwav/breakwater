@@ -5,7 +5,7 @@
 - Build context is the repository root. Dockerfiles:
   `breakwater.Dockerfile`, `mockllm.Dockerfile`.
 - Pin the build image to the `go.mod` toolchain
-  (`golang:1.27.2-alpine`). Pin the runtime to `alpine:3.22`.
+  (`golang:1.27.2-alpine`). Pin the runtime to `alpine:3.24`.
 - Build with `CGO_ENABLED=0`. The runtime user is `nobody`.
 - The gateway image creates `/data` owned by `nobody` for the access
   log. The process entrypoint is the binary with no flags.

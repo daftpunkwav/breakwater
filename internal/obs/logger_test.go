@@ -69,12 +69,14 @@ func TestLoggerDropsOldestUnderPressure(t *testing.T) {
 		l.Record(Entry{Status: i})
 	}
 	// The drain goroutine consumes the ring concurrently, so the exact
-	// drop count is timing, not contract. What the ring owes is exact:
-	// every entry lands in exactly one of three states (written,
-	// dropped, buffered) — conservation; the written lines are a
-	// strictly increasing tail of the input ending at the newest
-	// (drop-oldest, FIFO); and at least one full capacity of the
-	// newest entries always survives.
+	// drop count and the survivor set are timing, not contract. What
+	// the ring owes is exact: every entry lands in exactly one of three
+	// states (written, dropped, buffered) — conservation; the written
+	// lines appear in Record order (drop-oldest, FIFO — a subsequence
+	// of the input, not necessarily a tail, because a mid-fill drain
+	// may carry away entries that later eviction would have dropped);
+	// the newest entry always survives; and at least one full capacity
+	// of entries survives.
 	flushWithTimeout(t, l)
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -84,16 +86,21 @@ func TestLoggerDropsOldestUnderPressure(t *testing.T) {
 	if got := l.Dropped(); got != int64(total-len(lines)) {
 		t.Fatalf("dropped = %d with %d written, want the conservation %d", got, len(lines), total-len(lines))
 	}
-	// The survivors are the newest entries, in order, ending at the
-	// last one recorded.
+	// The survivors keep Record order and end at the last entry
+	// recorded.
+	prev := -1
 	for i, line := range lines {
 		var entry Entry
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Fatalf("line %d: %v", i, err)
 		}
-		if want := total - len(lines) + i; entry.Status != want {
-			t.Fatalf("line %d status = %d, want %d", i, entry.Status, want)
+		if entry.Status <= prev {
+			t.Fatalf("line %d status = %d, not above the previous %d — FIFO order broken", i, entry.Status, prev)
 		}
+		prev = entry.Status
+	}
+	if prev != total-1 {
+		t.Fatalf("last written status = %d, want the newest %d", prev, total-1)
 	}
 }
 
