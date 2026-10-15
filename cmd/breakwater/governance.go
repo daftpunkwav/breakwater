@@ -130,6 +130,9 @@ func redisOptions(cfg config.Config) *redis.Options {
 		DialTimeout:  redisDialTimeout,
 		ReadTimeout:  redisSocketTimeout,
 		WriteTimeout: redisSocketTimeout,
+		// Keep pipelines on the main pool so dependency upgrades do not
+		// add connections outside the deployment's existing pool budget.
+		PipelinePoolSize: -1,
 		// -1, not 0: the library reads an unset (0) MaxRetries as its
 		// default of 3 and would multiply every pinned timeout by four
 		// attempts plus backoff — seconds per stage against a black-holed
