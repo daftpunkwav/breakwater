@@ -36,7 +36,7 @@ Format:
 ```
 
 - `<scope>` is optional; omit the parentheses when there is none.
-- `<short summary>`: imperative verb, concise, no trailing period. The entire first line (`<type>(<scope>): <short summary>`) must be **72 characters max**.
+- `<short summary>`: imperative verb, concise, no trailing period. The entire first line (`<type>(<scope>): <short summary>`) is **capped at 72 characters**. The revert message below is the only carve-out.
 - `<body>` (optional for self-explanatory changes): state what changed and why.
 
 Example:
@@ -77,7 +77,7 @@ git rebase origin/main
 git push --force-with-lease
 ```
 
-- Rebase on `origin/main` whenever `main` has advanced since you cut the branch. Never use plain `--force` on a shared branch.
+- Rebase on `origin/main` whenever `main` has advanced since you cut the branch. On a shared branch, prefer `--force-with-lease` over plain `--force`.
 - Complete local self-review and test verification before pushing to minimize unnecessary CI and reviewer runs.
 
 ### After merge
