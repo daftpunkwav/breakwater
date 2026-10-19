@@ -116,14 +116,18 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	fx := newBackoffFixture(t)
 
 	// First failure: probed, and the next attempt lands one interval
-	// out.
+	// out. The schedule is measured from the instant the pass started,
+	// so it sits inside the window the pass spans: asserting against
+	// the wall clock instead would race the pass's own duration.
+	before := time.Now()
 	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	after := time.Now()
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
 		t.Fatalf("probe count = %d, want 1", got)
 	}
 	r := fx.book.retries["u1"]
-	if r.fails != 1 || !r.next.After(time.Now()) {
-		t.Fatalf("schedule after first failure = %+v, want fails 1 and a future next", r)
+	if r.fails != 1 || r.next.Before(before.Add(backoffInterval)) || r.next.After(after.Add(backoffInterval)) {
+		t.Fatalf("schedule after first failure = %+v, want fails 1 and a next one interval out", r)
 	}
 
 	// A pass inside the backoff window must skip the upstream: no new
@@ -138,7 +142,9 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 
 	// Once due, the probe fires onto the next rung: double the wait.
 	fx.book.retries["u1"] = probeRetry{fails: r.fails, next: time.Now().Add(-time.Millisecond)}
+	before = time.Now()
 	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	after = time.Now()
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 2 {
 		t.Fatalf("probe count after due pass = %d, want 2", got)
 	}
@@ -146,8 +152,8 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	if r2.fails != 2 {
 		t.Fatalf("fails = %d, want 2", r2.fails)
 	}
-	if wait := time.Until(r2.next); wait < backoffInterval || wait > 2*backoffInterval+50*time.Millisecond {
-		t.Fatalf("second wait = %s, want one doubled interval", wait)
+	if r2.next.Before(before.Add(2*backoffInterval)) || r2.next.After(after.Add(2*backoffInterval)) {
+		t.Fatalf("second schedule = %+v, want a next two intervals out", r2)
 	}
 }
 

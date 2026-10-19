@@ -8,6 +8,7 @@ package httpserver
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -44,12 +45,12 @@ func runInBackground(opts Options) (context.CancelFunc, <-chan error) {
 // awaitReady GETs the URL until it answers or the deadline expires; it
 // returns the first successful response (caller closes the body) or
 // the last dial error.
-func awaitReady(url string, timeout time.Duration) (*http.Response, error) {
+func awaitReady(client *http.Client, url string, timeout time.Duration) (*http.Response, error) {
 	deadline := time.Now().Add(timeout)
 	var err error
 	for {
 		var resp *http.Response
-		resp, err = http.Get(url)
+		resp, err = client.Get(url)
 		if err == nil {
 			return resp, nil
 		}
@@ -60,32 +61,57 @@ func awaitReady(url string, timeout time.Duration) (*http.Response, error) {
 	}
 }
 
+// drainGrace is the shutdown window the drain tests grant the server:
+// long enough for a real drain, short enough that a drain which
+// overruns it surfaces as an error instead of a hang.
+const drainGrace = 2 * time.Second
+
 func TestRunServesAndDrains(t *testing.T) {
 	t.Parallel()
 	addr := freePort(t)
 
 	cancel, runErr := runInBackground(Options{
-		Addr:    addr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Addr:          addr,
+		Handler:       http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		ShutdownGrace: drainGrace,
 	})
 	defer cancel()
 
-	resp, err := awaitReady("http://"+addr+"/", 5*time.Second)
+	// The client keeps a transport of its own: the process-wide default
+	// transport shares one connection pool across the whole test
+	// binary, and a keep-alive connection left behind by another test
+	// would show up in this server's drain.
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+
+	resp, err := awaitReady(client, "http://"+addr+"/", 5*time.Second)
 	if err != nil {
 		t.Fatalf("server never became ready: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+	// The body is drained before it is closed: a body closed unread
+	// leaves the connection half-closed, and the client transport then
+	// dials a replacement the server holds in StateNew — a connection
+	// the drain waits on for seconds.
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 
+	// The client's keep-alive connections go before the cancel: the
+	// server then drains nothing and returns as soon as it is told to
+	// stop, which is what this test is about. A connection the client
+	// still holds would leave the drain waiting on a peer that is not
+	// going to send anything.
+	transport.CloseIdleConnections()
 	cancel()
 	select {
 	case err := <-runErr:
 		if err != nil {
 			t.Fatalf("run returned error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(drainGrace + 3*time.Second):
 		t.Fatal("run did not return after cancel")
 	}
 }
@@ -140,7 +166,7 @@ func TestRunDrainTimeoutSurfacesError(t *testing.T) {
 	// for. Ephemeral-port reuse can refuse the first dial on Windows,
 	// so dialing retries until the handler is serving.
 	go func() {
-		if resp, err := awaitReady("http://"+addr+"/", 10*time.Second); err == nil {
+		if resp, err := awaitReady(http.DefaultClient, "http://"+addr+"/", 10*time.Second); err == nil {
 			_ = resp.Body.Close()
 		}
 	}()
