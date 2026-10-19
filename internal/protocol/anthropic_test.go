@@ -115,6 +115,69 @@ func TestAnthropicWireRenderError(t *testing.T) {
 	}
 }
 
+// TestAnthropicConcurrencyRejectionIsARateLimit pins that both of the
+// gateway's 429 ceilings answer with the one type the Messages
+// vocabulary has for that status. A concurrency rejection carries
+// Retry-After guidance exactly like a rate limit, so rendering it
+// api_error would tell a client to give up on a wait it was handed.
+func TestAnthropicConcurrencyRejectionIsARateLimit(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	WireFor(FormatAnthropicMessages).RenderError(rec, http.StatusTooManyRequests,
+		string(CodeConcurrencyLimited), "tenant concurrency limit exceeded")
+	if got := rec.Body.String(); !strings.Contains(got, `"type":"rate_limit_error"`) {
+		t.Fatalf("body = %s, want rate_limit_error", got)
+	}
+}
+
+// TestAnthropicUpstreamErrorForwardsRetryAfter pins that a relayed
+// upstream 429 keeps both halves of its own wait guidance on this wire:
+// the header and the rate-limit type. The other two wires forward the
+// header through the shared passthrough set.
+func TestAnthropicUpstreamErrorForwardsRetryAfter(t *testing.T) {
+	t.Parallel()
+	header := headerOf("application/json")
+	header.Set("Retry-After", "7")
+	header.Set("X-Internal", "secret")
+	rec := httptest.NewRecorder()
+
+	WireFor(FormatAnthropicMessages).RenderUpstreamError(rec, http.StatusTooManyRequests,
+		header, []byte(`{"error":{"message":"slow down","code":"429"}}`))
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "7" {
+		t.Fatalf("retry-after = %q, want the upstream wait forwarded", got)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, `"type":"rate_limit_error"`) {
+		t.Fatalf("body = %s, want rate_limit_error", got)
+	}
+	if got := rec.Header().Get("X-Internal"); got != "" {
+		t.Fatalf("internal header leaked: %q", got)
+	}
+}
+
+// TestAnthropicUpstreamErrorRejectsIllegalRetryAfter pins that the
+// forwarded value clears the same legality check the passthrough set
+// applies: the header is upstream-controlled.
+func TestAnthropicUpstreamErrorRejectsIllegalRetryAfter(t *testing.T) {
+	t.Parallel()
+	header := headerOf("application/json")
+	header.Set("Retry-After", "3\r\nSet-Cookie: injected=1")
+	rec := httptest.NewRecorder()
+
+	WireFor(FormatAnthropicMessages).RenderUpstreamError(rec, http.StatusServiceUnavailable,
+		header, []byte(`{"error":{"message":"overloaded"}}`))
+
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("illegal retry-after relayed: %q", got)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, `"type":"api_error"`) {
+		t.Fatalf("body = %s, want api_error for a non-429", got)
+	}
+}
+
 // startAnthropicStream opens the Anthropic stream transcoder over a
 // fresh recorder and emits the message_start preamble; it returns both
 // so the tests drive deltas and read the emitted frames.
