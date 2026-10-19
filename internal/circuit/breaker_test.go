@@ -141,6 +141,40 @@ func TestBreakerGatewayTerminationIsNotEvidence(t *testing.T) {
 	}
 }
 
+// TestBreakerLateReportIsNotEvidence pins the half-open deadline rule
+// the shared skeleton owns (machine.go): past its probe timeout a
+// report is unreliable no matter which outcome it carries — a hung
+// holder and a holder that answered but reported late look the same.
+// The consecutive registry and the slow-call registry apply that rule
+// identically; here the client fault is the case that decides it,
+// because a 4xx carries no health verdict of its own and would
+// otherwise let any late 4xx close the breaker.
+func TestBreakerLateReportIsNotEvidence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		outcome Outcome
+	}{
+		{"success", OutcomeSuccess},
+		{"slow", OutcomeSlow},
+		{"client fault", OutcomeClientFault},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, advance := testRegistry(t, nil)
+			ctx := context.Background()
+
+			probe := openThenProbe(t, b, advance)
+			advance(2 * time.Second) // the probe outlives its own deadline
+			probe.Report(tc.outcome)
+
+			if got := b.StateOf(ctx, "u"); got != StateOpen {
+				t.Fatalf("state = %s, want open: a report past the probe deadline is not evidence", got)
+			}
+		})
+	}
+}
+
 func TestBreakerHalfOpenAdmitsSingleProbe(t *testing.T) {
 	t.Parallel()
 	b, advance := testRegistry(t, nil)
