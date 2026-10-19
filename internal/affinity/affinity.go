@@ -21,10 +21,12 @@
  *   caller already cleared, so a dead or excluded upstream can never
  *   pin traffic
  *
- * Memory is bounded twice over: a per-model node ceiling, and a
- * freshness TTL enforced by a throttled sweep on the write path (the
- * same discipline the cache module's expiry uses) — a node no insert
- * or match has touched within the TTL is pruned oldest-first.
+ * Memory is bounded three times over: a ceiling on how many model
+ * tries exist at once, a per-model node ceiling, and a freshness TTL
+ * enforced by a throttled sweep on the write path (the same discipline
+ * the cache module's expiry uses) — a node no insert or match has
+ * touched within the TTL is pruned oldest-first, and a trie left empty
+ * by that prune is dropped with it.
  */
 package affinity
 
@@ -51,6 +53,14 @@ const (
 	// ceiling is skipped after a sweep — affinity quietly degrades to
 	// plain strategy order instead of growing without bound.
 	maxNodes = 8192
+	// maxModels caps how many per-model tries the index holds at once.
+	// The map key is a client-supplied model name, which a
+	// wildcard-served deployment resolves for any string, so an
+	// unbounded map would keep one trie per name a client ever asked
+	// for. A model past the ceiling routes on strategy order alone —
+	// the same graceful degradation the node ceiling applies inside one
+	// trie.
+	maxModels = 512
 )
 
 // node is one prefix depth in a trie: one chunk hash further from the
@@ -115,12 +125,21 @@ func (x *Index) Pick(model, prompt string, ids []string) int {
 	defer x.mu.Unlock()
 	now := x.now()
 	t := x.models[model]
+	// The sweep runs before the ceiling is consulted: a prune that
+	// emptied other tries is exactly what frees room below.
+	if x.sweptAt.IsZero() || now.Sub(x.sweptAt) >= x.ttl/2 || (t != nil && t.nodes >= maxNodes) {
+		x.sweep(now)
+		t = x.models[model]
+	}
 	if t == nil {
+		if len(x.models) >= maxModels {
+			// No room and no sweep freed any: route on the strategy
+			// order alone. Recording nothing is the same graceful
+			// degradation the node ceiling applies inside one trie.
+			return -1
+		}
 		t = &trie{root: &node{touched: now}}
 		x.models[model] = t
-	}
-	if x.sweptAt.IsZero() || now.Sub(x.sweptAt) >= x.ttl/2 || t.nodes >= maxNodes {
-		x.sweep(now)
 	}
 	chosen := t.match(chunks, ids, now)
 	if chosen < 0 {
@@ -198,13 +217,21 @@ func (t *trie) record(chunks []uint64, id string, now time.Time) {
 	}
 }
 
-// sweep prunes every trie's nodes untouched for ttl. It runs on the
-// write path at most once per half-TTL — the same throttled-sweep
-// discipline the cache module uses — plus whenever a trie sits at its
-// node ceiling and a record needs room.
+// sweep prunes every trie's nodes untouched for ttl, releasing the
+// tries that pruning empties. It runs on the write path at most once per
+// half-TTL — the same throttled-sweep discipline the cache module uses —
+// plus whenever a trie sits at its node ceiling and a record needs room.
 func (x *Index) sweep(now time.Time) {
-	for _, t := range x.models {
+	for model, t := range x.models {
 		x.prune(t, t.root, now)
+		// A trie whose root lost every child holds no record at all.
+		// Leaving it would keep one map entry per model name a client
+		// ever asked for — and the name is client input wherever a
+		// wildcard binding serves the request. An absent trie and an
+		// empty one behave identically, so the entry is pure residue.
+		if len(t.root.children) == 0 {
+			delete(x.models, model)
+		}
 	}
 	x.sweptAt = now
 }
