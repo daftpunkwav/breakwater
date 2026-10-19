@@ -205,11 +205,11 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Out:        w,
 	})
 
-	// Settlement input: real usage when the reply carried one, the
-	// byte-derived estimate for streams that ended without it, the
-	// reservation itself as the last resort for a delivered 2xx reply,
-	// and zero for a failure — an error reply served no tokens, so its
-	// reservation refunds in full.
+	// Settlement input: real usage when the reply carried a usable
+	// accounting answer, the byte-derived estimate for a stream that ended
+	// without one, the reservation itself as the last resort for a
+	// delivered 2xx reply, and zero for a failure — an error reply served
+	// no tokens, so its reservation refunds in full.
 	settleConsumption(carrier, result)
 	carrier.Relay = &result
 }
@@ -244,9 +244,17 @@ func settleConsumption(carrier *pipeline.Carrier, result relay.Result) {
 	switch {
 	case result.Status < 200 || result.Status > 299:
 		carrier.Consumed = 0
-	case result.UsageKnown:
+	case result.UsageKnown && result.Usage.TotalTokens > 0:
 		carrier.Consumed = result.Usage.TotalTokens
 	case result.Streamed:
+		// A usage object reporting nothing spent (or less than nothing) is
+		// no accounting answer: the gateway cannot tell a provider's own
+		// cache hit from a reply it simply failed to meter. The zero rung
+		// above is reserved for requests that served nothing — a
+		// rejection, a cache hit, a failed exchange — and a delivered 2xx
+		// landing there hands the tenant its whole reservation back for
+		// tokens the upstream really charged. Such a reply therefore falls
+		// through to the estimate here and to the reservation below.
 		carrier.Consumed = carrier.EstimatePartialTokens(result.StreamBytes)
 	default:
 		carrier.Consumed = carrier.Tokens
