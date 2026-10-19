@@ -279,7 +279,6 @@ type anthropicStream struct {
 	id    string
 	model string
 	block bool // content block opened
-	text  []byte
 	stop  string
 }
 
@@ -329,7 +328,6 @@ func (s *anthropicStream) Delta(w ioWriter, payload []byte) error {
 				return err
 			}
 		}
-		s.text = append(s.text, text...)
 		return WriteEvent(w, "content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": 0,
