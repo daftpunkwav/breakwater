@@ -87,14 +87,8 @@ func (m *Memory) Allow(_ context.Context, tenantID string, limits Limits, tokens
 	// Idle buckets stop occupying memory here, at most one pass per
 	// horizon: a bucket is dropped by the first sweep after its idle
 	// TTL, so the maps hold the buckets of the last two horizons rather
-	// than one per tenant the process ever served. The pass is O(map)
-	// under the lock every request shares, which is why the interval is
-	// the horizon rather than the sweepInterval cache.Memory uses — the
-	// bound is only ever needed to be loose, not tight.
-	if m.sweptAt.IsZero() || !m.sweptAt.After(now) {
-		m.sweepLocked(now)
-		m.sweptAt = now.Add(bucketIdleTTL)
-	}
+	// than one per tenant the process ever served.
+	m.sweepIfDue(now)
 
 	rpm, tpm := m.refilled(tenantID, limits, now)
 
@@ -157,6 +151,21 @@ func (m *Memory) refillOne(buckets map[string]*bucket, key string, capacity int6
 	}
 	b.last = now
 	return b
+}
+
+// sweepIfDue runs the idle-bucket pass when its window has elapsed and
+// arms the next one. The pass is O(map) under the lock every request
+// shares, which is why the interval is the horizon rather than the
+// sweepInterval cache.Memory uses: the bound only ever needs to be
+// loose, not tight.
+//
+// The clock comparison tolerates a wall clock that moved backwards, so
+// a backward step arms the window instead of skipping the pass forever.
+func (m *Memory) sweepIfDue(now time.Time) {
+	if m.sweptAt.IsZero() || !m.sweptAt.After(now) {
+		m.sweepLocked(now)
+		m.sweptAt = now.Add(bucketIdleTTL)
+	}
 }
 
 // sweepLocked drops every bucket idle for at least the horizon, the
