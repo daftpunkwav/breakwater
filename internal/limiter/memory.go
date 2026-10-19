@@ -179,14 +179,17 @@ func (m *Memory) sweepIfDue(now time.Time) {
 // the buckets no longer influence.
 func (m *Memory) sweepLocked(now time.Time) {
 	cutoff := now.Add(-bucketIdleTTL)
-	for key, b := range m.rpm {
+	sweepIdleBuckets(m.rpm, cutoff)
+	sweepIdleBuckets(m.tpm, cutoff)
+}
+
+// sweepIdleBuckets drops the buckets of one dimension that have been
+// untouched since the cutoff. The two dimensions are swept by the same
+// rule, so they share the pass.
+func sweepIdleBuckets(buckets map[string]*bucket, cutoff time.Time) {
+	for key, b := range buckets {
 		if !b.last.After(cutoff) {
-			delete(m.rpm, key)
-		}
-	}
-	for key, b := range m.tpm {
-		if !b.last.After(cutoff) {
-			delete(m.tpm, key)
+			delete(buckets, key)
 		}
 	}
 }
