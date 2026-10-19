@@ -81,6 +81,11 @@ type Executor struct {
 	// performance tracking.
 	bulkhead    Bulkhead
 	bulkheadMax int64
+	// now reads the attempt clock: the instant an attempt starts and
+	// the instant its responsiveness is measured against. Injectable
+	// so the slow-call classification can be driven by a test instead
+	// of raced against the wall clock.
+	now func() time.Time
 }
 
 // Bulkhead is the per-upstream slot gate: non-blocking, one slot per
@@ -167,6 +172,13 @@ func WithUpstreamBulkhead(gate Bulkhead, limit int64) Option {
 	return func(e *Executor) { e.bulkhead = gate; e.bulkheadMax = limit }
 }
 
+// WithClock overrides the attempt clock for tests: the instant an
+// attempt starts and the instant its responsiveness is measured
+// against. The default is the wall clock.
+func WithClock(now func() time.Time) Option {
+	return func(e *Executor) { e.now = now }
+}
+
 // New builds an Executor. A nil budget disables the global in-flight
 // retry cap; the per-request MaxAttempts still applies. Pass a budget
 // to bound retry amplification across the process.
@@ -175,6 +187,7 @@ func New(policy retry.Policy, budget *retry.Budget, opts ...Option) *Executor {
 		policy:     policy,
 		budget:     budget,
 		classifier: retry.DefaultClassifier{},
+		now:        time.Now,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -432,7 +445,7 @@ func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 		defer release()
 	}
 
-	started := time.Now()
+	started := r.exec.now()
 	r.startedAt = started
 	r.responsiveness = 0
 	outcome, err := r.exchange(attemptCtx, cand, model)
@@ -449,7 +462,7 @@ func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 		// The verdict is the same clientFault rule the breaker
 		// accounting applies — one story for a disconnect.
 		failed := err != nil && !clientFault(r.ctx, err)
-		r.exec.observer.ObserveUpstream(cand.ID(), time.Since(started), failed)
+		r.exec.observer.ObserveUpstream(cand.ID(), r.exec.now().Sub(started), failed)
 	}
 	if perm != nil {
 		perm.Report(outcome)
