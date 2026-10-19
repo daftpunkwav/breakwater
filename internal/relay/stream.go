@@ -14,8 +14,8 @@
  * Allocation discipline: one SSE stream carries thousands of frames, so
  * the pump reads lines through bufio ReadSlice (no per-line copy for
  * lines that fit the buffer; over-long lines fall back to an
- * accumulating read) and reuses one outgoing buffer instead of building
- * a fresh string per frame.
+ * accumulating read capped at the response body bound) and reuses one
+ * outgoing buffer instead of building a fresh string per frame.
  */
 package relay
 
@@ -208,10 +208,22 @@ func (r *activityReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// errStreamLineTooLong reports a single SSE line that outgrew the
+// response body cap: the upstream has stopped sending events and is
+// now writing an unbounded body behind no terminator.
+var errStreamLineTooLong = errors.New("relay: upstream SSE line exceeded the response body cap")
+
 // readLine returns the next '\n'-terminated line without copying for
 // lines that fit bufio's buffer. A line longer than the buffer is
 // accumulated by falling back to the allocating read. The returned
 // slice is valid only until the next read.
+//
+// The accumulation is capped at the same bound the buffered path puts
+// on a whole response body. Without it the terminator is the only thing
+// that ends the slice, and a stream still counts as activity on every
+// read, so the idle watchdog never fires either: one upstream that
+// never emits '\n' grows the gateway's heap until the process dies,
+// with no other limit in the path.
 func readLine(reader *bufio.Reader) ([]byte, error) {
 	line, err := reader.ReadSlice('\n')
 	if err != bufio.ErrBufferFull {
@@ -219,6 +231,9 @@ func readLine(reader *bufio.Reader) ([]byte, error) {
 	}
 	whole := append([]byte(nil), line...)
 	for err == bufio.ErrBufferFull {
+		if len(whole) >= maxResponseBytes {
+			return nil, errStreamLineTooLong
+		}
 		line, err = reader.ReadSlice('\n')
 		whole = append(whole, line...)
 	}
