@@ -678,9 +678,10 @@ func contentLengthHint(header http.Header) int64 {
 }
 
 // snapshot builds an exchangeSnapshot from a response and its buffered
-// body. The body comes from readBounded's io.ReadAll — private to this
-// goroutine — so it is held as-is; only the header is cloned, because
-// the upstream Response contract lets the adapter keep mutating it.
+// body. The body is readBounded's own bytes.Buffer, allocated and filled
+// on this goroutine, so it is held as-is; only the header is cloned,
+// because the upstream Response contract lets the adapter keep mutating
+// it.
 func snapshot(status int, header http.Header, body []byte) *exchangeSnapshot {
 	return &exchangeSnapshot{status: status, header: header.Clone(), body: body}
 }

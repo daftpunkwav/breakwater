@@ -26,9 +26,10 @@ CREATE TABLE IF NOT EXISTS tenants (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     tier_id TEXT NOT NULL REFERENCES tiers (id),
-    -- Management-surface privilege: 'user' (default) or 'admin'. The
-    -- role governs administration only; inference governance is the
-    -- same for both.
+    -- Recorded label: 'user' (default) or 'admin'. Stored, validated and
+    -- reported back by the admin API, but read by no authorization path:
+    -- the management surface is guarded by the shared admin bearer token
+    -- and inference governance is the same for both roles.
     role TEXT NOT NULL DEFAULT 'user',
     -- User-level limit deviations (the auth.LimitOverride JSON shape),
     -- applied to every key of this tenant on top of the tier defaults;

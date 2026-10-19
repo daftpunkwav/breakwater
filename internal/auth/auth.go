@@ -67,8 +67,8 @@ const (
 )
 
 // Tenant is the identity a request is attributed to: a user of the
-// gateway (Role carries the management-surface privilege) resolving
-// through one API key.
+// gateway, resolved through one API key. Role is carried along as
+// recorded metadata only — see the Role doc.
 type Tenant struct {
 	ID   string
 	Name string

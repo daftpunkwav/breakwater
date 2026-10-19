@@ -325,9 +325,10 @@ type Obs struct {
 	// disables the file sink (metrics stay active).
 	AccessLogPath string
 	// InsightsDSN is the PostgreSQL database the monitoring and
-	// assessment records persist to; empty disables the record store
-	// (the access log and metrics stay active). Defaults to the main
-	// identity DSN when that is configured.
+	// assessment records persist to. Empty falls back to the identity
+	// DSN; the record store is disabled only when neither is set (the
+	// access log and metrics stay active). The fallback is resolved at
+	// assembly, not by Load, which reads only this variable.
 	InsightsDSN string
 }
 

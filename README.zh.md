@@ -143,6 +143,8 @@ quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` �
 | `BREAKWATER_SHUTDOWN_GRACE`           | `15s`          | shutdown 开始后的排空窗口；到期仍在途的流被切断、记一条 warning，进程仍以成功退出 |
 | `BREAKWATER_UPSTREAMS`                | _(无)_         | upstream 的 JSON 列表（`id`、`base_url`、`probe_url`、`api_key`、`api_keys`、`models`；列表顺序 = failover 优先级；`"client=real"` 条目做模型别名；`api_keys` 在同一 upstream 后轮换多把凭据）。未知成员与不在 `[A-Za-z0-9._-]{1,128}` 内的 id 拒绝启动 |
 | `BREAKWATER_ROUTING_STRATEGY`         | `static`       | 候选顺序：`static`（配置顺序）或 `latency`（实测交换延迟优先；近乎打平的候选按请求轮换领先权，其余并列由配置顺序裁决；未试过的 upstream 优先探索） |
+| `BREAKWATER_ROUTING_AFFINITY_TTL`     | `0s` _(关)_        | prompt 前缀亲和：一条已记录前缀保持新鲜的时间。正值会把持有最长匹配 prompt 前缀的合格 upstream 提到候选列表首位，复用它温热的 prompt cache；索引由过期与每模型节点上限约束，breaker 或运维开关的排除始终压过已记录的匹配 |
+| `BREAKWATER_UPSTREAM_MAX_INFLIGHT`    | `0` _(关)_         | 每 upstream 在途上限：因 upstream 触到上限而被拒的 attempt 跳到下一个候选，不喂 breaker 也不喂性能追踪；只有全部候选都饱和时请求才以 `503 upstream_saturated` 失败。零表示 upstream 并发不受限 |
 | `BREAKWATER_FALLBACKS`                | _(无)_         | 模型 → 有序 fallback 模型的 JSON 映射，在主模型每个候选耗尽后尝试（`{"gpt-4o":["gpt-4o-mini"]}`）；键与目标必须指向已配置的 client-facing 模型 |
 | `BREAKWATER_CONTEXT_LIMITS`           | _(无)_         | 模型 → 最大输入 token 估算的 JSON 映射；超出上限的 prompt 提前拒绝该模型的全部候选，返回 `413 context_window_exceeded`，而不是注定失败的 upstream 交换 |
 | `BREAKWATER_IDENTITY`                 | _(无)_         | JSON identity 集合（`tiers`、带 `role` 与用户级 `overrides` 的 `tenants`；未知成员拒绝启动，tenant id 限 `[A-Za-z0-9._-]{1,128}`）；武装 governance pipeline。也接受 `file://<路径>`，从文件加载 JSON，避免明文 API key 进入进程环境 |
@@ -180,7 +182,7 @@ quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` �
 - `GET /healthz` — liveness
 - `GET /readyz` — readiness（以 fail-closed limiter 依赖的 backend 为闸；
   它不说谎）
-- `GET /metrics` — Prometheus 文本暴露（手写 registry）
+- `GET /metrics` — Prometheus 文本暴露（手写 registry）。该端点不鉴权，其 `tenant` label 携带 tenant id，故应只放在仅供抓取的网段上
 - `GET /version` — 构建标识与 Go 版本
 - `GET /admin/tenants/{id}/quota` — 当前余额
 - `PUT /admin/tenants/{id}/quota` — 充值或修正余额（`{"balance": N}`）；对无余额
