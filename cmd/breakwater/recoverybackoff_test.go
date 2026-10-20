@@ -29,6 +29,11 @@ const backoffInterval = 100 * time.Millisecond
 // two rungs above the base interval.
 const backoffCeiling = 400 * time.Millisecond
 
+// slowProbeDelay is how long the delayed probe target stalls before
+// answering: longer than backoffInterval, so the pass arming the
+// first-failure schedule outlasts that schedule's base.
+const slowProbeDelay = 150 * time.Millisecond
+
 // TestProbeBackoffLadder: the wait starts at one base interval and
 // doubles per consecutive failure, never past the ceiling and never
 // overflowing, however long the streak grows.
@@ -154,6 +159,29 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	}
 	if r2.next.Before(before.Add(2*backoffInterval)) || r2.next.After(after.Add(2*backoffInterval)) {
 		t.Fatalf("second schedule = %+v, want a next two intervals out", r2)
+	}
+}
+
+// TestRecoveryBackoffSchedulesFromPassStart: the failed-probe schedule
+// is measured from the instant the pass started, not from its
+// completion. The probe outlasts the base interval, so the two
+// timestamps land on opposite sides of the pass's end and a
+// completion-time measurement would push the next attempt a full
+// interval past the pass.
+func TestRecoveryBackoffSchedulesFromPassStart(t *testing.T) {
+	t.Parallel()
+	fx := newBackoffFixture(t)
+	fx.probes["u1"] = newDelayedProbeTarget(t, http.StatusServiceUnavailable, slowProbeDelay)
+
+	before := time.Now()
+	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	after := time.Now()
+	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
+		t.Fatalf("probe count = %d, want 1", got)
+	}
+	r := fx.book.retries["u1"]
+	if r.fails != 1 || r.next.Before(before.Add(backoffInterval)) || !r.next.Before(after) {
+		t.Fatalf("schedule after first failure = %+v, want fails 1 and a next one interval out from the pass start", r)
 	}
 }
 

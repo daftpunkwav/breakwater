@@ -111,6 +111,23 @@ func newProbeTarget(t *testing.T, status int) upstream.Upstream {
 	return newProbeAdapter(t, srv.URL)
 }
 
+// newDelayedProbeTarget spins up an upstream whose probe endpoint
+// stalls for the delay before answering with the given status, so a
+// recovery pass holding it spans a known floor of time. The stall
+// honors the request context, so a probe timeout still cuts it short.
+func newDelayedProbeTarget(t *testing.T, status int, delay time.Duration) upstream.Upstream {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(delay):
+		}
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return newProbeAdapter(t, srv.URL)
+}
+
 // waitFor polls cond until it holds or the deadline passes.
 func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 	t.Helper()
