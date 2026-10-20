@@ -149,10 +149,17 @@ func (s *SlowRegistry) Reset(_ context.Context, upstreamID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.stateOf(upstreamID)
-	*st = slowState{
-		machine:   machine{id: st.id, name: StateClosed},
-		lastWrite: s.gov.now(),
-	}
+	// The state change runs through the shared skeleton, exactly like
+	// the consecutive registry's reset: enter fires the transition
+	// observer, so a machine the state gauge left published as open is
+	// republished closed at the moment of the reset instead of holding
+	// the stale reading until the machine next moves.
+	s.gov.enter(&st.machine, StateClosed, st.clearWindow)
+	// The evidence and its clock start over even when the machine was
+	// already closed: enter no-ops there, and the operator asked for
+	// clean observation either way.
+	st.clearWindow()
+	st.lastWrite = s.gov.now()
 }
 
 // clearWindow empties the evidence; entering closed drops what the

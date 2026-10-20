@@ -222,6 +222,55 @@ func TestSlowResetEmptiesEverything(t *testing.T) {
 	}
 }
 
+// TestSlowResetFiresTheTransitionObserver: the reset publishes the
+// closed machine the same way every other transition does. The
+// consecutive registry's reset already runs through the shared
+// skeleton's enter; a slow registry that bypassed it left the state
+// gauge reading open after an operator reset an open breaker — while
+// StateOf and the admin view read closed — until the machine happened
+// to move again.
+func TestSlowResetFiresTheTransitionObserver(t *testing.T) {
+	t.Parallel()
+	step := 0
+	now := func() time.Time { return time.Unix(0, 0).Add(time.Duration(step) * slowBucketSpan) }
+	type transition struct{ from, to State }
+	var got []transition
+	reg := NewSlowRegistry(Config{SlowRatio: 0.5}, SlowClock(now),
+		SlowOnTransition(func(id string, from, to State) {
+			got = append(got, transition{from, to})
+		}))
+	const id = "u1"
+
+	for i := 0; i < slowMinSamples; i++ {
+		step++
+		p, ok := reg.Allow(context.Background(), id)
+		if !ok {
+			t.Fatalf("setup: closed breaker denied call %d", i)
+		}
+		p.Report(OutcomeSlow)
+	}
+	if state := reg.StateOf(context.Background(), id); state != StateOpen {
+		t.Fatalf("setup: state = %s, want open", state)
+	}
+	got = nil
+
+	reg.Reset(context.Background(), id)
+	if state := reg.StateOf(context.Background(), id); state != StateClosed {
+		t.Fatalf("state = %s, want closed after the reset", state)
+	}
+	if len(got) != 1 || got[0].from != StateOpen || got[0].to != StateClosed {
+		t.Fatalf("transitions on reset = %v, want exactly [open->closed]", got)
+	}
+
+	// A reset of an already-closed machine is no transition: nothing
+	// fires, and the window is still emptied for the next observation.
+	got = nil
+	reg.Reset(context.Background(), id)
+	if len(got) != 0 {
+		t.Fatalf("transitions on a closed-machine reset = %v, want none", got)
+	}
+}
+
 // TestSlowRatioDefaultAndClamp: a ratio outside (0, 1] selects the
 // default, so a misconfigured deployment cannot build a breaker that
 // never opens (0) or always opens (>1). NaN counts as outside: every
