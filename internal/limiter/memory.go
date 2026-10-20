@@ -162,7 +162,7 @@ func (m *Memory) refillOne(buckets map[string]*bucket, key string, capacity int6
 // The clock comparison tolerates a wall clock that moved backwards, so
 // a backward step arms the window instead of skipping the pass forever.
 func (m *Memory) sweepIfDue(now time.Time) {
-	if m.sweptAt.IsZero() || !m.sweptAt.After(now) {
+	if m.sweptAt.IsZero() || !m.sweptAt.After(now) || m.sweptAt.After(now.Add(bucketIdleTTL)) {
 		m.sweepLocked(now)
 		m.sweptAt = now.Add(bucketIdleTTL)
 	}

@@ -96,3 +96,39 @@ func TestMemoryZeroLimitDisablesCeiling(t *testing.T) {
 		}
 	}
 }
+
+// TestMemorySweepRearmsAfterBackwardStep: a wall clock stepped back
+// past the horizon must not silence the idle-bucket pass. The stale
+// window sits ahead of every reachable now, so the pass re-arms
+// against the stepped-back clock and buckets keep aging out.
+func TestMemorySweepRearmsAfterBackwardStep(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+	limits := Limits{RPM: 60, TPM: 0}
+
+	clock := time.Now()
+	m.WithClock(func() time.Time { return clock })
+
+	// The pass runs on the first decision and drops a tenant idle past
+	// the horizon.
+	drainBurst(t, ctx, m, "gone", limits, 1, "create")
+	clock = clock.Add(bucketIdleTTL + time.Minute)
+	drainBurst(t, ctx, m, "kept", limits, 1, "sweep")
+	if _, ok := m.rpm["gone:rpm"]; ok {
+		t.Fatal("bucket idle past the horizon survived the sweep")
+	}
+
+	// Step the clock back more than the horizon: the window armed
+	// before the step now sits past any reachable now. The next
+	// decision must re-arm the window rather than wait the stale
+	// horizon out, so a bucket created under the stepped-back clock
+	// still drops once the clock moves on a horizon.
+	clock = clock.Add(-3 * bucketIdleTTL)
+	drainBurst(t, ctx, m, "doomed", limits, 1, "create under the stepped-back clock")
+	clock = clock.Add(bucketIdleTTL + time.Minute)
+	drainBurst(t, ctx, m, "later", limits, 1, "sweep")
+	if _, ok := m.rpm["doomed:rpm"]; ok {
+		t.Fatal("the backward step silenced the sweep: a bucket idle past the horizon survived")
+	}
+}
