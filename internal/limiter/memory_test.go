@@ -98,37 +98,48 @@ func TestMemoryZeroLimitDisablesCeiling(t *testing.T) {
 }
 
 // TestMemorySweepRearmsAfterBackwardStep: a wall clock stepped back
-// past the horizon must not silence the idle-bucket pass. The stale
-// window sits ahead of every reachable now, so the pass re-arms
-// against the stepped-back clock and buckets keep aging out.
+// must not silence the idle-bucket pass. The window is armed a
+// horizon ahead of the instant that armed it, so a backward step
+// leaves it more than a horizon ahead of now — the state that re-arms
+// the pass against the stepped-back clock. A step smaller than the
+// horizon re-arms it as well; only the size of the band in which the
+// two windows disagree changes.
 func TestMemorySweepRearmsAfterBackwardStep(t *testing.T) {
 	t.Parallel()
-	m := NewMemory()
-	ctx := context.Background()
-	limits := Limits{RPM: 60, TPM: 0}
+	for _, tc := range []struct {
+		name string
+		step time.Duration
+	}{
+		{"a step smaller than the horizon", 10 * time.Second},
+		{"a step past the horizon", 3 * bucketIdleTTL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := NewMemory()
+			ctx := context.Background()
+			limits := Limits{RPM: 60, TPM: 0}
 
-	clock := time.Now()
-	m.WithClock(func() time.Time { return clock })
+			clock := time.Now()
+			m.WithClock(func() time.Time { return clock })
 
-	// The pass runs on the first decision and drops a tenant idle past
-	// the horizon.
-	drainBurst(t, ctx, m, "gone", limits, 1, "create")
-	clock = clock.Add(bucketIdleTTL + time.Minute)
-	drainBurst(t, ctx, m, "kept", limits, 1, "sweep")
-	if _, ok := m.rpm["gone:rpm"]; ok {
-		t.Fatal("bucket idle past the horizon survived the sweep")
-	}
+			// The first decision arms the window one horizon ahead of
+			// the clock that armed it.
+			drainBurst(t, ctx, m, "warm", limits, 1, "arm")
 
-	// Step the clock back more than the horizon: the window armed
-	// before the step now sits past any reachable now. The next
-	// decision must re-arm the window rather than wait the stale
-	// horizon out, so a bucket created under the stepped-back clock
-	// still drops once the clock moves on a horizon.
-	clock = clock.Add(-3 * bucketIdleTTL)
-	drainBurst(t, ctx, m, "doomed", limits, 1, "create under the stepped-back clock")
-	clock = clock.Add(bucketIdleTTL + time.Minute)
-	drainBurst(t, ctx, m, "later", limits, 1, "sweep")
-	if _, ok := m.rpm["doomed:rpm"]; ok {
-		t.Fatal("the backward step silenced the sweep: a bucket idle past the horizon survived")
+			// Step the clock back. The pass re-arms the window against
+			// the stepped-back clock, so the bucket created here ages
+			// out one horizon later.
+			clock = clock.Add(-tc.step)
+			drainBurst(t, ctx, m, "doomed", limits, 1, "create under the stepped-back clock")
+
+			// The re-armed window comes due exactly one horizon after
+			// the stepped-back clock, and the stale window is still
+			// ahead of it: only a re-armed pass drops the bucket here.
+			clock = clock.Add(bucketIdleTTL)
+			drainBurst(t, ctx, m, "later", limits, 1, "sweep")
+			if _, ok := m.rpm["doomed:rpm"]; ok {
+				t.Fatal("the backward step silenced the sweep: a bucket idle past the horizon survived")
+			}
+		})
 	}
 }
