@@ -28,6 +28,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -531,10 +532,27 @@ func decodeAdminJSONOptional(w http.ResponseWriter, r *http.Request, v any) bool
 // optional marks whether an absent body (EOF) counts as the zero value
 // instead of a 400; every other rejection is identical, so the two
 // entry points cannot drift.
+//
+// The body is read whole, one byte past the cap, so the cap can reject
+// instead of truncate: cut by a bare LimitReader, everything past the
+// cap would be invisible to the trailing-data rejection below, and a
+// valid document padded out to the cap with whitespace would land as
+// the write with whatever followed it never seen.
 func decodeAdminBody(w http.ResponseWriter, r *http.Request, v any, optional bool) bool {
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxAdminBodyBytes))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxAdminBodyBytes+1))
+	if err != nil {
+		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"malformed or unexpected request body")
+		return false
+	}
+	if len(raw) > maxAdminBodyBytes {
+		protocol.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"request body exceeds the accepted size")
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	err := dec.Decode(v)
+	err = dec.Decode(v)
 	if optional && errors.Is(err, io.EOF) {
 		// The documented absent-body zero value.
 		return true
