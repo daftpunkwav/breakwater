@@ -175,6 +175,35 @@ func TestNodeCeilingStopsRecording(t *testing.T) {
 	}
 }
 
+// TestCeilingRoomReopensAtTheSweepWindow: a trie at its node ceiling
+// holds the ceiling between sweep windows — record skips its inserts
+// there — and the next window's sweep is what reopens room once the
+// nodes have aged out. The ceiling degrades recording, never matching,
+// and the throttle alone paces the recovery.
+func TestCeilingRoomReopensAtTheSweepWindow(t *testing.T) {
+	idx, c := newTestIndex(time.Hour)
+	// Distinct full-length chains, one per pick, until the trie sits
+	// exactly at its node ceiling.
+	for i := 0; i < maxNodes/maxChunks; i++ {
+		idx.Pick("m", strings.Repeat(string(rune('A'+i)), maxChunks*chunkSize), []string{"a", "b"})
+	}
+	wantNodes(t, idx, maxNodes)
+	// At the sweep window, nothing has expired: the sweep frees no room
+	// and the ceiling still holds.
+	c.advance(time.Hour / 2)
+	if got := idx.Pick("m", strings.Repeat("!", chunkSize), []string{"b", "a"}); got != -1 {
+		t.Fatalf("pick at a full ceiling = %d, want -1", got)
+	}
+	wantNodes(t, idx, maxNodes)
+	// Past the TTL, the window's sweep prunes every chain and recording
+	// resumes from the emptied trie.
+	c.advance(time.Hour)
+	if got := idx.Pick("m", strings.Repeat("!", chunkSize), []string{"b", "a"}); got != -1 {
+		t.Fatalf("pick = %d, want -1", got)
+	}
+	wantNodes(t, idx, 1)
+}
+
 func TestModelsAreIsolated(t *testing.T) {
 	idx, _ := newTestIndex(time.Minute)
 	idx.Pick("m1", "prefix", []string{"a", "b"})

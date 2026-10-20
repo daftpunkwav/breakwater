@@ -50,8 +50,9 @@ const (
 	// conversation is where requests diverge anyway.
 	maxChunks = 512
 	// maxNodes caps one model's trie. A record that would exceed the
-	// ceiling is skipped after a sweep — affinity quietly degrades to
-	// plain strategy order instead of growing without bound.
+	// ceiling is skipped until the next sweep frees room — affinity
+	// quietly degrades to plain strategy order instead of growing
+	// without bound.
 	maxNodes = 8192
 	// maxModels caps how many per-model tries the index holds at once.
 	// The map key is a client-supplied model name, which a
@@ -126,8 +127,12 @@ func (x *Index) Pick(model, prompt string, ids []string) int {
 	now := x.now()
 	t := x.models[model]
 	// The sweep runs before the ceiling is consulted: a prune that
-	// emptied other tries is exactly what frees room below.
-	if x.sweptAt.IsZero() || now.Sub(x.sweptAt) >= x.ttl/2 || (t != nil && t.nodes >= maxNodes) {
+	// emptied other tries is exactly what frees room below. Its cadence
+	// is the throttle alone: a trie at its node ceiling stays at the
+	// ceiling between sweeps (record skips its inserts), so re-sweeping
+	// on every pick would re-walk every trie per request without
+	// freeing anything the next window would not free anyway.
+	if x.sweptAt.IsZero() || now.Sub(x.sweptAt) >= x.ttl/2 {
 		x.sweep(now)
 		t = x.models[model]
 	}
@@ -219,8 +224,10 @@ func (t *trie) record(chunks []uint64, id string, now time.Time) {
 
 // sweep prunes every trie's nodes untouched for ttl, releasing the
 // tries that pruning empties. It runs on the write path at most once per
-// half-TTL — the same throttled-sweep discipline the cache module uses —
-// plus whenever a trie sits at its node ceiling and a record needs room.
+// half-TTL — the same throttled-sweep discipline the cache module uses.
+// That cadence also governs a trie at its node ceiling: room below the
+// ceiling reopens at the next window, and until then record skips its
+// inserts.
 func (x *Index) sweep(now time.Time) {
 	for model, t := range x.models {
 		x.prune(t, t.root, now)
