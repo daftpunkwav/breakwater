@@ -11,7 +11,10 @@
  */
 package config
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Config is the root configuration of the gateway process.
 type Config struct {
@@ -272,6 +275,21 @@ const leaseTTLHeadroom = time.Minute
 // gives away real spend with nothing left to notice it.
 const unboundedRequestLeaseTTL = 24 * time.Hour
 
+// addDuration returns a+b, saturating at the maximum duration instead
+// of wrapping. Both operands are validated non-negative by Load, and
+// each parses at most MaxInt64 nanoseconds — but their sum can still
+// overflow: two individually legal values wrap into a negative, and a
+// negative budget silently expires every context it bounds and turns
+// the derived lease horizon into an immediately-sweepable TTL. Past
+// the ceiling the honest reading of both sums is "unbounded".
+func addDuration(a, b time.Duration) time.Duration {
+	sum := a + b
+	if sum < 0 {
+		return time.Duration(math.MaxInt64)
+	}
+	return sum
+}
+
 // requestBudget is the longest one client request can hold a
 // reservation: the attempt phase, plus a committed stream's body, which
 // the overall deadline deliberately stops governing. ok is false when
@@ -280,7 +298,7 @@ func (c Config) requestBudget() (time.Duration, bool) {
 	if c.Retry.OverallDeadline <= 0 || c.Retry.StreamTimeout <= 0 {
 		return 0, false
 	}
-	return c.Retry.OverallDeadline + c.Retry.StreamTimeout, true
+	return addDuration(c.Retry.OverallDeadline, c.Retry.StreamTimeout), true
 }
 
 // RequestCeiling is the longest one client request can run. It bounds
@@ -305,7 +323,7 @@ func (c Config) LeaseTTL() time.Duration {
 		return c.Quota.LeaseTTL
 	}
 	if budget, ok := c.requestBudget(); ok {
-		return budget + leaseTTLHeadroom
+		return addDuration(budget, leaseTTLHeadroom)
 	}
 	return unboundedRequestLeaseTTL
 }
