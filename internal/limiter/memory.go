@@ -159,8 +159,11 @@ func (m *Memory) refillOne(buckets map[string]*bucket, key string, capacity int6
 // sweepInterval cache.Memory uses: the bound only ever needs to be
 // loose, not tight.
 //
-// The clock comparison tolerates a wall clock that moved backwards, so
-// a backward step arms the window instead of skipping the pass forever.
+// The clock comparison tolerates a wall clock that moved backwards.
+// The window is armed a horizon ahead of the instant that armed it, so
+// a backward step leaves it more than a horizon ahead of now: the pass
+// re-arms against the stepped-back clock instead of waiting for the
+// clock to catch up to the stale window.
 func (m *Memory) sweepIfDue(now time.Time) {
 	if m.sweptAt.IsZero() || !m.sweptAt.After(now) || m.sweptAt.After(now.Add(bucketIdleTTL)) {
 		m.sweepLocked(now)
@@ -169,10 +172,10 @@ func (m *Memory) sweepIfDue(now time.Time) {
 }
 
 // sweepLocked drops every bucket idle for at least the horizon, the
-// memory-side equivalent of the Redis scripts' PEXPIRE. Both maps are
-// walked together: a tenant's RPM and TPM buckets are created and
-// refreshed as a pair, so one pass over each costs no more than keeping
-// them in step.
+// memory-side equivalent of the Redis scripts' PEXPIRE. The two maps
+// are swept one after the other through the same rule: a tenant's RPM
+// and TPM buckets are created and refreshed as a pair, so a pass over
+// each costs no more than keeping them in step.
 //
 // Dropping is invisible to the decisions that follow — see
 // bucketIdleTTL for the arithmetic — so the sweep only reclaims memory
