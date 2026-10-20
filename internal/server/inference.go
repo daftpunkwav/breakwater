@@ -253,8 +253,9 @@ func settleConsumption(carrier *pipeline.Carrier, result relay.Result) {
 		// above is reserved for requests that served nothing — a
 		// rejection, a cache hit, a failed exchange — and a delivered 2xx
 		// landing there hands the tenant its whole reservation back for
-		// tokens the upstream really charged. Such a reply therefore falls
-		// through to the estimate here and to the reservation below.
+		// tokens the upstream really charged. A streamed reply settles
+		// here on the partial-stream estimate; a non-streamed one
+		// settles in the default case below on the reservation.
 		carrier.Consumed = carrier.EstimatePartialTokens(result.StreamBytes)
 	default:
 		carrier.Consumed = carrier.Tokens
