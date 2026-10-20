@@ -43,6 +43,13 @@ import (
 // be cached or replayed anyway.
 const maxResponseBytes = 32 << 20
 
+// maxStreamLineBytes bounds a single line of a streaming upstream body.
+// The line bound is far below the response cap because a line is
+// accumulated in memory before it is forwarded: the peak cost of one
+// over-long line is its own length, and an upstream that never emits a
+// terminator would otherwise hold that much per concurrent stream.
+const maxStreamLineBytes = 1 << 20
+
 // Executor executes relay jobs. It is safe for concurrent use.
 type Executor struct {
 	policy     retry.Policy

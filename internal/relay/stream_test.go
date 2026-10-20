@@ -111,17 +111,17 @@ func (endlessLines) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TestReadLineStopsAtTheResponseBodyCap pins the cap on the pump's
+// TestReadLineStopsAtTheLineCap pins the cap on the pump's
 // over-long-line fallback. An upstream that streams without ever
 // sending '\n' used to grow the accumulator until the process died:
 // every read still counted as stream activity, so the idle watchdog
 // stayed silent and only the stream ceiling bounded it, in time rather
 // than in memory.
-func TestReadLineStopsAtTheResponseBodyCap(t *testing.T) {
+func TestReadLineStopsAtTheLineCap(t *testing.T) {
 	t.Parallel()
 	// Two read buffers past the cap, so the refusal comes from the cap
 	// and not from the input running out.
-	overflow := int64(maxResponseBytes) + 2*4096
+	overflow := int64(maxStreamLineBytes) + 2*4096
 	reader := bufio.NewReader(io.LimitReader(endlessLines{}, overflow))
 
 	line, err := readLine(reader)
@@ -135,10 +135,10 @@ func TestReadLineStopsAtTheResponseBodyCap(t *testing.T) {
 
 // TestReadLineKeepsLinesUnderTheCap guards the other side of the cap:
 // a line the buffered path would accept in full is still reassembled
-// whole, so the bound rejects only what the response cap rejects.
+// whole, so the bound rejects only what the line cap rejects.
 func TestReadLineKeepsLinesUnderTheCap(t *testing.T) {
 	t.Parallel()
-	const size = 1 << 20
+	const size = maxStreamLineBytes / 2
 	body := "data: " + strings.Repeat("x", size) + "\n"
 	reader := bufio.NewReader(strings.NewReader(body))
 
@@ -158,7 +158,7 @@ func TestReadLineKeepsLinesUnderTheCap(t *testing.T) {
 func TestPumpStreamReportsAnUnterminatedLineAsUpstreamFault(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
-	_, known, total, err := pumpStream(rec, io.LimitReader(endlessLines{}, maxResponseBytes+2*4096))
+	_, known, total, err := pumpStream(rec, io.LimitReader(endlessLines{}, maxStreamLineBytes+2*4096))
 	if !errors.Is(err, errStreamLineTooLong) {
 		t.Fatalf("err = %v, want %v", err, errStreamLineTooLong)
 	}
