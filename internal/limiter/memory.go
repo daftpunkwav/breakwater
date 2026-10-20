@@ -15,6 +15,11 @@
  * empty deficit, matching the Redis scripts. Refunds only ever raise a
  * bucket toward its capacity — a refund can never create allowance out
  * of thin air, it can only return what was reserved.
+ *
+ * Retention matches the Redis backend: a bucket idle for
+ * bucketIdleTTL is dropped, which is the same horizon the Lua scripts
+ * give their keys. The drop is invisible to the limiter's decisions —
+ * see bucketIdleTTL for why.
  */
 package limiter
 
@@ -31,12 +36,31 @@ type Memory struct {
 	rpm map[string]*bucket
 	tpm map[string]*bucket
 	now func() time.Time
+	// sweptAt is the earliest instant the next idle-bucket sweep may
+	// run.
+	sweptAt time.Time
 }
 
 type bucket struct {
 	tokens float64
 	last   time.Time
 }
+
+// bucketIdleTTL is how long a bucket may sit untouched before the
+// sweep drops it. It is the PEXPIRE horizon of the Redis backend's two
+// scripts (tokenbucket.lua and refund.lua), so the two implementations
+// of this port retain their state on the same schedule.
+//
+// It is also the horizon at which dropping a bucket is provably
+// indistinguishable from keeping one: a bucket's tokens never fall
+// below zero (Allow only deducts what the bucket affords) and never
+// exceed its capacity (refill and refund both clamp), while the refill
+// rate is capacity tokens per 60s — so after a full idle horizon every
+// bucket stands at exactly its capacity, which is precisely what a
+// bucket recreated for the next request starts at. A zero-capacity
+// dimension is exempt by construction: Allow skips its check entirely
+// and Refund returns before touching it.
+const bucketIdleTTL = 120 * time.Second
 
 // NewMemory builds the in-process backend.
 func NewMemory() *Memory {
@@ -59,6 +83,12 @@ func (m *Memory) Allow(_ context.Context, tenantID string, limits Limits, tokens
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
+
+	// Idle buckets stop occupying memory here, at most one pass per
+	// horizon: a bucket is dropped by the first sweep after its idle
+	// TTL, so the maps hold the buckets of the last two horizons rather
+	// than one per tenant the process ever served.
+	m.sweepIfDue(now)
 
 	rpm, tpm := m.refilled(tenantID, limits, now)
 
@@ -121,6 +151,50 @@ func (m *Memory) refillOne(buckets map[string]*bucket, key string, capacity int6
 	}
 	b.last = now
 	return b
+}
+
+// sweepIfDue runs the idle-bucket pass when its window has elapsed and
+// arms the next one. The pass is O(map) under the lock every request
+// shares, which is why the interval is the horizon rather than the
+// sweepInterval cache.Memory uses: the bound only ever needs to be
+// loose, not tight.
+//
+// The clock comparison tolerates a wall clock that moved backwards.
+// The window is armed a horizon ahead of the instant that armed it, so
+// a backward step leaves it more than a horizon ahead of now: the pass
+// re-arms against the stepped-back clock instead of waiting for the
+// clock to catch up to the stale window.
+func (m *Memory) sweepIfDue(now time.Time) {
+	if m.sweptAt.IsZero() || !m.sweptAt.After(now) || m.sweptAt.After(now.Add(bucketIdleTTL)) {
+		m.sweepLocked(now)
+		m.sweptAt = now.Add(bucketIdleTTL)
+	}
+}
+
+// sweepLocked drops every bucket idle for at least the horizon, the
+// memory-side equivalent of the Redis scripts' PEXPIRE. The two maps
+// are swept one after the other through the same rule: a tenant's RPM
+// and TPM buckets are created and refreshed as a pair, so a pass over
+// each costs no more than keeping them in step.
+//
+// Dropping is invisible to the decisions that follow — see
+// bucketIdleTTL for the arithmetic — so the sweep only reclaims memory
+// the buckets no longer influence.
+func (m *Memory) sweepLocked(now time.Time) {
+	cutoff := now.Add(-bucketIdleTTL)
+	sweepIdleBuckets(m.rpm, cutoff)
+	sweepIdleBuckets(m.tpm, cutoff)
+}
+
+// sweepIdleBuckets drops the buckets of one dimension that have been
+// untouched since the cutoff. The two dimensions are swept by the same
+// rule, so they share the pass.
+func sweepIdleBuckets(buckets map[string]*bucket, cutoff time.Time) {
+	for key, b := range buckets {
+		if !b.last.After(cutoff) {
+			delete(buckets, key)
+		}
+	}
 }
 
 // deficitWait converts a token deficit and capacity into the wait until

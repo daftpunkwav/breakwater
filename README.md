@@ -201,7 +201,7 @@ All configuration is environment-based; core knobs:
 - `GET /healthz` — liveness
 - `GET /readyz` — readiness (gates on the backend the fail-closed
   limiter depends on; it never lies)
-- `GET /metrics` — Prometheus text exposition (hand-written registry)
+- `GET /metrics` — Prometheus text exposition (hand-written registry). The endpoint is unauthenticated and its `tenant` label carries tenant ids, so it belongs on a scrape-only network path
 - `GET /version` — build identifier and Go version
 - `GET /admin/tenants/{id}/quota` — current balance
 - `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); a PUT to an id with no balance creates it (upsert); the reconcile protocol treats the interval across a correction as skip-by-design

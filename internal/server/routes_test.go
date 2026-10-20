@@ -116,16 +116,27 @@ func TestRootHandlerRoutesAdminWrites(t *testing.T) {
 	srv := httptest.NewServer(newRootHandler(nil, nil, NewAdmin("", nil, setter, nil), "test", nil, nil))
 	t.Cleanup(srv.Close)
 
+	// The two requests below share one client, so it owns a transport of
+	// its own: the process-wide default shares a connection pool with
+	// every other test in the package, and a sibling test closing its
+	// server leaves a dead connection sitting in that pool for whoever
+	// picks it up next.
+	client, _ := testClient(t)
+
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/admin/tenants/t1/quota",
 		strings.NewReader(`{"balance":5}`))
 	if err != nil {
 		t.Fatalf("build PUT: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT: %v", err)
 	}
+	// The body is drained before the close: abandoning it leaves the
+	// connection half-closed, and the DELETE below would then run on a
+	// connection the transport has to discard and redial.
+	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !topped {
 		t.Fatalf("PUT status = %d topped = %v, want the top-up to reach the ledger", resp.StatusCode, topped)
@@ -135,7 +146,7 @@ func TestRootHandlerRoutesAdminWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build DELETE: %v", err)
 	}
-	resp, err = http.DefaultClient.Do(req)
+	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("DELETE: %v", err)
 	}

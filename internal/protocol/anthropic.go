@@ -175,12 +175,18 @@ func (anthropicWire) RenderSuccess(w http.ResponseWriter, status int, header htt
 }
 
 // RenderUpstreamError implements Wire: the upstream OpenAI error body
-// re-rendered in the Messages error envelope, same status. The Messages
-// envelope carries no upstream headers, so the passthrough header set
-// the port hands over is not read.
-func (anthropicWire) RenderUpstreamError(w http.ResponseWriter, status int, _ http.Header, upstreamBody []byte) {
+// re-rendered in the Messages error envelope, same status. The envelope
+// itself carries no upstream fields, so the upstream's media type is not
+// read — but the Retry-After a 429 or 5xx owes the client is a response
+// header, not part of that envelope. It is forwarded here exactly as the
+// canonical and Responses wires forward it: a Messages client that lost
+// it walks straight back into the wait the upstream asked to hold.
+func (anthropicWire) RenderUpstreamError(w http.ResponseWriter, status int, header http.Header, upstreamBody []byte) {
+	if v := header.Get("Retry-After"); v != "" && ValidHeaderValue(v) {
+		w.Header().Set("Retry-After", v)
+	}
 	message, _ := parseUpstreamError(upstreamBody)
-	writeJSONResponse(w, status, anthropicErrorBody("api_error", message))
+	writeJSONResponse(w, status, anthropicErrorBody(anthropicUpstreamErrorType(status), message))
 }
 
 // RenderError implements Wire: gateway failures use the Messages error
@@ -229,13 +235,29 @@ func anthropicStopReason(finish string) string {
 	}
 }
 
+// anthropicUpstreamErrorType maps a relayed upstream status onto the
+// Messages error-type vocabulary. A rate limit keeps its own type: the
+// gateway's own 429s answer rate_limit_error, so a relayed 429 calling
+// itself api_error would tell an SDK a temporary wait is a permanent
+// fault.
+func anthropicUpstreamErrorType(status int) string {
+	if status == http.StatusTooManyRequests {
+		return "rate_limit_error"
+	}
+	return "api_error"
+}
+
 // anthropicErrorType maps a gateway error code (the shared Code
 // vocabulary) to the Messages error-type vocabulary.
 func anthropicErrorType(code Code) string {
 	switch code {
 	case CodeUpstreamTimeout:
 		return "timeout_error"
-	case CodeRateLimited:
+	case CodeRateLimited, CodeConcurrencyLimited:
+		// Both ceilings answer 429 with Retry-After guidance, and the
+		// Messages vocabulary has exactly one type for that status: two
+		// types for one status would split a client retry policy across
+		// which ceiling happened to fire first.
 		return "rate_limit_error"
 	case CodeInsufficientQuota:
 		return "billing_error"
@@ -257,7 +279,6 @@ type anthropicStream struct {
 	id    string
 	model string
 	block bool // content block opened
-	text  []byte
 	stop  string
 }
 
@@ -307,7 +328,6 @@ func (s *anthropicStream) Delta(w ioWriter, payload []byte) error {
 				return err
 			}
 		}
-		s.text = append(s.text, text...)
 		return WriteEvent(w, "content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": 0,

@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"testing"
@@ -31,6 +32,33 @@ func testListener(t *testing.T) net.Listener {
 	return l
 }
 
+// testClient returns a client with a transport of its own. The
+// process-wide default transport shares one connection pool across the
+// whole test binary, so a keep-alive connection left behind by another
+// test would show up in this server's drain.
+func testClient(t *testing.T) (*http.Client, *http.Transport) {
+	t.Helper()
+	tr := &http.Transport{}
+	t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{Transport: tr}, tr
+}
+
+// getStatus GETs the URL and returns the response status. The body is
+// drained before it is closed: a body closed unread leaves the
+// connection half-closed, and the client transport then dials a
+// replacement the server holds in StateNew — a connection the drain
+// waits on for seconds.
+func getStatus(t *testing.T, client *http.Client, url string) int {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
 func TestServerRunServesUntilCancel(t *testing.T) {
 	t.Parallel()
 	ready := false
@@ -38,6 +66,10 @@ func TestServerRunServesUntilCancel(t *testing.T) {
 	srv := New(Options{
 		Addr:     listener.Addr().String(),
 		Listener: listener,
+		// The drain window is the server's own budget, so the test
+		// states it instead of leaning on the transport default: the
+		// wait below has to cover the grace the drain may spend.
+		ShutdownGrace: drainGrace,
 		Readiness: func() error {
 			if ready {
 				return nil
@@ -50,12 +82,15 @@ func TestServerRunServesUntilCancel(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- srv.Run(ctx) }()
 
+	client, transport := testClient(t)
+
 	// Poll until the listener is up, then check both probes.
 	url := "http://" + listener.Addr().String()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		resp, err := http.Get(url + "/healthz")
+		resp, err := client.Get(url + "/healthz")
 		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("healthz status = %d, want 200", resp.StatusCode)
@@ -68,35 +103,36 @@ func TestServerRunServesUntilCancel(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	resp, err := http.Get(url + "/readyz")
-	if err != nil {
-		t.Fatalf("readyz: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("readyz status = %d, want 503 while the probe fails", resp.StatusCode)
+	if got := getStatus(t, client, url+"/readyz"); got != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status = %d, want 503 while the probe fails", got)
 	}
 
 	ready = true
-	resp, err = http.Get(url + "/readyz")
-	if err != nil {
-		t.Fatalf("readyz: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("readyz status = %d, want 200 once the probe passes", resp.StatusCode)
+	if got := getStatus(t, client, url+"/readyz"); got != http.StatusOK {
+		t.Fatalf("readyz status = %d, want 200 once the probe passes", got)
 	}
 
+	// The client's keep-alive connections go before the cancel: the
+	// server then drains nothing and returns as soon as it is told to
+	// stop, which is what this test is about. A connection the client
+	// still holds would leave the drain waiting on a peer that is not
+	// going to send anything.
+	transport.CloseIdleConnections()
 	cancel()
 	select {
 	case err := <-runErr:
 		if err != nil {
 			t.Fatalf("run returned error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(drainGrace + 3*time.Second):
 		t.Fatal("run did not return after cancel")
 	}
 }
+
+// drainGrace is the shutdown window the run test grants the server:
+// long enough for a real drain, short enough that a drain which
+// overruns it surfaces as an error instead of a hang.
+const drainGrace = 2 * time.Second
 
 // errNotReady is the injected probe failure of the run test.
 type errNotReady struct{}

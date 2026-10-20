@@ -6,9 +6,12 @@
  * Responsibilities:
  * - Guarantee that a cold key's concurrent non-streaming requests
  *   produce exactly one upstream fetch
- * - Bound every waiter by its own request context: waiters never
- *   inherit the holder's remaining deadline, and a waiter whose client
- *   leaves stops waiting
+ * - Bound every waiter by the context that caller passed to Do — never
+ *   by the holder's remaining deadline. Whether a wait also ends when
+ *   that caller's client disconnects is the caller's choice of context:
+ *   the cache stage detaches it, so one client leaving cannot cancel a
+ *   fetch the others are waiting on, and bounds it by the fetch budget
+ *   instead
  * - Share the holder's result — including its errors — with the
  *   waiters; retrying is the retry layer's business, never implicit
  * - Nothing else: eligibility and storage live with their owners
@@ -96,9 +99,11 @@ func (g *Flight) Do(ctx context.Context, key string, fn func(context.Context) (E
 	return c.value, c.err, true
 }
 
-// wait blocks for the holder's result, bounded by the waiter's own
-// context: a client gone mid-wait stops waiting. Receiving from the
-// closed channel happens after the holder published the result.
+// wait blocks for the holder's result, bounded by the context the
+// waiter passed to Do. That context is the caller's to choose: one
+// still tracking its client's cancellation ends a disconnected waiter's
+// wait, one detached from it does not. Receiving from the closed
+// channel happens after the holder published the result.
 func (c *call) wait(ctx context.Context) (Entry, error) {
 	defer c.waiters.Add(-1)
 	select {

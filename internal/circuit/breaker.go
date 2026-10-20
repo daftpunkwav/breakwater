@@ -217,9 +217,15 @@ func (g *granted) Report(outcome Outcome) {
 			b.gov.reclaim(&s.machine, now)
 			return
 		}
-		if now.After(s.probe.deadline) && (outcome == OutcomeSuccess || outcome == OutcomeSlow) {
-			// A success reported after its own deadline is unreliable;
-			// treat the probe as timed out.
+		if now.After(s.probe.deadline) {
+			// Past its deadline the probe is no longer evidence about the
+			// upstream, whatever it carries — a hung holder and a holder
+			// that answered late are indistinguishable here. A 4xx carries
+			// no health verdict of its own, so letting a late one close the
+			// breaker would hand full traffic back to a probe that already
+			// overran the window it was meant to prove recovery inside. The
+			// rule is the one the shared skeleton states and the slow-call
+			// registry applies identically (see slow.go).
 			b.gov.reclaim(&s.machine, now)
 			return
 		}

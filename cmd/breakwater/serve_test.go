@@ -24,7 +24,6 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/config"
 	"github.com/daftpunkwav/breakwater/internal/obs"
-	"github.com/jackc/pgx/v5"
 )
 
 // firstLine condenses a SQL statement for a failure message.
@@ -516,40 +515,8 @@ func TestServeReconcilerArmsAgainstLivePostgres(t *testing.T) {
 	}
 	// The CI service starts an empty database, and serve arms the
 	// reconciler by listing tenants from the identity schema: the
-	// tables must exist before assembly. Apply the deploy schema —
-	// the same file first boot applies, idempotent by construction —
-	// statement by statement, after stripping the comment lines (a
-	// bare semicolon split would otherwise execute comment-only
-	// fragments).
-	// nosemgrep: go_filesystem_rule-fileread -- path is a fixed literal inside the repository
-	schema, err := os.ReadFile(filepath.Join("..", "..", "deploy", "schema.sql"))
-	if err != nil {
-		t.Fatalf("read deploy schema: %v", err)
-	}
-	var cleaned strings.Builder
-	for _, line := range strings.Split(string(schema), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "--") {
-			continue
-		}
-		cleaned.WriteString(line)
-		cleaned.WriteByte('\n')
-	}
-	connCtx, cancelConn := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelConn()
-	conn, err := pgx.Connect(connCtx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	for _, stmt := range strings.Split(cleaned.String(), ";") {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
-		// nosemgrep: go_sql_rule-concat-sqli -- statements come from the repository's own deploy/schema.sql
-		if _, err := conn.Exec(connCtx, stmt); err != nil {
-			t.Fatalf("apply schema statement %q: %v", firstLine(stmt), err)
-		}
-	}
-	_ = conn.Close(connCtx)
+	// tables must exist before assembly.
+	applyDeploySchema(t, dsn)
 
 	redisModeEnv(t,
 		"BREAKWATER_POSTGRES_DSN="+dsn,

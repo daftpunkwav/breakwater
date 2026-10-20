@@ -113,7 +113,7 @@ type StreamTranscoder interface {
 	Abort(w ioWriter, code Code, message string) error
 }
 
-// ioWriter keeps the transcoder signatures free of an os import.
+// ioWriter keeps the transcoder signatures free of an io import.
 type ioWriter = interface {
 	Write(p []byte) (int, error)
 }

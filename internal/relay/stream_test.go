@@ -2,12 +2,15 @@
  * @file stream_test
  * @description Streaming pump behavior tests: byte fidelity of the
  * passthrough pump, including lines longer than the read buffer (the
- * accumulating read fallback) and CRLF line terminators.
+ * accumulating read fallback), CRLF line terminators, and the bound
+ * that fallback puts on an upstream that never terminates a line.
  */
 package relay
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,5 +94,81 @@ func TestPumpStreamWriteFailureStopsThePump(t *testing.T) {
 	}
 	if total != 0 {
 		t.Fatalf("byte count = %d, want 0: nothing was delivered", total)
+	}
+}
+
+// endlessLines is a reader that never emits a line terminator: it fills
+// every read with payload bytes. The pump's accumulator is bounded only
+// by readLine, so this is what an upstream sending one unbounded line
+// looks like — progress without a terminator, which is also why the
+// idle watchdog cannot catch it.
+type endlessLines struct{}
+
+func (endlessLines) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+// TestReadLineStopsAtTheLineCap pins the cap on the pump's
+// over-long-line fallback. An upstream that streams without ever
+// sending '\n' used to grow the accumulator until the process died:
+// every read still counted as stream activity, so the idle watchdog
+// stayed silent and only the stream ceiling bounded it, in time rather
+// than in memory.
+func TestReadLineStopsAtTheLineCap(t *testing.T) {
+	t.Parallel()
+	// Two read buffers past the cap, so the refusal comes from the cap
+	// and not from the input running out.
+	overflow := int64(maxStreamLineBytes) + 2*4096
+	reader := bufio.NewReader(io.LimitReader(endlessLines{}, overflow))
+
+	line, err := readLine(reader)
+	if !errors.Is(err, errStreamLineTooLong) {
+		t.Fatalf("err = %v, want %v: an unterminated line must be cut at the cap", err, errStreamLineTooLong)
+	}
+	if line != nil {
+		t.Fatalf("line = %d bytes, want none: a cut line is never a partial reply", len(line))
+	}
+}
+
+// TestReadLineKeepsLinesUnderTheCap guards the other side of the cap:
+// a line the buffered path would accept in full is still reassembled
+// whole, so the bound rejects only what the line cap rejects.
+func TestReadLineKeepsLinesUnderTheCap(t *testing.T) {
+	t.Parallel()
+	const size = maxStreamLineBytes / 2
+	body := "data: " + strings.Repeat("x", size) + "\n"
+	reader := bufio.NewReader(strings.NewReader(body))
+
+	line, err := readLine(reader)
+	if err != nil {
+		t.Fatalf("readLine: %v", err)
+	}
+	if string(line) != body {
+		t.Fatalf("line = %d bytes, want the %d-byte line whole", len(line), len(body))
+	}
+}
+
+// TestPumpStreamReportsAnUnterminatedLineAsUpstreamFault checks the cap
+// is an upstream fault end to end: the pump stops, the client sees an
+// honest abort frame rather than a stream that never terminates, and
+// nothing of the cut line reaches it.
+func TestPumpStreamReportsAnUnterminatedLineAsUpstreamFault(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	_, known, total, err := pumpStream(rec, io.LimitReader(endlessLines{}, maxStreamLineBytes+2*4096))
+	if !errors.Is(err, errStreamLineTooLong) {
+		t.Fatalf("err = %v, want %v", err, errStreamLineTooLong)
+	}
+	if known {
+		t.Fatal("usage reported: a cut line carries no usage object")
+	}
+	if total != 0 {
+		t.Fatalf("byte count = %d, want 0: the cut line was never delivered", total)
+	}
+	if got := rec.Body.String(); got != "" {
+		t.Fatalf("client received %d bytes of an unterminated line", len(got))
 	}
 }

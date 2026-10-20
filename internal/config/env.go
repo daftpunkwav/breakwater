@@ -705,10 +705,11 @@ func guardDeploymentPosture(cfg Config) error {
 }
 
 // adminSurfaceArmed reports whether the configuration gives the admin
-// surface anything live to guard. The surface mounts on every run, but a
-// deployment with no upstreams, no identity and no insights store has
-// nothing behind it but empty lists — the zero-configuration baseline
-// stays bootable without a token.
+// surface anything live to guard beyond its quota balance endpoints,
+// which the composition root binds to the ledger in every run. This
+// predicate names the upstreams, the identity store and the insights
+// store — the resources whose absence leaves those endpoints reading
+// empty lists.
 func adminSurfaceArmed(cfg Config) bool {
 	return len(cfg.Upstreams) > 0 || cfg.Identity != "" || cfg.Obs.InsightsDSN != ""
 }

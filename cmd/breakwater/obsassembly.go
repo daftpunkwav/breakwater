@@ -93,12 +93,7 @@ func (s *insightsStore) close() {
 // database's DSN). A failed connection is an error, not a gateway
 // that silently stops measuring.
 func newInsights(ctx context.Context, cfg config.Config, logger *slog.Logger) (*insightsStore, error) {
-	dsn := cfg.Obs.InsightsDSN
-	source := "BREAKWATER_INSIGHTS_DSN"
-	if dsn == "" {
-		dsn = cfg.Postgres.DSN
-		source = "BREAKWATER_POSTGRES_DSN"
-	}
+	dsn, source := insightsDSN(cfg)
 	if dsn == "" {
 		return &insightsStore{}, nil
 	}
@@ -109,6 +104,21 @@ func newInsights(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	// The DSN carries credentials: log the source, never the string.
 	logger.Info("insights record store enabled", "source", source)
 	return &insightsStore{store: store}, nil
+}
+
+// insightsDSN resolves the DSN the assessment record store runs
+// against: the explicit insights DSN, or the identity database's DSN
+// when none is configured. The source names the variable the DSN came
+// from — the log reports it, never the DSN itself, which carries
+// credentials. An empty DSN leaves the store disabled.
+func insightsDSN(cfg config.Config) (dsn, source string) {
+	if cfg.Obs.InsightsDSN != "" {
+		return cfg.Obs.InsightsDSN, "BREAKWATER_INSIGHTS_DSN"
+	}
+	if cfg.Postgres.DSN != "" {
+		return cfg.Postgres.DSN, "BREAKWATER_POSTGRES_DSN"
+	}
+	return "", ""
 }
 
 // combinedSink fans one access entry out to the file log and the

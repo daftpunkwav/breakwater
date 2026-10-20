@@ -7,6 +7,7 @@
 package affinity
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,53 @@ func TestModelsAreIsolated(t *testing.T) {
 	// The same prompt on another model has no recorded prefix.
 	if got := idx.Pick("m2", "prefix", []string{"b", "a"}); got != -1 {
 		t.Fatalf("pick = %d, want -1", got)
+	}
+}
+
+// TestModelCeilingBoundsClientSuppliedNames: the index keys its tries by
+// a client-supplied model name, which a wildcard-served deployment
+// resolves for any string. Past the ceiling a new name routes on the
+// strategy order instead of growing the map, and the names already
+// recorded keep matching.
+func TestModelCeilingBoundsClientSuppliedNames(t *testing.T) {
+	idx, _ := newTestIndex(time.Hour)
+	for i := 0; i <= maxModels; i++ {
+		idx.Pick(fmt.Sprintf("model-%d", i), "prefix", []string{"a", "b"})
+	}
+	if got := len(idx.models); got != maxModels {
+		t.Fatalf("tracked models = %d, want %d", got, maxModels)
+	}
+	// One past the ceiling there is no room to record.
+	unrecorded := fmt.Sprintf("model-%d", maxModels)
+	if got := idx.Pick(unrecorded, "prefix", []string{"b", "a"}); got != -1 {
+		t.Fatalf("pick past the ceiling = %d, want -1 (strategy order)", got)
+	}
+	if _, ok := idx.models[unrecorded]; ok {
+		t.Fatalf("model %q was recorded past the ceiling", unrecorded)
+	}
+	// A model already recorded keeps matching at the ceiling.
+	if got := idx.Pick("model-0", "prefix", []string{"b", "a"}); got != 1 {
+		t.Fatalf("recorded pick at the ceiling = %d, want 1 (deep match survives)", got)
+	}
+}
+
+// TestSweepReleasesExpiredModelTries: the TTL sweep drops a trie whose
+// nodes all expired, so walking through many model names leaves no
+// permanent map entry behind.
+func TestSweepReleasesExpiredModelTries(t *testing.T) {
+	idx, c := newTestIndex(time.Minute)
+	for i := 0; i < 8; i++ {
+		idx.Pick(fmt.Sprintf("model-%d", i), "prefix", []string{"a", "b"})
+	}
+	if got := len(idx.models); got != 8 {
+		t.Fatalf("tracked models = %d, want 8", got)
+	}
+	c.advance(2 * time.Minute)
+	// The first pick past the TTL is the one that sweeps; every stale
+	// trie goes and only the fresh record survives.
+	idx.Pick("model-fresh", "prefix", []string{"a", "b"})
+	if got := len(idx.models); got != 1 {
+		t.Fatalf("tracked models after the sweep = %d, want 1", got)
 	}
 }
 

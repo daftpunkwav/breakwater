@@ -136,3 +136,60 @@ func TestInferenceSettlesByReservationWithoutUsage(t *testing.T) {
 		t.Fatalf("consumed = %d, want the reservation 51", carrier.Consumed)
 	}
 }
+
+// nonPositiveUsageUpstream answers a delivered 200 whose usage object
+// carries a total a provider could report while counting nothing (zero)
+// or while miscounting (negative).
+type nonPositiveUsageUpstream struct{ body string }
+
+func (u nonPositiveUsageUpstream) ID() string { return "raw" }
+
+func (u nonPositiveUsageUpstream) Forward(context.Context, upstream.Request) (*upstream.Response, error) {
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
+	return &upstream.Response{
+		StatusCode: http.StatusOK,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(u.body)),
+	}, nil
+}
+
+func (nonPositiveUsageUpstream) Probe(context.Context) error { return nil }
+
+// TestInferenceSettlesByReservationOnNonPositiveUsage: a usage object
+// reporting nothing spent (total zero) or a negative total is not an
+// accounting answer, and the two reach tenants by different routes. The
+// quota stage reads a non-positive settle as "served nothing" and
+// cancels the lease, refunding the whole reservation for tokens the
+// upstream really charged. The limiter stage instead refunds whatever the
+// reservation did not cover, so a negative total refunds more than was
+// ever reserved and inflates the bucket. A delivered 2xx reply falls back
+// to the reservation instead, the last-resort branch the settlement
+// ladder already documents.
+func TestInferenceSettlesByReservationOnNonPositiveUsage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"zero", `{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`},
+		{"negative", `{"choices":[{"message":{"content":"hi"}}],"usage":{"total_tokens":-7}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			carrier := &pipeline.Carrier{Format: protocol.FormatOpenAIChat, Tokens: 51}
+			handler := chatHandler(t, []upstream.Upstream{nonPositiveUsageUpstream{body: tc.body}})
+
+			rec := postWithCarrier(t, handler, carrier, `{"model":"m1","messages":[{"role":"user","content":"hello"}]}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+			}
+			if !carrier.Relay.UsageKnown {
+				t.Fatal("the usage object was present; extraction should have reported it")
+			}
+			if carrier.Consumed != 51 {
+				t.Fatalf("consumed = %d, want the reservation 51: a delivered reply must not settle at or below zero", carrier.Consumed)
+			}
+		})
+	}
+}

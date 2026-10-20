@@ -115,7 +115,7 @@ func (r *requestRun) exchange(attemptCtx context.Context, cand upstream.Upstream
 	// end-to-end duration histogram), and pin it as the attempt's
 	// responsiveness — for a stream, how long the upstream took to
 	// prove it is alive is the signal, not how long the body runs.
-	r.responsiveness = time.Since(r.startedAt)
+	r.responsiveness = r.exec.now().Sub(r.startedAt)
 	r.exec.metrics.ObserveTTFT(cand.ID(), r.responsiveness.Seconds())
 	return r.exchangeStream(cand, resp, lease, model)
 }
@@ -137,7 +137,7 @@ func (r *requestRun) exchangeBuffered(cand upstream.Upstream, resp *upstream.Res
 	r.success = snapshot(resp.StatusCode, resp.Header, body)
 	// A buffered reply has no separate responsiveness point: its whole
 	// buffered duration is the signal.
-	r.responsiveness = time.Since(r.startedAt)
+	r.responsiveness = r.exec.now().Sub(r.startedAt)
 	if usage, ok := protocol.ParseUsage(body); ok {
 		r.usage, r.usageKnown = usage, true
 	}
