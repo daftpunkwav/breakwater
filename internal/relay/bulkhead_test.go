@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
 	"github.com/daftpunkwav/breakwater/internal/retry"
@@ -147,6 +148,55 @@ func TestBulkheadAbsentByDefault(t *testing.T) {
 	captured := execute(t, exec, []upstream.Upstream{okUpstream(t, "a"), okUpstream(t, "b")}, false, `{}`)
 	if captured.Status != http.StatusOK || captured.UpstreamID != "a" {
 		t.Fatalf("status = %d upstream = %q, want 200 on a", captured.Status, captured.UpstreamID)
+	}
+}
+
+// TestBulkheadRefusalLeavesTheHalfOpenProbeFree pins the acquisition
+// order the capacity contract needs: the bulkhead slot is taken before
+// the breaker is consulted, so a saturated candidate can never strand
+// an already-granted half-open probe permit. A permit the attempt never
+// reports holds the probe slot for its whole ProbeTimeout — denying
+// every caller in the meantime — and is then reclaimed as a server
+// fault, re-opening the machine on a refusal that proves nothing about
+// the upstream's health.
+func TestBulkheadRefusalLeavesTheHalfOpenProbeFree(t *testing.T) {
+	clock := time.Now()
+	br := circuit.NewRegistry(circuit.Config{FailThreshold: 1, Cooldown: time.Minute, ProbeTimeout: time.Second},
+		circuit.WithClock(func() time.Time { return clock }))
+	ctx := context.Background()
+	p, ok := br.Allow(ctx, "solo")
+	if !ok {
+		t.Fatal("closed breaker denied a call")
+	}
+	p.Report(circuit.OutcomeServerFault) // opens
+	clock = clock.Add(2 * time.Minute)   // cooldown elapses; the next Allow is the probe
+
+	gate := newTestGate()
+	held, ok := gate.Acquire("solo", 1)
+	if !ok {
+		t.Fatal("pre-acquire failed")
+	}
+	defer held()
+
+	calls := 0
+	exec := New(testPolicy(), nil, WithBreaker(br), WithUpstreamBulkhead(gate, 1))
+	captured := execute(t, exec, []upstream.Upstream{countedStubUpstream(t, &calls, "solo", http.StatusOK, `{}`)}, false, `{}`)
+	if captured.Status != http.StatusServiceUnavailable || captured.ErrorCode != "upstream_saturated" {
+		t.Fatalf("status = %d code = %q, want 503 upstream_saturated", captured.Status, captured.ErrorCode)
+	}
+	if calls != 0 {
+		t.Fatalf("upstream exchanges = %d, want 0 (a saturated candidate is never touched)", calls)
+	}
+
+	// The capacity refusal consumed nothing: the probe slot must still
+	// admit the very next caller.
+	probe, ok := br.Allow(ctx, "solo")
+	if !ok {
+		t.Fatal("half-open probe denied after a saturated attempt: the capacity refusal stranded the probe permit")
+	}
+	probe.Report(circuit.OutcomeSuccess)
+	if got := br.StateOf(ctx, "solo"); got != circuit.StateClosed {
+		t.Fatalf("state after a healthy probe = %v, want closed", got)
 	}
 }
 

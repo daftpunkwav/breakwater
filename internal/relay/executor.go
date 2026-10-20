@@ -427,21 +427,15 @@ func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 	}
 	r.lastCand = cand
 
-	var perm circuit.Permission
-	if r.exec.breaker != nil {
-		p, ok := r.exec.breaker.Allow(attemptCtx, cand.ID())
-		if !ok {
-			r.trace(cand.ID(), -1, 0)
-			return fmt.Errorf("relay: circuit open for upstream %s: %w", cand.ID(), errCircuitOpen)
-		}
-		perm = p
-	}
-
 	// The per-upstream ceiling is a capacity condition, not a health
 	// one: a saturated candidate is skipped toward the next one and the
 	// refusal never reaches the breaker, the performance tracker or the
-	// trail as an exchange event. The slot returns when this attempt
-	// ends, however it ends.
+	// trail as an exchange event. The slot is taken before the breaker
+	// is consulted, so a refusal can never strand an already-granted
+	// half-open probe permit: a permit the attempt never reports holds
+	// the probe slot for its whole ProbeTimeout and then re-opens the
+	// machine — a health verdict a capacity refusal must never produce.
+	// The slot returns when this attempt ends, however it ends.
 	if r.exec.bulkhead != nil {
 		release, ok := r.exec.bulkhead.Acquire(cand.ID(), r.exec.bulkheadMax)
 		if !ok {
@@ -450,6 +444,16 @@ func (r *requestRun) attempt(attemptCtx context.Context, attempt int) error {
 			return fmt.Errorf("relay: upstream %s is at its in-flight ceiling: %w", cand.ID(), errUpstreamSaturated)
 		}
 		defer release()
+	}
+
+	var perm circuit.Permission
+	if r.exec.breaker != nil {
+		p, ok := r.exec.breaker.Allow(attemptCtx, cand.ID())
+		if !ok {
+			r.trace(cand.ID(), -1, 0)
+			return fmt.Errorf("relay: circuit open for upstream %s: %w", cand.ID(), errCircuitOpen)
+		}
+		perm = p
 	}
 
 	started := r.exec.now()
