@@ -40,8 +40,9 @@ import (
 )
 
 // Window geometry and formula constants. The window covers ten seconds
-// in forty buckets; the constants shape how aggressively the deny
-// probability rises and how much healthy history forgives.
+// in forty buckets, mirroring the slow strategy's window — change the
+// geometry on both sides together; the constants shape how aggressively
+// the deny probability rises and how much healthy history forgives.
 const (
 	ratioBuckets    = 40
 	ratioBucketSpan = 250 * time.Millisecond

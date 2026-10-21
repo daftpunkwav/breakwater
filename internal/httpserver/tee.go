@@ -53,7 +53,7 @@ func NewDetachedBufferingTee(w http.ResponseWriter, captureLimit int) *TeeRespon
 	return &TeeResponseWriter{w: w, captureLimit: captureLimit, flusher: flusherOf(w), detached: true}
 }
 
-// flusherOf is the flusher lookup newTee shares.
+// flusherOf is the flusher lookup the tee constructors share.
 func flusherOf(w http.ResponseWriter) http.Flusher {
 	if f, ok := w.(http.Flusher); ok {
 		return f

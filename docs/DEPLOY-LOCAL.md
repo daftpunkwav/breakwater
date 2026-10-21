@@ -140,10 +140,11 @@ The monitoring store (`BREAKWATER_INSIGHTS_DSN`, defaulting to the
 identity DSN) persists one row per finished request — including the
 failure cause: governance rejections carry their code
 (`invalid_api_key`, `rate_limit_exceeded`, `insufficient_quota`,
-`concurrency_limit_exceeded`), gateway failures theirs
-(`no_upstream`, `circuit_open`, `budget_exhausted`,
-`upstream_unreachable`), and upstream error passthroughs classify by
-status class. Client disconnects never count as failures.
+`concurrency_limit_exceeded`, ...), gateway failures theirs
+(`no_upstream`, `circuit_open`, `upstream_saturated`,
+`budget_exhausted`, `upstream_unreachable`), and upstream error
+passthroughs classify by status class. Client disconnects never count
+as failures.
 
 User and key management requires the PostgreSQL identity store; the
 limits layers merge tier → user → key (nearest scalar wins, denies

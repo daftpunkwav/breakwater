@@ -31,7 +31,9 @@ import (
 )
 
 // apiKeyOf extracts the API key: Authorization: Bearer first, then the
-// x-api-key header Anthropic clients send.
+// x-api-key header Anthropic clients send. Bearer is authoritative when
+// both are present — an empty Bearer value is a missing key, not a
+// fallback to x-api-key.
 func apiKeyOf(r *http.Request) (string, bool) {
 	if raw := r.Header.Get("Authorization"); strings.HasPrefix(raw, bearerPrefix) {
 		if key := strings.TrimSpace(strings.TrimPrefix(raw, bearerPrefix)); key != "" {

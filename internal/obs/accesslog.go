@@ -64,7 +64,8 @@ type AttemptTrace struct {
 	Upstream string
 	// Credential is the ring position of the credential the exchange
 	// used; -1 when the exchange carried none (a transport failure, a
-	// breaker denial, or a credential-less upstream).
+	// breaker denial, a capacity refusal, or a credential-less
+	// upstream).
 	Credential int
 	// Status is the completed exchange's status; zero when the attempt
 	// never completed.

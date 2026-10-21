@@ -44,7 +44,10 @@ type PGStore struct {
 // cold-cache burst.
 const poolMaxConns = 8
 
-// NewPGStore connects the pool; connection failures surface at assembly.
+// NewPGStore parses the DSN and builds the pool. pgxpool connects
+// lazily, so an unreachable database surfaces at the first query or
+// Ping (readiness), not here; only DSN and config errors return an
+// error at assembly.
 func NewPGStore(ctx context.Context, dsn, keyPepper string) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

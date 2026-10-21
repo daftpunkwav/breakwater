@@ -234,7 +234,8 @@ type Job struct {
 // AttemptTrace records one upstream attempt in the access trail: the
 // candidate that served it, the credential it used, and the status the
 // exchange completed with — zero when it never completed (transport
-// failure, breaker denial, a time-to-first-byte cut).
+// failure, breaker denial, a capacity refusal, a time-to-first-byte
+// cut).
 type AttemptTrace struct {
 	Upstream string
 	// CredentialIndex is the ring position of the credential the
@@ -277,9 +278,10 @@ type Result struct {
 	ClientGone bool
 	// ErrorCode is the gateway-originated failure code when the gateway
 	// itself rendered the error: no_upstream, circuit_open,
-	// budget_exhausted, upstream_unreachable, or the in-stream abort
-	// code of a broken stream. Upstream error passthroughs leave it
-	// empty — their status code is the failure classification.
+	// upstream_saturated, budget_exhausted, upstream_unreachable, or the
+	// in-stream abort code of a broken stream. Upstream error
+	// passthroughs leave it empty — their status code is the failure
+	// classification.
 	ErrorCode string
 }
 
