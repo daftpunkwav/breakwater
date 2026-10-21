@@ -188,9 +188,21 @@ func TestCeilingRoomReopensAtTheSweepWindow(t *testing.T) {
 		idx.Pick("m", strings.Repeat(string(rune('A'+i)), maxChunks*chunkSize), []string{"a", "b"})
 	}
 	wantNodes(t, idx, maxNodes)
+	// Between windows the capped trie just declines: no sweep runs, so
+	// the throttle's timestamp stands and the pick neither matches nor
+	// records. This is the assertion that separates the throttle-only
+	// cadence from re-sweeping on every capped pick.
+	sweptAt := idx.sweptAt
+	c.advance(time.Hour / 4)
+	if got := idx.Pick("m", strings.Repeat("!", chunkSize), []string{"b", "a"}); got != -1 {
+		t.Fatalf("pick between sweep windows = %d, want -1", got)
+	}
+	if !idx.sweptAt.Equal(sweptAt) {
+		t.Fatalf("sweptAt changed between sweep windows: got %v, want %v", idx.sweptAt, sweptAt)
+	}
 	// At the sweep window, nothing has expired: the sweep frees no room
 	// and the ceiling still holds.
-	c.advance(time.Hour / 2)
+	c.advance(time.Hour / 4)
 	if got := idx.Pick("m", strings.Repeat("!", chunkSize), []string{"b", "a"}); got != -1 {
 		t.Fatalf("pick at a full ceiling = %d, want -1", got)
 	}

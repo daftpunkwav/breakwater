@@ -6,8 +6,10 @@
 package config
 
 import (
+	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRequestBudgetSaturatesWhenBoundsSumPastTheCeiling pins the
@@ -29,11 +31,14 @@ func TestRequestBudgetSaturatesWhenBoundsSumPastTheCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with individually valid, jointly overflowing bounds: %v", err)
 	}
-	if cfg.RequestCeiling() <= 0 {
-		t.Fatalf("request ceiling = %v, want a saturated positive bound", cfg.RequestCeiling())
+	// Both accessors must read the exact saturation ceiling: a merely
+	// positive check would accept a wrapped or clamped-off value.
+	want := time.Duration(math.MaxInt64)
+	if cfg.RequestCeiling() != want {
+		t.Fatalf("request ceiling = %v, want %v", cfg.RequestCeiling(), want)
 	}
-	if cfg.LeaseTTL() <= 0 {
-		t.Fatalf("lease TTL = %v, want a saturated positive horizon", cfg.LeaseTTL())
+	if cfg.LeaseTTL() != want {
+		t.Fatalf("lease TTL = %v, want %v", cfg.LeaseTTL(), want)
 	}
 }
 

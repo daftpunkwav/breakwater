@@ -159,13 +159,31 @@ func TestMemorySweepOnceBoundsItsScan(t *testing.T) {
 		t.Fatalf("balance = %d, want exactly the batch's %d refunded", bal, scanBatch)
 	}
 	// The remainder expires on the next pass: bounding the scan delays
-	// the reclaim, it never skips it.
-	expired, err = m.SweepOnce(ctx, time.Now().Add(defaultLeaseTTL+time.Second), scanBatch+50)
-	if err != nil {
-		t.Fatalf("second sweep: %v", err)
+	// the reclaim, it never skips it. Expired leases persist through the
+	// audit window and keep occupying the scan, and the map's randomized
+	// iteration order decides which reserved leases a pass reaches, so
+	// convergence takes whatever bounded passes it takes.
+	total := 0
+	for pass := 0; total < 50; pass++ {
+		if pass == scanBatch {
+			t.Fatalf("still %d unreclaimed after %d bounded passes", 50-total, pass)
+		}
+		expired, err = m.SweepOnce(ctx, time.Now().Add(defaultLeaseTTL+time.Second), scanBatch+50)
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if expired > scanBatch {
+			t.Fatalf("pass %d expired = %d, over the %d-lease scan batch", pass, expired, scanBatch)
+		}
+		total += expired
 	}
-	if expired != 50 {
-		t.Fatalf("second sweep expired = %d, want the remaining 50", expired)
+	if total != 50 {
+		t.Fatalf("accumulated expired = %d, want the remaining 50", total)
+	}
+	// Every abandoned lease is refunded in the end: the bound delays the
+	// reclaim, it never gives it up.
+	if bal, _ := m.Balance(ctx, "t"); bal != int64(scanBatch+50) {
+		t.Fatalf("balance = %d, want fully refunded %d", bal, scanBatch+50)
 	}
 }
 

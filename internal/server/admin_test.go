@@ -146,6 +146,9 @@ func TestAdminBodyCapIsARejectionNotATruncation(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized body status = %d, want 400", rec.Code)
 	}
+	if !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("oversized body response = %s, want the invalid_request code", rec.Body.String())
+	}
 	if received != -1 {
 		t.Fatalf("a truncated oversized body reached the ledger with balance %d", received)
 	}
