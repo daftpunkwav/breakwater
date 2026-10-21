@@ -127,7 +127,8 @@ load-test 场景准备的，它们用 seed key 调用网关。加入 DSN 即可�
 （`invalid_api_key`、`rate_limit_exceeded`、`insufficient_quota`、
 `concurrency_limit_exceeded`……），网关失败带自己的（`no_upstream`、
 `circuit_open`、`upstream_saturated`、`budget_exhausted`、
-`upstream_unreachable`），上游错误
+`upstream_unreachable`），流中断带流内错误码（`upstream_timeout`、
+`upstream_reset`），上游错误
 passthrough 按状态类分类。客户端断连绝不计为失败。
 
 用户与 key 管理需要 PostgreSQL identity store；limits 层按 tier → user →
