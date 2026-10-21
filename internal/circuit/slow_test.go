@@ -384,5 +384,55 @@ func TestSlowAbsorbedAndExpiredPaths(t *testing.T) {
 	}
 }
 
+// TestSlowProbeReportsThatReclaim pins the half-open reports that must
+// not be judged as probe evidence: a gateway cut is policy, not
+// upstream health, and a healthy report landing past the probe's own
+// deadline is unreliable. Both reclaim the machine — open with a fresh
+// cooldown, slot free for the next caller — instead of letting a cut or
+// a timed-out report close the breaker on evidence it does not carry.
+func TestSlowProbeReportsThatReclaim(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		outcome Outcome
+		late    bool
+	}{
+		{"a gateway cut is policy, not evidence", OutcomeGatewayTerminated, false},
+		{"a healthy report past the probe deadline is unreliable", OutcomeSlow, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg, advance, _ := newSlowFixture(t, 0.5)
+			const id = "u1"
+
+			saturateWindow(t, reg, id, advance)
+			advance(120) // the cooldown elapses into half-open
+			p, ok := reg.Allow(context.Background(), id)
+			if !ok {
+				t.Fatal("half-open must admit the probe")
+			}
+			if tc.late {
+				advance(21) // past the 20-step probe timeout
+			}
+			p.Report(tc.outcome)
+			if state := reg.StateOf(context.Background(), id); state != StateOpen {
+				t.Fatalf("state = %s, want the reclaimed open machine", state)
+			}
+			if _, ok := reg.Allow(context.Background(), id); ok {
+				t.Fatal("the reclaim must arm a fresh cooldown")
+			}
+			advance(120)
+			probe, ok := reg.Allow(context.Background(), id)
+			if !ok {
+				t.Fatal("the reclaimed slot must admit the next probe once the cooldown elapses")
+			}
+			probe.Report(OutcomeSlow)
+			if state := reg.StateOf(context.Background(), id); state != StateClosed {
+				t.Fatalf("state = %s, want closed after the next healthy probe", state)
+			}
+		})
+	}
+}
+
 // clockStep backs the SlowClock of TestSlowAbsorbedAndExpiredPaths.
 var clockStep int

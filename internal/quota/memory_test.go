@@ -125,6 +125,50 @@ func TestMemorySweeperReclaimsAbandonedLeases(t *testing.T) {
 	// The reclaimed lease is terminal: a late settle is a no-op.
 }
 
+// TestMemorySweepOnceBoundsItsScan pins the per-pass scan ceiling: one
+// SweepOnce walks at most scanBatch leases, whatever the ledger holds.
+// The bound is what keeps the lock's residency proportional to the
+// batch instead of the ledger — a sweep that walked everything would
+// turn one abandoned-lease backlog into a stop-the-world pause on every
+// tick.
+func TestMemorySweepOnceBoundsItsScan(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+	if err := m.SetBalance(ctx, "t", int64(scanBatch+50)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for i := 0; i < scanBatch+50; i++ {
+		if _, err := m.Reserve(ctx, "t", 1); err != nil {
+			t.Fatalf("reserve %d: %v", i, err)
+		}
+	}
+	// Every lease is abandoned; the generous limit makes the scan
+	// ceiling the binding constraint, not the expiry budget.
+	expired, err := m.SweepOnce(ctx, time.Now().Add(defaultLeaseTTL+time.Second), scanBatch+50)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if expired != scanBatch {
+		t.Fatalf("expired = %d, want exactly the %d-lease scan batch", expired, scanBatch)
+	}
+	// The refund says the same thing from the outside: exactly the
+	// batch's worth of reservations was released, the 50 past the batch
+	// still hold theirs.
+	if bal, _ := m.Balance(ctx, "t"); bal != int64(scanBatch) {
+		t.Fatalf("balance = %d, want exactly the batch's %d refunded", bal, scanBatch)
+	}
+	// The remainder expires on the next pass: bounding the scan delays
+	// the reclaim, it never skips it.
+	expired, err = m.SweepOnce(ctx, time.Now().Add(defaultLeaseTTL+time.Second), scanBatch+50)
+	if err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	if expired != 50 {
+		t.Fatalf("second sweep expired = %d, want the remaining 50", expired)
+	}
+}
+
 // TestMemoryBalanceUnknownTenant locks the Balance error contract: an
 // unprovisioned tenant is reported, not read as zero, so the admin API
 // can tell "no ledger" apart from "drained".
