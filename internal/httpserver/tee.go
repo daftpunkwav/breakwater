@@ -109,8 +109,8 @@ func (t *TeeResponseWriter) Write(p []byte) (int, error) {
 		// full success: an io.Writer that returns fewer bytes than it
 		// was handed must return an error, and the error-free half
 		// report is exactly what the detached mode exists to prevent
-		// from propagating. The byte count follows the same story and
-		// matches what the capture retained.
+		// from propagating. The byte count follows the same story:
+		// every byte the tee was handed counts as delivered.
 		err = nil
 		n = len(p)
 	}
