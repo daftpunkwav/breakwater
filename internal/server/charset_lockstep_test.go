@@ -12,6 +12,7 @@ package server
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -49,6 +50,17 @@ func TestIdentifierCharsetsStayInLockstep(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Not parallel: the config surface runs a full Load, and
 			// t.Setenv forbids parallel tests.
+			// The config leg reads the process environment, so the
+			// BREAKWATER_* variables a developer shell exports for a
+			// local deployment must not leak into the document under
+			// test — the same defensive clear the config and cmd test
+			// suites apply. Empty means unset to Load.
+			for _, kv := range os.Environ() {
+				if key, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(key, "BREAKWATER_") {
+					t.Setenv(key, "")
+				}
+			}
+
 			// The admin surface's path-segment rule.
 			if got := validTenantID(tc.id); got != tc.valid {
 				t.Fatalf("server: validTenantID(%q) = %v, want %v", tc.id, got, tc.valid)
