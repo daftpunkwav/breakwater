@@ -14,7 +14,7 @@ no separate test tree, no parallel hierarchy to drift.
 | Functional | `internal/server/chain_test.go`, `inference_formats_test.go`, `completions_test.go`, `model_authz_cache_test.go` | Full pipeline scenarios through the real routes: the eight acceptance scenarios (key rejection, rate limiting, zero-settlement on failure, quota exhaustion, streaming through governance, tier denial, client-disconnect settlement and request-id echo), the three client formats, honest stream termination, cache refund accounting, the tier-authorization/cache interplay. |
 | Integration | `*_integration_test.go`, env-gated | Real PostgreSQL and Redis (the CI workflow provisions both as service containers). Locally they skip unless `BREAKWATER_TEST_POSTGRES_DSN` / `BREAKWATER_TEST_REDIS_ADDR` are set. |
 | Concurrency / race | everywhere, `-race` is the CI default | The invariant evidence: concurrent quota drains reconcile to zero error, stampede fetches run exactly once, breaker probe slots never double-grant, the concurrency gate never exceeds its ceiling, logger drops stay counted. |
-| Benchmark | `*_bench_test.go` | SSE pump, singleflight stampede and concurrency-gate locking baselines (`go test -bench`). |
+| Benchmark | `*_bench_test.go` | SSE pump, bounded reads, singleflight stampede, concurrency-gate locking, logger drain, usage-frame parsing, token estimation, insights batching and affinity-pick baselines (`go test -bench`). |
 
 ## Naming and cohesion
 
@@ -35,21 +35,30 @@ are the index — run any of them to check the property directly.
 | Property | Owner | Guarding test |
 | -------- | ----- | ------------- |
 | A rejected request never reaches an upstream | `internal/server`, `internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`, `TestChainRateLimitsWithRetryAfter`, `TestChainQuotaExhaustionIsPaymentRequired`, `TestChainDeniesModelOutsideTier` |
+| An oversized admin body is rejected whole, never truncated into an accepted write | `internal/server` | `TestAdminBodyCapIsARejectionNotATruncation` |
+| The identifier character sets three packages enforce accept exactly the same strings | `internal/server`, `internal/auth`, `internal/config` | `TestIdentifierCharsetsStayInLockstep` |
+| A recovery stage never writes into a committed response | `internal/pipeline` | `TestRecoveryStageNeverWritesAfterCommit` |
 | Concurrent cold requests for one cache key cause exactly one upstream fetch | `internal/cache` | `TestFlightSingleFetchUnderStampede`, `TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
 | A starter that walks away mid-fetch neither cancels the shared fetch nor fails the waiters riding it | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`, `TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
 | A panicking fetch releases its waiters instead of wedging them | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | A request never exceeds its attempt cap, and retries never exceed the global in-flight budget | `internal/retry` | `TestExecuteCapsAttempts`, `TestBudgetCapsInFlightRetries`, `TestBudgetReleaseAbsorbsImbalance` |
+| Individually legal duration bounds saturate instead of wrapping into an instantly-expired budget | `internal/config` | `TestRequestBudgetSaturatesWhenBoundsSumPastTheCeiling` |
+| A detached tee's absorbed write failure reads as full success, per the `io.Writer` contract | `internal/httpserver` | `TestDetachedTeeReportsFullWriteOnAbsorbedFailure` |
 | After the first response byte, the loop never retries | `internal/retry`, `internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
+| A saturated candidate never holds a granted half-open probe permit | `internal/relay` | `TestBulkheadRefusalLeavesTheHalfOpenProbeFree` |
 | A relayed response never carries a media type a browser renders as a document, at any of the three points one can be set — the buffered passthrough, the stream commit, and a cache replay | `internal/protocol`, `internal/relay`, `internal/cache` | `TestForwardedContentType`, `TestRenderExchangeBodyReplacesDocumentContentType`, `TestStreamCommitReplacesDocumentContentType`, `TestCacheReplayReplacesDocumentContentType` |
 | An open breaker denies every call; half-open admits exactly one probe and reclaims abandoned ones | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`, `TestBreakerReclaimsAbandonedProbe` |
 | The ratio guard denies a rising share of calls but never cuts traffic entirely — one call per forced-pass interval still gets through | `internal/circuit` | `TestRatioDenialTracksFailureShare`, `TestRatioForcePassAdmitsOnePerInterval` |
 | The slow-call breaker opens only on a sampled window reaching the slow share (a thin window never opens, faults count as the strongest slow evidence), and a healthy probe closes it on an emptied window | `internal/circuit` | `TestSlowWindowNeedsSamples`, `TestSlowShareOpensTheBreaker`, `TestSlowProbeClosesOnAnEmptiedWindow` |
 | A healthy attempt past the slow threshold reports as slow — Success-grade evidence every strategy absorbs; streams measure it by time to first byte | `internal/circuit`, `internal/relay` | `TestConsecutiveAbsorbsSlowAsHealth`, `TestSlowBufferedAttemptReportsSlow`, `TestSlowStreamTTFTReportsSlow` |
+| An operator reset republishes the machine closed through the transition observer, so the state gauge never holds a stale open reading | `internal/circuit` | `TestSlowResetFiresTheTransitionObserver` |
 | A hard-down upstream's recovery probes space out on a doubling ladder; a healthy answer forgets the ladder | `cmd/breakwater` | `TestProbeBackoffLadder`, `TestRecoveryBackoffZeroKeepsFixedPace` |
 | A reconcile round cannot outlive its own cadence; a wedged store aborts the round at the bound | `internal/quota` | `TestStartReconcilerBoundsAWedgedRound` |
-| A broken stream keeps its delivered bytes and ends with one error event plus `[DONE]` | `internal/relay`, `internal/protocol` | `TestWriteAbortContract`, `TestWriteAbortAllCodes`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
+| A broken stream keeps its delivered bytes and ends with one error event plus `[DONE]` | `internal/relay`, `internal/protocol` | `TestWriteAbortContract`, `TestWriteAbortAllCodes`, `TestPumpStreamFlagsATruncatedStreamAsUpstreamEvidence`, `TestMessagesRouteStreamAbortTerminatesHonestly` |
 | The balance never over-drafts; debits minus refunds reconcile against the balance | `internal/quota` | `TestMemoryConcurrentDrainReconciles`, `TestRedisConcurrentDrainReconciles` |
 | Every reservation has a lease record; abandoned leases are reclaimed | `internal/quota` | `TestStartSweeperReclaimsUntilCancelled` |
+| One sweep pass scans a bounded batch; the bound delays a reclaim, never skips it | `internal/quota` | `TestMemorySweepOnceBoundsItsScan` |
+| A capped affinity trie declines between sweep windows and resumes recording at the next one | `internal/affinity` | `TestCeilingRoomReopensAtTheSweepWindow` |
 | A client gone mid-stream still settles by the tokens it consumed | `internal/quota`, `internal/server` | `TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage` |
 | A full observation buffer drops and counts rather than blocking handlers | `internal/obs`, `internal/insights` | `TestLoggerDropsOldestUnderPressure`, `TestRecordQueuesAndCountsDrops` |
 | A failed batch write is counted, not retried silently | `internal/insights` | `TestCopyIntoDropsOnFailure` |

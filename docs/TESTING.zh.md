@@ -13,7 +13,7 @@
 | Functional | `internal/server/chain_test.go`、`inference_formats_test.go`、`completions_test.go`、`model_authz_cache_test.go` | 走真实路由的完整 pipeline 场景：八个验收场景（key 拒绝、限流、失败零结算、quota 耗尽、经 governance 的流式、tier 拒绝、客户端断连结算与 request-id 回显）、三种 client format、诚实流终结、缓存退款记账、tier 授权与缓存的相互作用。 |
 | Integration | `*_integration_test.go`，环境变量门控 | 真实 PostgreSQL 与 Redis（CI workflow 以 service container 提供两者）。本地未设置 `BREAKWATER_TEST_POSTGRES_DSN` / `BREAKWATER_TEST_REDIS_ADDR` 时跳过。 |
 | Concurrency / race | 遍布各包，`-race` 是 CI 默认 | 不变量证据：并发 quota 消耗对账归零、stampede 回源恰好一次、breaker probe 槽位绝不双授、并发闸绝不越顶、日志丢弃仍被计数。 |
-| Benchmark | `*_bench_test.go` | SSE 泵、singleflight stampede 与并发闸锁基线（`go test -bench`）。 |
+| Benchmark | `*_bench_test.go` | SSE 泵、受限读取、singleflight stampede、并发闸锁、日志排空、usage 帧解析、token 估算、insights 批量写与 affinity 选取基线（`go test -bench`）。 |
 
 ## 命名与内聚
 
@@ -32,21 +32,30 @@
 | 性质 | 拥有者 | 守护测试 |
 | -------- | ----- | ------------- |
 | 被拒请求绝不抵达 upstream | `internal/server`、`internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`、`TestChainRateLimitsWithRetryAfter`、`TestChainQuotaExhaustionIsPaymentRequired`、`TestChainDeniesModelOutsideTier` |
+| 超限的管理端请求体被整体拒绝，绝不截断成一次被接受的写入 | `internal/server` | `TestAdminBodyCapIsARejectionNotATruncation` |
+| 三个包各自执行的标识符字符集接受完全相同的字符串 | `internal/server`、`internal/auth`、`internal/config` | `TestIdentifierCharsetsStayInLockstep` |
+| recovery 阶段绝不向已提交的响应写入 | `internal/pipeline` | `TestRecoveryStageNeverWritesAfterCommit` |
 | 同一 cache key 的并发冷请求恰好一次上游回源 | `internal/cache` | `TestFlightSingleFetchUnderStampede`、`TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
 | 中途离场的发起者既不取消共享回源，也不使其上的 waiter 失败 | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`、`TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
 | panic 的回源释放其 waiter 而非卡死它们 | `internal/cache` | `TestFlightPanicReleasesWaiters` |
 | 请求绝不超出 attempt 上限，重试绝不超出全局 in-flight 预算 | `internal/retry` | `TestExecuteCapsAttempts`、`TestBudgetCapsInFlightRetries`、`TestBudgetReleaseAbsorbsImbalance` |
+| 各自合法的时长上界求和饱和，绝不回绕成即刻过期的预算 | `internal/config` | `TestRequestBudgetSaturatesWhenBoundsSumPastTheCeiling` |
+| detached tee 吸收的写失败按 `io.Writer` 契约读作全额成功 | `internal/httpserver` | `TestDetachedTeeReportsFullWriteOnAbsorbedFailure` |
 | 第一个响应字节之后，loop 绝不重试 | `internal/retry`、`internal/relay` | `TestExecuteNeverClassifiesCommittedErrors`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
+| 饱和的候选绝不占用已授予的 half-open probe 许可 | `internal/relay` | `TestBulkheadRefusalLeavesTheHalfOpenProbeFree` |
 | 转发的响应绝不携带浏览器会当作文档渲染的媒体类型；三个可设置它的位置——缓冲 passthrough、流式 commit、缓存 replay——皆然 | `internal/protocol`、`internal/relay`、`internal/cache` | `TestForwardedContentType`、`TestRenderExchangeBodyReplacesDocumentContentType`、`TestStreamCommitReplacesDocumentContentType`、`TestCacheReplayReplacesDocumentContentType` |
 | 打开的 breaker 拒绝一切调用；half-open 恰放行一个 probe 并回收被弃的 | `internal/circuit` | `TestBreakerConcurrentProbesExactlyOne`、`TestBreakerReclaimsAbandonedProbe` |
 | ratio 守卫按失败占比拒绝越来越多的调用，但绝不完全切断流量——每个强制放行间隔仍有一个调用通过 | `internal/circuit` | `TestRatioDenialTracksFailureShare`、`TestRatioForcePassAdmitsOnePerInterval` |
 | slow-call 熔断只在采样窗口的慢占比达标时开路（样本不足永不开路，故障算最强的慢证据），健康探测在清空后的窗口上关闭它 | `internal/circuit` | `TestSlowWindowNeedsSamples`、`TestSlowShareOpensTheBreaker`、`TestSlowProbeClosesOnAnEmptiedWindow` |
 | 健康的 attempt 越过慢阈值即上报为慢——每个策略都按成功级证据吸收；流式以首字节时刻度量 | `internal/circuit`、`internal/relay` | `TestConsecutiveAbsorbsSlowAsHealth`、`TestSlowBufferedAttemptReportsSlow`、`TestSlowStreamTTFTReportsSlow` |
+| 运维 reset 经迁移观察者重新发布 closed，状态 gauge 绝不停留过期的 open 读数 | `internal/circuit` | `TestSlowResetFiresTheTransitionObserver` |
 | 彻底宕掉的上游其恢复探测按翻倍阶梯拉开间隔；一次健康应答即忘记阶梯 | `cmd/breakwater` | `TestProbeBackoffLadder`、`TestRecoveryBackoffZeroKeepsFixedPace` |
 | 对账轮次不会活过自己的节拍；卡死的 store 在边界处中止该轮 | `internal/quota` | `TestStartReconcilerBoundsAWedgedRound` |
-| 断掉的流保留已交付字节，以一个错误事件加 `[DONE]` 收尾 | `internal/relay`、`internal/protocol` | `TestWriteAbortContract`、`TestWriteAbortAllCodes`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
+| 断掉的流保留已交付字节，以一个错误事件加 `[DONE]` 收尾 | `internal/relay`、`internal/protocol` | `TestWriteAbortContract`、`TestWriteAbortAllCodes`、`TestPumpStreamFlagsATruncatedStreamAsUpstreamEvidence`、`TestMessagesRouteStreamAbortTerminatesHonestly` |
 | 余额绝不透支；扣减减去退款与余额对账 | `internal/quota` | `TestMemoryConcurrentDrainReconciles`、`TestRedisConcurrentDrainReconciles` |
 | 每笔预留都有 lease 记录；被弃的 lease 被回收 | `internal/quota` | `TestStartSweeperReclaimsUntilCancelled` |
+| 单次清扫扫描有界的一批；该上界推迟回收，绝不跳过 | `internal/quota` | `TestMemorySweepOnceBoundsItsScan` |
+| 触顶的 affinity trie 在清扫窗口之间拒绝记录，在下一个窗口恢复 | `internal/affinity` | `TestCeilingRoomReopensAtTheSweepWindow` |
 | 流中途离开的客户端仍按其消耗结算 | `internal/quota`、`internal/server` | `TestChainClientDisconnectCancelsUpstreamAndSettlesByUsage` |
 | 观测缓冲满时丢弃并计数，绝不阻塞 handler | `internal/obs`、`internal/insights` | `TestLoggerDropsOldestUnderPressure`、`TestRecordQueuesAndCountsDrops` |
 | 失败的批量写入被计数，而不是静默重试 | `internal/insights` | `TestCopyIntoDropsOnFailure` |

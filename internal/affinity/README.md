@@ -37,10 +37,12 @@ disabled affinity needs no branch.
   a failed exchange leaves its entry in place and the next eligibility
   filter is what retires it.
 - Memory is bounded twice: a per-model node ceiling (a record that cannot
-  fit is skipped, degrading to plain strategy order) and a freshness TTL
-  enforced by a throttled sweep on the write path — the same discipline
-  the cache module's expiry uses. Pruning walks children first, so a
-  long-shared prefix survives while only its tail extensions are stale.
+  fit is skipped, degrading to plain strategy order; the ceiling holds
+  between sweeps, and the next sweep window's pruning is what reopens
+  room) and a freshness TTL enforced by a throttled sweep on the write
+  path — the same discipline the cache module's expiry uses. Pruning
+  walks children first, so a long-shared prefix survives while only its
+  tail extensions are stale.
 
 ## Scope rules
 

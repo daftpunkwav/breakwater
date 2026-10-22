@@ -19,3 +19,6 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package row:
 - A caller-supplied `Listener` is owned by `Run` after the call. The
   caller does not close it and does not reuse it.
 - The response tee copies bytes. It does not classify gateway outcomes.
+- A detached tee absorbs its client's write failures and reports the
+  write as a full success — the shared work it backs must survive a
+  gone reader. An ordinary tee surfaces write failures.
