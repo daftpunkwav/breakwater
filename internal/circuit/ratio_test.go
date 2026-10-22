@@ -28,14 +28,14 @@ func (r *ratioRandom) Float64() float64 { return r.v }
 
 // newRatioFixture builds a registry over the controllable clock and
 // random source, plus a convenience Allow.
-func newRatioFixture(t *testing.T) (*RatioRegistry, *ratioClock, *ratioRandom) {
+func newRatioFixture(t *testing.T, extra ...RatioOption) (*RatioRegistry, *ratioClock, *ratioRandom) {
 	t.Helper()
 	clock := &ratioClock{t: time.Unix(0, 0)}
 	draw := &ratioRandom{v: 1}
-	reg := NewRatioRegistry(
+	reg := NewRatioRegistry(append([]RatioOption{
 		RatioClock(clock.Now),
 		RatioRandomSource(draw.Float64),
-	)
+	}, extra...)...)
 	return reg, clock, draw
 }
 
@@ -296,12 +296,12 @@ func TestRatioOutcomeAccounting(t *testing.T) {
 // an event and fires the observer.
 func TestRatioDenialRecordedAndObserved(t *testing.T) {
 	t.Parallel()
-	reg, clock, draw := newRatioFixture(t)
+	// The observer is wired the way production wires it: through the
+	// option, not the field.
+	var denied []string
+	reg, clock, draw := newRatioFixture(t, RatioOnDenial(func(upstream string) { denied = append(denied, upstream) }))
 	const id = "u1"
 	now := clock.Now()
-
-	var denied []string
-	reg.onDenial = func(upstream string) { denied = append(denied, upstream) }
 
 	feed(t, reg, id, 10)
 	draw.v = 0

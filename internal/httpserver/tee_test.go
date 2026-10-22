@@ -178,6 +178,28 @@ func TestDetachedBufferingTeeSurvivesAGoneClient(t *testing.T) {
 	}
 }
 
+// TestDetachedTeeReportsFullWriteOnAbsorbedFailure pins the write
+// contract of the detached tee: an absorbed failure must read as full
+// success, because an io.Writer that returns fewer bytes than it was
+// handed must return an error — and not surfacing the error is the
+// whole point of the detached mode. A short nil-error report would
+// break every caller that trusts the io.Writer contract.
+func TestDetachedTeeReportsFullWriteOnAbsorbedFailure(t *testing.T) {
+	t.Parallel()
+	tee := NewDetachedBufferingTee(&brokenWriter{header: make(http.Header)}, 64)
+
+	n, err := tee.Write([]byte("shared payload"))
+	if err != nil {
+		t.Fatalf("write surfaced the client's disconnect: %v", err)
+	}
+	if n != len("shared payload") {
+		t.Fatalf("write = %d, want %d (short report with nil error)", n, len("shared payload"))
+	}
+	if got := tee.BytesWritten(); got != int64(len("shared payload")) {
+		t.Fatalf("bytes written = %d, want %d (the count must tell the same story as the report)", got, len("shared payload"))
+	}
+}
+
 // TestBufferingTeeStillSurfacesWriteFailures: the tolerance is specific
 // to the detached tee. An ordinary tee must keep reporting a failed
 // write, or a real client error would be silently swallowed.

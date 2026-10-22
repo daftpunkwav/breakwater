@@ -125,6 +125,68 @@ func TestMemorySweeperReclaimsAbandonedLeases(t *testing.T) {
 	// The reclaimed lease is terminal: a late settle is a no-op.
 }
 
+// TestMemorySweepOnceBoundsItsScan pins the per-pass scan ceiling: one
+// SweepOnce walks at most scanBatch leases, whatever the ledger holds.
+// The bound is what keeps the lock's residency proportional to the
+// batch instead of the ledger — a sweep that walked everything would
+// turn one abandoned-lease backlog into a stop-the-world pause on every
+// tick.
+func TestMemorySweepOnceBoundsItsScan(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+	if err := m.SetBalance(ctx, "t", int64(scanBatch+50)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for i := 0; i < scanBatch+50; i++ {
+		if _, err := m.Reserve(ctx, "t", 1); err != nil {
+			t.Fatalf("reserve %d: %v", i, err)
+		}
+	}
+	// Every lease is abandoned; the generous limit makes the scan
+	// ceiling the binding constraint, not the expiry budget.
+	expired, err := m.SweepOnce(ctx, time.Now().Add(defaultLeaseTTL+time.Second), scanBatch+50)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if expired != scanBatch {
+		t.Fatalf("expired = %d, want exactly the %d-lease scan batch", expired, scanBatch)
+	}
+	// The refund says the same thing from the outside: exactly the
+	// batch's worth of reservations was released, the 50 past the batch
+	// still hold theirs.
+	if bal, _ := m.Balance(ctx, "t"); bal != int64(scanBatch) {
+		t.Fatalf("balance = %d, want exactly the batch's %d refunded", bal, scanBatch)
+	}
+	// The remainder expires on the next pass: bounding the scan delays
+	// the reclaim, it never skips it. Expired leases persist through the
+	// audit window and keep occupying the scan, and the map's randomized
+	// iteration order decides which reserved leases a pass reaches, so
+	// convergence takes whatever bounded passes it takes.
+	total := 0
+	for pass := 0; total < 50; pass++ {
+		if pass == scanBatch {
+			t.Fatalf("still %d unreclaimed after %d bounded passes", 50-total, pass)
+		}
+		expired, err = m.SweepOnce(ctx, time.Now().Add(defaultLeaseTTL+time.Second), scanBatch+50)
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if expired > scanBatch {
+			t.Fatalf("pass %d expired = %d, over the %d-lease scan batch", pass, expired, scanBatch)
+		}
+		total += expired
+	}
+	if total != 50 {
+		t.Fatalf("accumulated expired = %d, want the remaining 50", total)
+	}
+	// Every abandoned lease is refunded in the end: the bound delays the
+	// reclaim, it never gives it up.
+	if bal, _ := m.Balance(ctx, "t"); bal != int64(scanBatch+50) {
+		t.Fatalf("balance = %d, want fully refunded %d", bal, scanBatch+50)
+	}
+}
+
 // TestMemoryBalanceUnknownTenant locks the Balance error contract: an
 // unprovisioned tenant is reported, not read as zero, so the admin API
 // can tell "no ledger" apart from "drained".

@@ -120,6 +120,52 @@ func TestAdminQuotaTopUp(t *testing.T) {
 	}
 }
 
+// TestAdminBodyCapIsARejectionNotATruncation pins the decoder's body
+// cap as a real rejection. Read through a bare LimitReader, an
+// oversized body would be cut at the cap, so everything past it is
+// invisible to the trailing-data rejection: a valid document padded out
+// with whitespace to the cap would land as the write, and a second
+// document hidden behind the padding would never be seen.
+func TestAdminBodyCapIsARejectionNotATruncation(t *testing.T) {
+	t.Parallel()
+	received := int64(-1)
+	setter := func(_ *http.Request, _ string, balance int64) error {
+		received = balance
+		return nil
+	}
+	admin := NewAdmin("", nil, setter, nil)
+
+	// A valid document, then whitespace carrying the body past the cap,
+	// then a second document. Under truncation the first document is
+	// silently accepted and the second is never even read.
+	body := `{"balance":1}` + strings.Repeat(" ", maxAdminBodyBytes) + `{"balance":9}`
+	req := httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+		strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("oversized body response = %s, want the invalid_request code", rec.Body.String())
+	}
+	if received != -1 {
+		t.Fatalf("a truncated oversized body reached the ledger with balance %d", received)
+	}
+
+	// A legitimate write that fills the cap exactly — a valid document
+	// plus trailing whitespace up to the byte — still tops up: the cap
+	// bounds, it does not shift every large body to a rejection.
+	boundary := `{"balance":5}` + strings.Repeat(" ", maxAdminBodyBytes-13)
+	req = httptest.NewRequest(http.MethodPut, "/admin/tenants/t1/quota",
+		strings.NewReader(boundary))
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || received != 5 {
+		t.Fatalf("boundary body status = %d received = %d, want 200/5", rec.Code, received)
+	}
+}
+
 func TestAdminQuotaRejectsWrongMethod(t *testing.T) {
 	t.Parallel()
 	admin := NewAdmin("", nil, nil, nil)

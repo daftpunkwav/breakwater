@@ -222,6 +222,55 @@ func TestSlowResetEmptiesEverything(t *testing.T) {
 	}
 }
 
+// TestSlowResetFiresTheTransitionObserver: the reset publishes the
+// closed machine the same way every other transition does. The
+// consecutive registry's reset already runs through the shared
+// skeleton's enter; a slow registry that bypassed it left the state
+// gauge reading open after an operator reset an open breaker — while
+// StateOf and the admin view read closed — until the machine happened
+// to move again.
+func TestSlowResetFiresTheTransitionObserver(t *testing.T) {
+	t.Parallel()
+	step := 0
+	now := func() time.Time { return time.Unix(0, 0).Add(time.Duration(step) * slowBucketSpan) }
+	type transition struct{ from, to State }
+	var got []transition
+	reg := NewSlowRegistry(Config{SlowRatio: 0.5}, SlowClock(now),
+		SlowOnTransition(func(id string, from, to State) {
+			got = append(got, transition{from, to})
+		}))
+	const id = "u1"
+
+	for i := 0; i < slowMinSamples; i++ {
+		step++
+		p, ok := reg.Allow(context.Background(), id)
+		if !ok {
+			t.Fatalf("setup: closed breaker denied call %d", i)
+		}
+		p.Report(OutcomeSlow)
+	}
+	if state := reg.StateOf(context.Background(), id); state != StateOpen {
+		t.Fatalf("setup: state = %s, want open", state)
+	}
+	got = nil
+
+	reg.Reset(context.Background(), id)
+	if state := reg.StateOf(context.Background(), id); state != StateClosed {
+		t.Fatalf("state = %s, want closed after the reset", state)
+	}
+	if len(got) != 1 || got[0].from != StateOpen || got[0].to != StateClosed {
+		t.Fatalf("transitions on reset = %v, want exactly [open->closed]", got)
+	}
+
+	// A reset of an already-closed machine is no transition: nothing
+	// fires, and the window is still emptied for the next observation.
+	got = nil
+	reg.Reset(context.Background(), id)
+	if len(got) != 0 {
+		t.Fatalf("transitions on a closed-machine reset = %v, want none", got)
+	}
+}
+
 // TestSlowRatioDefaultAndClamp: a ratio outside (0, 1] selects the
 // default, so a misconfigured deployment cannot build a breaker that
 // never opens (0) or always opens (>1). NaN counts as outside: every
@@ -332,6 +381,56 @@ func TestSlowAbsorbedAndExpiredPaths(t *testing.T) {
 	// A report from the reclaimed slot is absorbed by the open machine.
 	if state := reg.StateOf(context.Background(), id); state != StateOpen {
 		t.Fatalf("state = %s, want still open", state)
+	}
+}
+
+// TestSlowProbeReportsThatReclaim pins the half-open reports that must
+// not be judged as probe evidence: a gateway cut is policy, not
+// upstream health, and a healthy report landing past the probe's own
+// deadline is unreliable. Both reclaim the machine — open with a fresh
+// cooldown, slot free for the next caller — instead of letting a cut or
+// a timed-out report close the breaker on evidence it does not carry.
+func TestSlowProbeReportsThatReclaim(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		outcome Outcome
+		late    bool
+	}{
+		{"a gateway cut is policy, not evidence", OutcomeGatewayTerminated, false},
+		{"a healthy report past the probe deadline is unreliable", OutcomeSlow, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg, advance, _ := newSlowFixture(t, 0.5)
+			const id = "u1"
+
+			saturateWindow(t, reg, id, advance)
+			advance(120) // the cooldown elapses into half-open
+			p, ok := reg.Allow(context.Background(), id)
+			if !ok {
+				t.Fatal("half-open must admit the probe")
+			}
+			if tc.late {
+				advance(21) // past the 20-step probe timeout
+			}
+			p.Report(tc.outcome)
+			if state := reg.StateOf(context.Background(), id); state != StateOpen {
+				t.Fatalf("state = %s, want the reclaimed open machine", state)
+			}
+			if _, ok := reg.Allow(context.Background(), id); ok {
+				t.Fatal("the reclaim must arm a fresh cooldown")
+			}
+			advance(120)
+			probe, ok := reg.Allow(context.Background(), id)
+			if !ok {
+				t.Fatal("the reclaimed slot must admit the next probe once the cooldown elapses")
+			}
+			probe.Report(OutcomeSlow)
+			if state := reg.StateOf(context.Background(), id); state != StateClosed {
+				t.Fatalf("state = %s, want closed after the next healthy probe", state)
+			}
+		})
 	}
 }
 

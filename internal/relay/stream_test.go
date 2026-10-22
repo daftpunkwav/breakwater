@@ -97,6 +97,52 @@ func TestPumpStreamWriteFailureStopsThePump(t *testing.T) {
 	}
 }
 
+// TestPumpStreamFlagsATruncatedStreamAsUpstreamEvidence pins the
+// passthrough pump's sentinel contract: data frames that end without
+// [DONE] surface the truncation error, so the breaker and the latency
+// tracker see a cut stream as upstream evidence instead of a complete
+// answer. The bytes forwarded before the cut still count as delivered —
+// the client received them, and settlement must say so.
+func TestPumpStreamFlagsATruncatedStreamAsUpstreamEvidence(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{
+			name:    "data frames without the [DONE] sentinel are truncated",
+			in:      "data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n",
+			wantErr: true,
+		},
+		{
+			name:    "the [DONE] sentinel completes the stream",
+			in:      "data: {\"a\":1}\n\ndata: [DONE]\n\n",
+			wantErr: false,
+		},
+		{
+			name:    "a body without any data line has no sentinel to wait for",
+			in:      ": keepalive comment\n\n",
+			wantErr: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			_, _, total, err := pumpStream(rec, strings.NewReader(tc.in))
+			if tc.wantErr && err == nil {
+				t.Fatalf("err = nil, want the truncation error: a cut stream must not read as complete")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if total != int64(rec.Body.Len()) {
+				t.Fatalf("byte count = %d, want the %d bytes actually forwarded", total, rec.Body.Len())
+			}
+		})
+	}
+}
+
 // endlessLines is a reader that never emits a line terminator: it fills
 // every read with payload bytes. The pump's accumulator is bounded only
 // by readLine, so this is what an upstream sending one unbounded line

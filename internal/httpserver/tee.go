@@ -53,7 +53,7 @@ func NewDetachedBufferingTee(w http.ResponseWriter, captureLimit int) *TeeRespon
 	return &TeeResponseWriter{w: w, captureLimit: captureLimit, flusher: flusherOf(w), detached: true}
 }
 
-// flusherOf is the flusher lookup newTee shares.
+// flusherOf is the flusher lookup the tee constructors share.
 func flusherOf(w http.ResponseWriter) http.Flusher {
 	if f, ok := w.(http.Flusher); ok {
 		return f
@@ -102,13 +102,19 @@ func (t *TeeResponseWriter) Write(p []byte) (int, error) {
 		t.WriteHeader(http.StatusOK)
 	}
 	n, err := t.w.Write(p)
-	t.bytes += int64(n)
 	if t.detached && err != nil {
 		// The client this tee happens to point at is gone. The capture
 		// still completes, so the shared work this tee backs survives
-		// and the requests waiting on it are served.
+		// and the requests waiting on it are served. The write reports
+		// full success: an io.Writer that returns fewer bytes than it
+		// was handed must return an error, and the error-free half
+		// report is exactly what the detached mode exists to prevent
+		// from propagating. The byte count follows the same story:
+		// every byte the tee was handed counts as delivered.
 		err = nil
+		n = len(p)
 	}
+	t.bytes += int64(n)
 	if t.captureLimit > 0 {
 		if room := t.captureLimit - t.body.Len(); room > 0 {
 			kept := min(room, len(p))

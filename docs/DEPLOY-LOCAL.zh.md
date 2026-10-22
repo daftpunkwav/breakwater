@@ -125,8 +125,10 @@ load-test 场景准备的，它们用 seed key 调用网关。加入 DSN 即可�
 监控存储（`BREAKWATER_INSIGHTS_DSN`，默认取 identity DSN）为每个完成的
 请求持久化一行——包括失败原因：governance 拒绝带自己的 code
 （`invalid_api_key`、`rate_limit_exceeded`、`insufficient_quota`、
-`concurrency_limit_exceeded`），网关失败带自己的（`no_upstream`、
-`circuit_open`、`budget_exhausted`、`upstream_unreachable`），上游错误
+`concurrency_limit_exceeded`……），网关失败带自己的（`no_upstream`、
+`circuit_open`、`upstream_saturated`、`budget_exhausted`、
+`upstream_unreachable`），流中断带流内错误码（`upstream_timeout`、
+`upstream_reset`），上游错误
 passthrough 按状态类分类。客户端断连绝不计为失败。
 
 用户与 key 管理需要 PostgreSQL identity store；limits 层按 tier → user →

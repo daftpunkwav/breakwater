@@ -33,7 +33,9 @@ type PGSnapshotStore struct {
 // host's CPU count, which pgx's default of max(4, NumCPU) is not.
 const poolMaxConns = 2
 
-// NewPGSnapshotStore connects the snapshot store; failures surface at
+// NewPGSnapshotStore parses the DSN and builds the pool. pgxpool
+// connects lazily, so an unreachable database surfaces at the first
+// read, not here; only DSN and config errors return an error at
 // assembly.
 func NewPGSnapshotStore(ctx context.Context, dsn string) (*PGSnapshotStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
