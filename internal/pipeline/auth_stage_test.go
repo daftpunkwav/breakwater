@@ -34,6 +34,8 @@ func TestAPIKeyOfExtraction(t *testing.T) {
 		{"lowercase scheme falls through", "bearer sk-1", "", "", false},
 		{"other scheme falls through", "Basic dXNlcjpwYXNz", "", "", false},
 		{"empty bearer key", "Bearer ", "", "", false},
+		{"bearer wins when both headers are present", "Bearer sk-1", "sk-x", "sk-1", true},
+		{"empty bearer does not fall back to x-api-key", "Bearer ", "sk-x", "", false},
 		{"x-api-key fallback", "", " sk-x ", "sk-x", true},
 		{"blank x-api-key", "", "   ", "", false},
 		{"no headers at all", "", "", "", false},

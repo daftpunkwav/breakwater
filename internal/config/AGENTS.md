@@ -16,7 +16,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package row:
 - Non-positive `BREAKWATER_SHUTDOWN_GRACE` refuses to boot.
 - A negative `BREAKWATER_QUOTA_LEASE_TTL` refuses to boot. Zero means
   derive. Derivation needs both overall deadline and stream timeout
-  positive; the value is their sum plus `leaseTTLHeadroom` (1m). If
+  positive; the value is their sum plus `leaseTTLHeadroom` (1m),
+  saturating at the maximum duration instead of wrapping negative. If
   either bound is absent, `LeaseTTL` is 24h. A configured TTL greater
   than zero and less than or equal to overall deadline plus stream
   timeout refuses to boot. That check runs only when both bounds are

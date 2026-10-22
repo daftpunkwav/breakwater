@@ -45,6 +45,11 @@ the pump; `testupstream_test.go` is the shared fake upstream.
 - A `Retry-After` hint delays only the next retry of the same credential
   and upstream; a hand-off to a different candidate, or to a different
   credential of the same upstream, never waits for the failed one's hint.
+- The per-upstream capacity ceiling is consulted before the breaker: the
+  bulkhead slot is taken first, so a saturated candidate is skipped
+  without ever holding a granted half-open probe permit — an unreported
+  permit holds the probe slot for its whole probe timeout and then
+  re-opens the machine on evidence a capacity refusal does not carry.
 - The fatal classification stays narrow on purpose: an auto-disable takes
   real traffic down with it, so only deterministic failures (exhausted
   budget, rejected credentials) qualify — a request-scoped 403 never evicts

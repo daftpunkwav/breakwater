@@ -38,6 +38,9 @@ transcoder、时间预算与 fatal 分类各有独立文件；`stream_bench_test
   应用同一个 `clientFault` 裁决——客户端离场永不降低某个 upstream 的评价。
 - `Retry-After` 提示只推迟同一凭据、同一 upstream 的下一次重试；换候选、
   或换同一 upstream 的另一把凭据，绝不等待失败者的提示。
+- per-upstream 容量上限先于 breaker 检查：bulkhead 槽位先取，饱和候选直接
+  跳过，绝不占用已授予的 half-open probe 许可——无人上报的许可会把 probe
+  槽位占满整个 probe timeout，随后在容量拒绝并不携带的证据上重新打开状态机。
 - fatal 分类刻意收窄：auto-disable 会连带砍掉真实流量，因此只有确定性失败
   （预算耗尽、凭据被拒）够格——请求级的 403 绝不把 upstream 从所有人面前
   逐出。有凭据环时，定罪先落在凭据上，环全部失效才轮到 upstream。

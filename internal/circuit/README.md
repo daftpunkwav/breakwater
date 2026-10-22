@@ -93,4 +93,7 @@ drive consecutive and slow-call, the ratio pair drives slow-call
 only). A slow completion is health evidence to every strategy: the
 consecutive and ratio machines absorb `OutcomeSlow` exactly like a
 success. Operator surface: `GET /admin/breakers` and
-`POST /admin/breakers/{id}/reset` (a ratio reset empties the window).
+`POST /admin/breakers/{id}/reset` (the consecutive and slow-call resets
+republish the machine closed through the shared transition skeleton, so
+a state gauge left open drops at the moment of the reset; the ratio
+reset empties the window — its guard holds no machine).
