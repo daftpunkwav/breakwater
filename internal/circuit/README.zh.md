@@ -75,6 +75,6 @@ consecutive / 5 / 30s / 5s / 0.5 / 关；threshold 与 cooldown 驱动
 consecutive 与 slow-call，ratio 对只驱动 slow-call）。慢完成对每个
 策略都是健康证据：consecutive 与 ratio 状态机把 `OutcomeSlow` 与成功
 完全同等吸收。操作面：`GET /admin/breakers` 与
-`POST /admin/breakers/{id}/reset`（consecutive 与 slow-call 的 reset 经共享
-迁移 skeleton 重新发布 closed——停在 open 的状态 gauge 在 reset 当刻回落；
+`POST /admin/breakers/{id}/reset`（consecutive 与 slow-call 的 reset 经共享的
+transition skeleton 重新发布 closed——停在 open 的状态 gauge 在 reset 当刻回落；
 ratio 的 reset 清空窗口——该守卫没有状态机）。

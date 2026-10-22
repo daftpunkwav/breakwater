@@ -36,7 +36,7 @@ are the index — run any of them to check the property directly.
 | -------- | ----- | ------------- |
 | A rejected request never reaches an upstream | `internal/server`, `internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`, `TestChainRateLimitsWithRetryAfter`, `TestChainQuotaExhaustionIsPaymentRequired`, `TestChainDeniesModelOutsideTier` |
 | An oversized admin body is rejected whole, never truncated into an accepted write | `internal/server` | `TestAdminBodyCapIsARejectionNotATruncation` |
-| The identifier character sets three packages enforce accept exactly the same strings | `internal/server`, `internal/auth`, `internal/config` | `TestIdentifierCharsetsStayInLockstep` |
+| The three packages' identifier character sets accept exactly the same strings | `internal/server`, `internal/auth`, `internal/config` | `TestIdentifierCharsetsStayInLockstep` |
 | A recovery stage never writes into a committed response | `internal/pipeline` | `TestRecoveryStageNeverWritesAfterCommit` |
 | Concurrent cold requests for one cache key cause exactly one upstream fetch | `internal/cache` | `TestFlightSingleFetchUnderStampede`, `TestCacheMiddlewareConcurrentColdStartsFetchOnce` |
 | A starter that walks away mid-fetch neither cancels the shared fetch nor fails the waiters riding it | `internal/cache` | `TestCacheSharedFetchSurvivesTheStarterLeaving`, `TestCacheMiddlewareWaiterSurvivesOwnerDisconnect` |
