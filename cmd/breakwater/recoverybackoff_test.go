@@ -4,6 +4,10 @@
  * doubling ladder with its ceiling, the per-upstream schedule that
  * skips an upstream until its next attempt is due, the forget on a
  * healthy answer, and the fixed pace the zero default keeps.
+ *
+ * The direct-call passes run on an injected clock the fixture
+ * advances, so the due/skip boundary is the fixture's decision and
+ * never a race with the scheduler.
  */
 package main
 
@@ -21,8 +25,8 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
-// backoffInterval is the direct-call tests' base interval: long enough
-// that "immediately after" is always inside the backoff window.
+// backoffInterval is the direct-call tests' base interval: the first
+// rung of the ladder, and the window a pass inside which is skipped.
 const backoffInterval = 100 * time.Millisecond
 
 // backoffCeiling is the direct-call tests' ladder ceiling: room for
@@ -82,62 +86,67 @@ func probeFailCount(t *testing.T, metrics *obs.Metrics, id string) int {
 	return 0
 }
 
-// runRecoveryPass drives one tick of the auto-disabled recovery body
-// with a fresh deadline.
-func runRecoveryPass(timeout, backoff time.Duration, sw *router.Switch, probes map[string]upstream.Upstream, book probeBook, metrics *obs.Metrics) {
-	recoverAutoDisabled(context.Background(), backoffInterval, timeout, backoff, 1,
-		sw, probes, book, metrics, discardLogger())
-}
-
 // backoffFixture bundles the loop-body inputs the direct-call backoff
-// tests drive: u1 auto-disabled behind a permanently failing probe.
+// tests drive: u1 auto-disabled behind a permanently failing probe,
+// and the clock the passes run on.
 type backoffFixture struct {
 	sw      *router.Switch
 	book    probeBook
 	probes  map[string]upstream.Upstream
 	metrics *obs.Metrics
+	// now is the instant the next pass runs at. The tests advance it
+	// themselves, so the due/skip boundary is the fixture's decision
+	// and never a race with the scheduler.
+	now time.Time
 }
 
 // newBackoffFixture assembles the fixture.
-func newBackoffFixture(t *testing.T) backoffFixture {
+func newBackoffFixture(t *testing.T) *backoffFixture {
 	t.Helper()
 	adapter := newProbeTarget(t, http.StatusServiceUnavailable)
 	sw := router.NewSwitch([]string{"m1"}, []string{"u1"})
 	autoDisableUpstream(t, sw, "u1", "upstream_auth_failure")
-	return backoffFixture{
+	return &backoffFixture{
 		sw:      sw,
 		book:    probeBook{passes: make(map[string]int), retries: make(map[string]probeRetry)},
 		probes:  map[string]upstream.Upstream{"u1": adapter},
 		metrics: obs.NewMetrics(),
+		now:     time.Now(),
 	}
 }
 
-// TestRecoveryBackoffSkipsUndueUpstreams drives the loop body directly:
-// a failed probe schedules the next attempt one ladder rung out, ticks
-// inside that window skip the upstream, and expiry re-probes onto the
-// next rung.
+// runRecoveryPass drives one tick of the auto-disabled recovery body
+// at the fixture's current instant.
+func (fx *backoffFixture) runRecoveryPass(timeout, backoff time.Duration) {
+	recoverAutoDisabled(context.Background(), func() time.Time { return fx.now },
+		backoffInterval, timeout, backoff, 1, fx.sw, fx.probes, fx.book, fx.metrics, discardLogger())
+}
+
+// TestRecoveryBackoffSkipsUndueUpstreams drives the loop body
+// directly: a failed probe schedules the next attempt one ladder rung
+// out, a pass inside that window skips the upstream, and the pass
+// after the window re-probes onto the next rung. The passes run on the
+// fixture's clock, so the due/skip boundary is the fixture's decision
+// and not a race with the scheduler.
 func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	t.Parallel()
 	fx := newBackoffFixture(t)
 
 	// First failure: probed, and the next attempt lands one interval
-	// out. The schedule is measured from the instant the pass started,
-	// so it sits inside the window the pass spans: asserting against
-	// the wall clock instead would race the pass's own duration.
-	before := time.Now()
-	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
-	after := time.Now()
+	// out. The schedule is measured from the instant the pass started.
+	fx.runRecoveryPass(time.Second, backoffCeiling)
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
 		t.Fatalf("probe count = %d, want 1", got)
 	}
 	r := fx.book.retries["u1"]
-	if r.fails != 1 || r.next.Before(before.Add(backoffInterval)) || r.next.After(after.Add(backoffInterval)) {
+	if r.fails != 1 || !r.next.Equal(fx.now.Add(backoffInterval)) {
 		t.Fatalf("schedule after first failure = %+v, want fails 1 and a next one interval out", r)
 	}
 
 	// A pass inside the backoff window must skip the upstream: no new
 	// probe, schedule untouched.
-	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
+	fx.now = fx.now.Add(backoffInterval / 2)
+	fx.runRecoveryPass(time.Second, backoffCeiling)
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
 		t.Fatalf("probe count after undue pass = %d, want 1", got)
 	}
@@ -146,10 +155,8 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	}
 
 	// Once due, the probe fires onto the next rung: double the wait.
-	fx.book.retries["u1"] = probeRetry{fails: r.fails, next: time.Now().Add(-time.Millisecond)}
-	before = time.Now()
-	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
-	after = time.Now()
+	fx.now = fx.now.Add(backoffInterval)
+	fx.runRecoveryPass(time.Second, backoffCeiling)
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 2 {
 		t.Fatalf("probe count after due pass = %d, want 2", got)
 	}
@@ -157,30 +164,27 @@ func TestRecoveryBackoffSkipsUndueUpstreams(t *testing.T) {
 	if r2.fails != 2 {
 		t.Fatalf("fails = %d, want 2", r2.fails)
 	}
-	if r2.next.Before(before.Add(2*backoffInterval)) || r2.next.After(after.Add(2*backoffInterval)) {
+	if !r2.next.Equal(fx.now.Add(2 * backoffInterval)) {
 		t.Fatalf("second schedule = %+v, want a next two intervals out", r2)
 	}
 }
 
 // TestRecoveryBackoffSchedulesFromPassStart: the failed-probe schedule
 // is measured from the instant the pass started, not from its
-// completion. The probe outlasts the base interval, so the two
-// timestamps land on opposite sides of the pass's end and a
-// completion-time measurement would push the next attempt a full
-// interval past the pass.
+// completion. The probe outlasts the base interval, so a schedule
+// anchored at the completion would land a full interval further out.
 func TestRecoveryBackoffSchedulesFromPassStart(t *testing.T) {
 	t.Parallel()
 	fx := newBackoffFixture(t)
 	fx.probes["u1"] = newDelayedProbeTarget(t, http.StatusServiceUnavailable, slowProbeDelay)
 
-	before := time.Now()
-	runRecoveryPass(time.Second, backoffCeiling, fx.sw, fx.probes, fx.book, fx.metrics)
-	after := time.Now()
+	start := fx.now
+	fx.runRecoveryPass(time.Second, backoffCeiling)
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 1 {
 		t.Fatalf("probe count = %d, want 1", got)
 	}
 	r := fx.book.retries["u1"]
-	if r.fails != 1 || r.next.Before(before.Add(backoffInterval)) || !r.next.Before(after) {
+	if r.fails != 1 || !r.next.Equal(start.Add(backoffInterval)) {
 		t.Fatalf("schedule after first failure = %+v, want fails 1 and a next one interval out from the pass start", r)
 	}
 }
@@ -192,7 +196,8 @@ func TestRecoveryBackoffZeroKeepsFixedPace(t *testing.T) {
 	fx := newBackoffFixture(t)
 
 	for i := 0; i < 3; i++ {
-		runRecoveryPass(time.Second, 0, fx.sw, fx.probes, fx.book, fx.metrics)
+		fx.now = fx.now.Add(backoffInterval)
+		fx.runRecoveryPass(time.Second, 0)
 	}
 	if got := probeFailCount(t, fx.metrics, "u1"); got != 3 {
 		t.Fatalf("probe count = %d, want 3 (no backoff, no skips)", got)
