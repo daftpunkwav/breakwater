@@ -26,7 +26,7 @@ middleware 或末端 handler 的身份接入。
 | `obsmiddleware.go` | `ObservationStage`：in-flight gauge、时长 histogram、按结果计数的 request counter、异步 access log 条目（内含映射为日志 schema 的 relay 尝试轨迹）；第一个看到业务请求最终结果的阶段，被拒请求也不例外 |
 | `authstage.go` | `AuthStage`：Bearer / `x-api-key` → 经 `auth.Store` 解析 tenant；401/503 以 client format 渲染——store 故障表现为 503，绝不静默放行 |
 | `authzstage.go` | `ModelAuthzStage` 与 `AuthorizeModel`：tier 模型授权，置于 auth 之后、任何 governance 花费与 cache 之前；也是 inference handler 调用的同一个权威函数，两处裁决不会漂移 |
-| `estimate.go` | `EstimateTokens` / `EstimatePartialTokens` / `PromptTokens`：TPM 桶与 quota lease 共同预留的那一份 pre-call 估算；声明的 `max_tokens` 会被钳制到 tenant 的 per-request 上限（防自我 DoS） |
+| `estimate.go` | `EstimateTokens` / `EstimatePartialTokens` / `PromptTokens`：TPM 桶与 quota lease 共同预留的那一份 pre-call 估算；prompt 由 `protocol.EstimateContentTokens` 度量，声明的 `max_tokens` 会被钳制到 tenant 的 per-request 上限（防自我 DoS） |
 | `recovery.go` | `RecoveryStage`：响应尚未开始时，handler panic 变成一次渲染的 500；位于最内层，紧贴 endpoint handler |
 
 ## Tests

@@ -10,6 +10,7 @@
 |---|---|
 | `wire.go` | 翻译契约：`Format` 枚举、`Ingest`、`Wire` 与 `StreamTranscoder` 接口、`WireFor`。`chatWire` 即 canonical wire 本身——byte passthrough，只转发 `Content-Type` 与 `Retry-After`（文档类媒体类型以 `text/plain` 转发），越界的上游 status 收敛为 502 |
 | `schema.go` | chat completion schema 的解码子集（`ChatRequest`、`Usage`）、`ParseUsage`、网关错误信封（`WriteError`）、共享拒绝码以及 `MaxBodyBytes`（4 MiB） |
+| `tokens.go` | 共享的度量：`EstimateContentTokens`（一个 token 一个空白分隔的单词，并以每 token 四字节为下限）与 `BytesPerToken`。网关的预留与 mock 上游的计费必须对它达成一致，否则结算会把 tenant 退到一个它从未花掉的数上 |
 | `sse.go` | SSE codec：`WriteData`/`WriteEvent`、in-stream 错误契约（`ErrorType` = `gateway_error`，码为 `upstream_reset` / `upstream_timeout` / `budget_exhausted`）、`WriteAbort`——恰好一个 error event，随后 `data: [DONE]` |
 | `responses.go` | openai-responses wire：ingest（`input`、`instructions`、`max_output_tokens`）、Responses 对象、`response.*` 事件、中断时输出 `response.failed` |
 | `anthropic.go` | anthropic-messages wire：ingest（`system`、text block、必填 `max_tokens`）、Messages 对象、`message_*` 事件、中断时输出 `error` 事件，以及 stop-reason 与 error-type 映射 |

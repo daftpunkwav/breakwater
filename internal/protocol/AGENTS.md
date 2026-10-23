@@ -40,6 +40,12 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   `upstream_timeout`, and `budget_exhausted`.
 - SSE codecs do not set response headers and do not flush. Handlers do.
 - `MaxBodyBytes` is 4 MiB.
+- `EstimateContentTokens` is the shared content measure: the gateway's
+  reservation and the mock upstream's accounting must agree on it, or
+  a settlement refunds a tenant down to a number it never spent. One
+  token is one whitespace-separated word, floored by the
+  four-bytes-per-token rule, so a content without whitespace cannot
+  price as a single token.
 - `WriteError` renders the HTTP error envelope. Governance stages
   pass `protocol.Code` values. Other handlers may pass the literal
   codes above.
