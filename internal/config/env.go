@@ -206,12 +206,6 @@ func Load() (Config, error) {
 	if cfg.Redis.TLS, err = envBool(envRedisTLS, false); err != nil {
 		return Config{}, err
 	}
-	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
-		return Config{}, err
-	}
-	if cfg.ContextLimits, err = envJSONMap[int64](envContextLimits); err != nil {
-		return Config{}, err
-	}
 	if cfg.Server.ShutdownGrace, err = envDuration(envShutdownGrace, cfg.Server.ShutdownGrace); err != nil {
 		return Config{}, err
 	}
@@ -236,6 +230,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := loadProbe(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadModelTables(&cfg); err != nil {
 		return Config{}, err
 	}
 	if err := loadRouting(&cfg); err != nil {
@@ -410,6 +407,21 @@ func loadProbe(cfg *Config) error {
 		return err
 	}
 	if cfg.Probe.BackoffMax, err = envDuration(envProbeBackoff, cfg.Probe.BackoffMax); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadModelTables parses the keyed model tables: the fallback chains
+// and the context ceilings. Their shape is checked by
+// validateModelTables; their membership against the configured model
+// names is checked at assembly, which knows the model set.
+func loadModelTables(cfg *Config) error {
+	var err error
+	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
+		return err
+	}
+	if cfg.ContextLimits, err = envJSONMap[int64](envContextLimits); err != nil {
 		return err
 	}
 	return nil
