@@ -8,9 +8,11 @@ package httpserver
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -301,6 +303,49 @@ func TestTeeRearmsTheWriteDeadlinePerWrite(t *testing.T) {
 	}
 	if second := inner.armedDeadline(); !second.After(first) {
 		t.Fatalf("the deadline was not re-armed: first %s, second %s", first, second)
+	}
+}
+
+// TestTeeDeliversAcrossAnExpiredDeadline: a long-lived stream must be
+// able to deliver a second message after the first write's deadline
+// has passed. The deadline bounds one blocked write, not the stream's
+// lifetime, so the tee arms a fresh one before every write.
+func TestTeeDeliversAcrossAnExpiredDeadline(t *testing.T) {
+	t.Parallel()
+	const writeTimeout = 100 * time.Millisecond
+	const idle = 250 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tee := NewCountingTee(w)
+		tee.writeTimeout = writeTimeout
+		if _, err := tee.Write([]byte("first\n")); err != nil {
+			t.Errorf("first write: %v", err)
+			return
+		}
+		tee.Flush()
+		// Idle past the first write's deadline: the connection's write
+		// deadline is in the past by the time the next write starts.
+		time.Sleep(idle)
+		if _, err := tee.Write([]byte("second\n")); err != nil {
+			t.Errorf("second write: %v", err)
+			return
+		}
+		tee.Flush()
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(body), "first\n") || !strings.Contains(string(body), "second\n") {
+		t.Fatalf("body = %q, want both messages", body)
 	}
 }
 
