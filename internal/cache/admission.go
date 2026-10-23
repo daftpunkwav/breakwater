@@ -42,6 +42,18 @@ const (
 	estimateDoorBoo = 1
 )
 
+// maxTrackedKeys bounds the tracked-key budget the gate is sized for.
+// The sketch and the doorkeeper grow with the budget — a few bytes per
+// tracked key — so an unbounded budget asks for an unbounded
+// allocation before the server ever serves a request. The budget is a
+// heuristic parameter: a smaller sketch estimates frequencies less
+// precisely, never incorrectly.
+//
+// The ceiling is the configuration's own cache-capacity ceiling
+// (internal/config) times the keys tracked per entry, so a validated
+// capacity never reaches it and the gate is never truncated.
+const maxTrackedKeys = 1 << 21
+
 var admissionSeed = maphash.MakeSeed()
 
 // admission estimates per-key read frequency. All methods are safe for
@@ -61,10 +73,7 @@ type admission struct {
 // newAdmission builds the gate for a budget of tracked keys. The width
 // rounds up to a power of two so masking replaces modulo.
 func newAdmission(trackedKeys int) *admission {
-	width := 1
-	for width < trackedKeys {
-		width <<= 1
-	}
+	width := admissionWidth(trackedKeys)
 	a := &admission{
 		mask:    uint64(width - 1),
 		doorM:   uint64(doorBitsPerKey*width - 1),
@@ -76,6 +85,25 @@ func newAdmission(trackedKeys int) *admission {
 		a.seeds[i] = uint64(i)*0x9E3779B97F4A7C15 + 1
 	}
 	return a
+}
+
+// admissionWidth returns the sketch width for a tracked-key budget: the
+// smallest power of two that covers it, so masking replaces modulo. The
+// budget is clamped to the gate's ceiling first — the doubling below
+// would otherwise spin forever on a budget the width can no longer
+// represent, and the allocation would grow without bound.
+func admissionWidth(trackedKeys int) int {
+	if trackedKeys > maxTrackedKeys {
+		trackedKeys = maxTrackedKeys
+	}
+	if trackedKeys < 1 {
+		trackedKeys = 1
+	}
+	width := 1
+	for width < trackedKeys {
+		width <<= 1
+	}
+	return width
 }
 
 // hash derives the gate's key hash. The gate owns the seed: a key's

@@ -165,7 +165,7 @@ quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` �
 | `BREAKWATER_RETRY_BUDGET_MIN_IN_FLIGHT` | `3`          | 份额预算的下限：无论网关多空闲，重试上限不低于它              |
 | `BREAKWATER_STREAM_TIMEOUT`           | `10m`          | 已提交流的响应体（header 之后）的天花板；`0` 让客户端拥有流的生命周期。保持比 attempt timeout（约束 time-to-first-byte）更宽松：否则慢 header 会被这个天花板切断，请求转而 failover 而不是等待。 |
 | `BREAKWATER_STREAM_IDLE_TIMEOUT`      | _(关)_         | 已提交流的空闲看门狗：上游停更超过整个窗口即失去这条流（同样的诚实错误帧），即使天花板仍有余量。`0` 关闭——思考型模型在 token 之间合法静默数分钟是常态。 |
-| `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | 精确匹配响应缓存           |
+| `BREAKWATER_CACHE_ENABLED` / `_TTL` / `_CAPACITY` | on / `60s` / `1024` | 精确匹配响应缓存。`_CAPACITY` 是条目数，上限 262144——条目数决定缓存准入 sketch 的规模，无界值会在启动时要求一次无界分配 |
 | `BREAKWATER_CIRCUIT_STRATEGY`         | `consecutive`  | `consecutive`：连续 `FAIL_THRESHOLD` 次 server fault 后 open，`COOLDOWN` 后放行一个 probe；`ratio`：按 10s 滚动结果窗口计算拒绝率，拒绝占比随失败上升，且每秒始终放行一个调用，永不完全切断流量（拒绝体现在 `breakwater_circuit_denied_total`）；`slow-call`：用退化证据驱动 consecutive 状态机——窗口内慢完成占比达标即 open，面向"一直有应答但在散架"的上游 |
 | `BREAKWATER_CIRCUIT_SLOW_RATIO`       | `0.5`          | 仅 slow-call 策略：窗口内慢完成占比达到该值即 open |
 | `BREAKWATER_CIRCUIT_SLOW_THRESHOLD`  | _(关)_         | 仅 slow-call 策略：attempt 的响应性（流式取首字节，其余取全程）超过即上报为慢；策略为 `slow-call` 时必填，其余场景可选 |

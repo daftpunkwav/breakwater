@@ -10,11 +10,69 @@ package cache
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"sync"
 	"testing"
 	"time"
 )
+
+// TestAdmissionWidthSaturatesAtTheCeiling: a tracked-key budget the
+// sketch width can no longer represent must not spin the doubling
+// forever — the width is capped, so the gate's allocation stays
+// bounded.
+func TestAdmissionWidthSaturatesAtTheCeiling(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		budget int
+		want   int
+	}{
+		{"exact ceiling", maxTrackedKeys, maxTrackedKeys},
+		{"above the ceiling", maxTrackedKeys + 1, maxTrackedKeys},
+		{"integer limit", math.MaxInt, maxTrackedKeys},
+		{"empty budget", 0, 1},
+		{"power of two", 16, 16},
+		{"rounded up", 17, 32},
+	}
+	for _, tc := range cases {
+		if got := admissionWidth(tc.budget); got != tc.want {
+			t.Errorf("%s: admissionWidth(%d) = %d, want %d", tc.name, tc.budget, got, tc.want)
+		}
+	}
+}
+
+// TestTrackedKeyBudgetSaturates: the gate's tracked-key budget grows
+// with the cache capacity, and a capacity near the integer limit must
+// not overflow the product into a negative budget.
+func TestTrackedKeyBudgetSaturates(t *testing.T) {
+	t.Parallel()
+	if got := trackedKeyBudget(1024); got != 1024*admissionKeysPerEntry {
+		t.Errorf("trackedKeyBudget(1024) = %d, want %d", got, 1024*admissionKeysPerEntry)
+	}
+	if got := trackedKeyBudget(maxTrackedKeys / admissionKeysPerEntry); got != maxTrackedKeys {
+		t.Errorf("trackedKeyBudget at the ceiling = %d, want %d", got, maxTrackedKeys)
+	}
+	if got := trackedKeyBudget(math.MaxInt); got != maxTrackedKeys {
+		t.Errorf("trackedKeyBudget at the integer limit = %d, want %d", got, maxTrackedKeys)
+	}
+}
+
+// TestMemoryHugeCapacityKeepsTheGateBounded: the capacity sizes the
+// gate, so a capacity past the gate's own ceiling must not turn into
+// an unbounded allocation at construction.
+func TestMemoryHugeCapacityKeepsTheGateBounded(t *testing.T) {
+	t.Parallel()
+	m := NewMemory(WithCapacity(math.MaxInt))
+	if got := m.gate.mask; got != uint64(maxTrackedKeys-1) {
+		t.Fatalf("gate mask = %d, want the ceiling width %d", got, maxTrackedKeys-1)
+	}
+	for i := range m.gate.rows {
+		if got := len(m.gate.rows[i]); got > maxTrackedKeys/2 {
+			t.Fatalf("sketch row %d holds %d bytes, want at most %d", i, got, maxTrackedKeys/2)
+		}
+	}
+}
 
 // TestAdmissionDoorkeeperSemantics: a first read only arms the
 // doorkeeper (estimate 1), a second read enters the sketch (estimate

@@ -6,6 +6,7 @@
 package config
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"negative cache ttl", envCacheTTL, "-1s", "must be positive", false},
 		{"bad cache capacity", envCacheCapacity, "lots", "parse", false},
 		{"zero cache capacity", envCacheCapacity, "0", "must be positive", false},
+		{"cache capacity above the ceiling", envCacheCapacity, "2000000000", "must be at most", false},
 		{"bad circuit enabled", envCircuitEnabled, "perhaps", "parse", false},
 		{"unknown circuit strategy", envCircuitStrategy, "adaptive", "consecutive", false},
 		{"bad circuit threshold", envCircuitThreshold, "many", "parse", false},
@@ -102,6 +104,23 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 				t.Fatalf("error = %q, want it to name %s", err, tc.envKey)
 			}
 		})
+	}
+}
+
+// TestLoadCacheCapacityCeiling: the capacity sizes the cache's
+// admission sketch, so an unbounded one asks for an unbounded
+// allocation at startup. The ceiling itself is accepted; one entry
+// above it is refused by name.
+func TestLoadCacheCapacityCeiling(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv(envCacheCapacity, strconv.Itoa(maxCacheCapacity))
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load rejected the capacity ceiling: %v", err)
+	}
+	t.Setenv(envCacheCapacity, strconv.Itoa(maxCacheCapacity+1))
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), envCacheCapacity) {
+		t.Fatalf("err = %v, want a %s rejection", err, envCacheCapacity)
 	}
 }
 
