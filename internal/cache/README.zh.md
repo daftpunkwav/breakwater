@@ -16,6 +16,7 @@ limiter 退还整笔预留，quota 阶段取消 lease 而非结算。缓存是�
 | `key.go` | `KeyFor`：请求体原始字节的 SHA-256——匹配按字节精确，JSON key 顺序、空格或 SDK 的额外空白都构成不同 key |
 | `eligibility.go` | `Eligible`：只有显式确定的参数组合才可缓存——`temperature` 显式为 `0`、`top_p` 缺省或恰为 `1`、`n` 恰为单选 |
 | `memory.go` | `Memory`：进程内存储——容量上限加任意驱逐、±10% 的 TTL jitter 使对齐的过期无法聚集成风暴、每次 `Get` 返回私有副本 |
+| `admission.go` | TinyLFU 风格的准入门：count-min sketch（4 行 × 4 位计数器，饱和、周期性折半）加 doorkeeper bloom 吸收每一次读取——命中与未命中 alike——于是只出现一次的 key 估算为 1，反复出现的 key 持续累积。容量压力下只有估算不低于被采样victim的新条目才被放行；驻留 key 的更新绕过准入门。sketch 只存哈希，私有副本的所有权契约不受影响。其追踪 key 预算有上限，因此无论配置的容量多大，sketch 自身的分配都有界 |
 | `singleflight.go` | `Flight`：手写的 in-flight 去重（`x/sync/singleflight` 同类库被 `no-off-the-shelf-governance` lint 规则拒绝）；waiter 受自身 context 约束，共享 holder 的结果——错误也不例外 |
 | `middleware.go` | pipeline 阶段本体：命中即重放、冷的非流式 key 走单次共享 fetch、流式请求各自 fetch 并在完成后尝试入库、上游自身产生的失败做短暂负缓存 |
 

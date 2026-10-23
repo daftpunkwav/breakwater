@@ -65,7 +65,9 @@ type MemoryOption func(*Memory)
 // cannot wash out the entries callers keep asking for. The cap is an
 // entry count, not a byte budget: one entry may hold up to
 // maxCacheableBytes (see middleware.go), so the worst-case footprint
-// is capacity times that bound.
+// is capacity times that bound. The admission gate sizes its own
+// allocation from the capacity, so that allocation is bounded whatever
+// the capacity is (see trackedKeyBudget).
 func WithCapacity(n int) MemoryOption {
 	return func(m *Memory) {
 		if n >= 1 {
@@ -93,8 +95,25 @@ func NewMemory(opts ...MemoryOption) *Memory {
 	// The gate tracks roughly eight times the capacity in keys: small
 	// enough to stay in tens of kilobytes, large enough that the
 	// sketch's false-positive floor stays far below the doorkeeper's.
-	m.gate = newAdmission(m.max * 8)
+	m.gate = newAdmission(trackedKeyBudget(m.max))
 	return m
+}
+
+// admissionKeysPerEntry is how many keys the admission gate tracks per
+// cache entry: the gate sees every key a caller asks for, not only the
+// resident ones, so its budget is a multiple of the entry capacity.
+const admissionKeysPerEntry = 8
+
+// trackedKeyBudget returns how many keys the admission gate tracks for
+// a cache of the given capacity. The product saturates at the gate's
+// ceiling instead of overflowing: a capacity near the integer limit
+// would wrap it negative and leave the gate sizing itself from a
+// nonsense budget.
+func trackedKeyBudget(capacity int) int {
+	if capacity > maxTrackedKeys/admissionKeysPerEntry {
+		return maxTrackedKeys
+	}
+	return capacity * admissionKeysPerEntry
 }
 
 // Get implements Cache.

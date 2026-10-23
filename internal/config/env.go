@@ -51,6 +51,18 @@ const (
 	defaultProbeThreshold   = 2
 )
 
+// maxCacheCapacity bounds the configured cache capacity. The entry
+// count is what sizes the cache's admission sketch, so an unbounded
+// capacity asks for an unbounded allocation before the server ever
+// serves a request. A quarter million entries is far past any real
+// deployment, and it keeps that sketch's own footprint inside a few
+// megabytes.
+//
+// The cache package holds the matching ceiling for the sketch it sizes
+// from this capacity (internal/cache); the two stay in step so a
+// validated capacity never reaches the sketch's own bound.
+const maxCacheCapacity = 1 << 18
+
 const (
 	envAddr           = "BREAKWATER_ADDR"
 	envShutdownGrace  = "BREAKWATER_SHUTDOWN_GRACE"
@@ -480,6 +492,10 @@ func validateCache(cfg *Config) error {
 	}
 	if cfg.Cache.Capacity <= 0 {
 		return fmt.Errorf("config: %s must be positive", envCacheCapacity)
+	}
+	if cfg.Cache.Capacity > maxCacheCapacity {
+		return fmt.Errorf("config: %s must be at most %d: the capacity sizes the cache's admission sketch, and an unbounded one asks for an unbounded allocation at startup",
+			envCacheCapacity, maxCacheCapacity)
 	}
 	return nil
 }
