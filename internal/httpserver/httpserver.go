@@ -81,7 +81,10 @@ func Run(ctx context.Context, opts Options) error {
 		// IdleTimeout reaps keep-alive connections whose client vanished
 		// without a FIN; it never bounds an in-flight request either.
 		// WriteTimeout stays unset on purpose: it would kill long
-		// legitimate streams.
+		// legitimate streams. The response side is bounded per write
+		// instead — the tee arms the connection's write deadline before
+		// every write, so one blocked write gives up while a long
+		// stream keeps streaming.
 		ReadTimeout: 30 * time.Second,
 		IdleTimeout: 120 * time.Second,
 	}

@@ -7,6 +7,8 @@
  * - Mirror status, body bytes and flush activity out of the write path
  * - Preserve streaming semantics: the tee is always an http.Flusher so
  *   SSE flush assertions survive handler chains (net/http memo)
+ * - Bound one blocked write to the client, so a slow reader cannot
+ *   pin the request's governance resources
  *
  * Two capture modes:
  * - buffering: accumulates the body up to a byte cap; beyond the cap the
@@ -21,13 +23,34 @@ package httpserver
 import (
 	"bytes"
 	"net/http"
+	"time"
 )
+
+// responseWriteTimeout bounds one blocked write to the client.
+//
+// A write that blocks on a slow client never returns to the pump, so
+// the governance resources the request holds — the quota lease, the
+// limiter reservation, the bulkhead slot, the circuit permit — are
+// released only when the write gives up. The deadline is armed before
+// every write, so it bounds one blocked write rather than the
+// response's overall duration: a long-lived stream keeps writing for
+// as long as its client reads.
+//
+// The value matches the read timeout: a client that has stopped
+// reading for half a minute is gone, not slow.
+const responseWriteTimeout = 30 * time.Second
 
 // TeeResponseWriter wraps an http.ResponseWriter, forwarding every call
 // to the underlying writer while recording what passed through.
 type TeeResponseWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
+	// controller arms the connection's write deadline. It reaches the
+	// connection through the writer chain, so the deadline lands on the
+	// socket the bytes actually go to.
+	controller *http.ResponseController
+	// writeTimeout bounds one blocked write; zero disables the arming.
+	writeTimeout time.Duration
 	// captureLimit bounds retained body bytes; 0 selects counting mode.
 	captureLimit int
 	// detached marks a tee whose downstream write failures must not
@@ -50,7 +73,9 @@ type TeeResponseWriter struct {
 // shared fetch. Pair it with a context detached from that client's
 // cancellation.
 func NewDetachedBufferingTee(w http.ResponseWriter, captureLimit int) *TeeResponseWriter {
-	return &TeeResponseWriter{w: w, captureLimit: captureLimit, flusher: flusherOf(w), detached: true}
+	t := newTee(w, captureLimit)
+	t.detached = true
+	return t
 }
 
 // flusherOf is the flusher lookup the tee constructors share.
@@ -78,8 +103,28 @@ func NewCountingTee(w http.ResponseWriter) *TeeResponseWriter {
 }
 
 func newTee(w http.ResponseWriter, captureLimit int) *TeeResponseWriter {
-	t := &TeeResponseWriter{w: w, captureLimit: captureLimit, flusher: flusherOf(w)}
-	return t
+	return &TeeResponseWriter{
+		w:            w,
+		captureLimit: captureLimit,
+		flusher:      flusherOf(w),
+		controller:   http.NewResponseController(w),
+		writeTimeout: responseWriteTimeout,
+	}
+}
+
+// Unwrap exposes the underlying writer, so an http.ResponseController
+// can reach the connection through this tee.
+func (t *TeeResponseWriter) Unwrap() http.ResponseWriter { return t.w }
+
+// armWriteDeadline bounds the write that follows. A writer that cannot
+// carry a deadline — a recorder, a plain writer — is written to as
+// before: the deadline is a transport capability, not a contract every
+// writer implements.
+func (t *TeeResponseWriter) armWriteDeadline() {
+	if t.writeTimeout <= 0 {
+		return
+	}
+	_ = t.controller.SetWriteDeadline(time.Now().Add(t.writeTimeout))
 }
 
 // Header exposes the underlying header map.
@@ -101,6 +146,7 @@ func (t *TeeResponseWriter) Write(p []byte) (int, error) {
 	if !t.wroteHeader {
 		t.WriteHeader(http.StatusOK)
 	}
+	t.armWriteDeadline()
 	n, err := t.w.Write(p)
 	if t.detached && err != nil {
 		// The client this tee happens to point at is gone. The capture
@@ -132,6 +178,7 @@ func (t *TeeResponseWriter) Write(p []byte) (int, error) {
 // http.Flusher on the tee without leaking whether deeper layers do.
 func (t *TeeResponseWriter) Flush() {
 	t.flushed = true
+	t.armWriteDeadline()
 	if t.flusher != nil {
 		t.flusher.Flush()
 	}
