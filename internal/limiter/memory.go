@@ -18,8 +18,9 @@
  *
  * Retention matches the Redis backend: a bucket idle for
  * bucketIdleTTL is dropped, which is the same horizon the Lua scripts
- * give their keys. The drop is invisible to the limiter's decisions —
- * see bucketIdleTTL for why.
+ * give their keys. The scripts receive it as an argument, so the two
+ * backends share one retention schedule. The drop is invisible to the
+ * limiter's decisions — see bucketIdleTTL for why.
  */
 package limiter
 
@@ -49,7 +50,9 @@ type bucket struct {
 // bucketIdleTTL is how long a bucket may sit untouched before the
 // sweep drops it. It is the PEXPIRE horizon of the Redis backend's two
 // scripts (tokenbucket.lua and refund.lua), so the two implementations
-// of this port retain their state on the same schedule.
+// of this port retain their state on the same schedule. The scripts
+// take it as an argument, so the horizon has one owner and the two
+// backends cannot drift apart.
 //
 // It is also the horizon at which dropping a bucket is provably
 // indistinguishable from keeping one: a bucket's tokens never fall

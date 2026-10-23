@@ -78,7 +78,7 @@ func (r *Redis) Ping(ctx context.Context) error {
 func (r *Redis) Allow(ctx context.Context, tenantID string, limits Limits, tokens int64) (Decision, error) {
 	res, err := r.allow.Run(ctx, r.rdb,
 		[]string{r.rpmKey(tenantID), r.tpmKey(tenantID)},
-		limits.RPM, limits.TPM, tokens,
+		limits.RPM, limits.TPM, tokens, bucketIdleTTL.Milliseconds(),
 	).Slice()
 	if err != nil {
 		return Decision{}, fmt.Errorf("limiter: allow script: %w", err)
@@ -113,7 +113,7 @@ func (r *Redis) Refund(ctx context.Context, tenantID string, limits Limits, toke
 	}
 	err := r.refund.Run(ctx, r.rdb,
 		[]string{r.tpmKey(tenantID)},
-		limits.TPM, tokens,
+		limits.TPM, tokens, bucketIdleTTL.Milliseconds(),
 	).Err()
 	if err != nil {
 		return fmt.Errorf("limiter: refund script: %w", err)
