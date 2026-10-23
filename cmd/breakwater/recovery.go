@@ -13,6 +13,10 @@
  * - Nothing else: what put an upstream out of rotation lives in the
  *   router switch and the circuit breaker; this loop only asks "are
  *   you back"
+ *
+ * The auto-disabled pass reads its clock once, at the start of the
+ * pass, and that clock is injected: the due/skip boundary is the
+ * caller's decision, not a race with the scheduler.
  */
 package main
 
@@ -60,7 +64,7 @@ func startRecovery(ctx context.Context, interval, timeout, backoff time.Duration
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				recoverAutoDisabled(ctx, interval, timeout, backoff, passes, routingSwitch, probes, book, metrics, logger)
+				recoverAutoDisabled(ctx, time.Now, interval, timeout, backoff, passes, routingSwitch, probes, book, metrics, logger)
 				reviveEjected(ctx, timeout, breaker, probes, metrics)
 			}
 		}
@@ -114,14 +118,19 @@ func probeBackoff(base, ceiling time.Duration, fails int) time.Duration {
 // consecutive healthy answers lift the auto disable, one failing
 // answer resets the count. A manual operator disable stays untouched —
 // recovery only ever lifts the system's own decision.
-func recoverAutoDisabled(ctx context.Context, interval, timeout, backoff time.Duration, passes int, routingSwitch *router.Switch, probes map[string]upstream.Upstream, book probeBook, metrics *obs.Metrics, logger *slog.Logger) {
-	now := time.Now()
+//
+// The pass reads its clock once, at the start: a failed probe's next
+// attempt is scheduled from that instant, not from the moment the
+// probe answered. The clock is injected so the due/skip boundary is
+// the caller's decision rather than a race with the scheduler.
+func recoverAutoDisabled(ctx context.Context, now func() time.Time, interval, timeout, backoff time.Duration, passes int, routingSwitch *router.Switch, probes map[string]upstream.Upstream, book probeBook, metrics *obs.Metrics, logger *slog.Logger) {
+	passStart := now()
 	for _, id := range routingSwitch.AutoDisabledIDs() {
 		target, ok := probes[id]
 		if !ok {
 			continue
 		}
-		if r, tracked := book.retries[id]; backoff > 0 && tracked && !r.due(now) {
+		if r, tracked := book.retries[id]; backoff > 0 && tracked && !r.due(passStart) {
 			continue
 		}
 		pctx, cancel := context.WithTimeout(ctx, timeout)
@@ -135,7 +144,7 @@ func recoverAutoDisabled(ctx context.Context, interval, timeout, backoff time.Du
 			// makes the first failure wait one base interval, not two.
 			r := book.retries[id]
 			r.fails++
-			r.next = now.Add(probeBackoff(interval, backoff, r.fails))
+			r.next = passStart.Add(probeBackoff(interval, backoff, r.fails))
 			book.retries[id] = r
 			continue
 		}
