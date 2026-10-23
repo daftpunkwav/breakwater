@@ -49,9 +49,7 @@ type adminBindings struct {
 // and a surface without a bearer token admits every caller — so the
 // endpoints stay unmounted until a token is configured, or until the
 // operator accepted an unauthenticated deployment explicitly. Every
-// armed posture already requires one of the two; the endpoints are
-// therefore mounted wherever a tenant balance can be spent, and absent
-// from the runs where no balance can be.
+// armed posture already requires one of the two.
 func buildAdmin(cfg config.Config, b adminBindings, opts ...server.AdminOption) http.Handler {
 	var balances server.BalanceLookup
 	var setBalance server.BalanceWriter
