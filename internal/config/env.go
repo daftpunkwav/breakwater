@@ -206,9 +206,6 @@ func Load() (Config, error) {
 	if cfg.Redis.TLS, err = envBool(envRedisTLS, false); err != nil {
 		return Config{}, err
 	}
-	if cfg.Security.AllowUnauthenticated, err = envBool(envAllowUnauthenticated, false); err != nil {
-		return Config{}, err
-	}
 	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
 		return Config{}, err
 	}
@@ -244,6 +241,9 @@ func Load() (Config, error) {
 	if err := loadRouting(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := loadSecurity(&cfg); err != nil {
+		return Config{}, err
+	}
 	if err := validate(&cfg); err != nil {
 		return Config{}, err
 	}
@@ -251,6 +251,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// loadSecurity parses the management-surface settings: the explicit
+// opt-in that accepts the postures guardDeploymentPosture refuses. The
+// admin token itself is a plain string and is read with the defaults.
+func loadSecurity(cfg *Config) error {
+	var err error
+	if cfg.Security.AllowUnauthenticated, err = envBool(envAllowUnauthenticated, false); err != nil {
+		return err
+	}
+	return nil
 }
 
 // loadRetry parses the attempt-loop settings and enforces their
