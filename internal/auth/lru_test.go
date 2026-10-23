@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,6 +103,46 @@ func TestCachedStoreEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 	if inner.resolves != 4 {
 		t.Fatalf("backend resolved %d times, want 4 (a, b, a cached, c evicts b, b again)", inner.resolves)
+	}
+}
+
+// TestCachedStoreHoldsNoRawKey: the cache indexes by a keyed digest
+// of the raw API key, so a leak of its lookup map yields no usable
+// key — the property the identity stores document.
+func TestCachedStoreHoldsNoRawKey(t *testing.T) {
+	t.Parallel()
+	inner := &fakeStore{fn: func(string) (Tenant, error) { return testTenant("t1"), nil }}
+	cached := NewCachedStore(inner, time.Minute, time.Second)
+	const raw = "bw-super-secret-key"
+
+	if _, err := cached.Resolve(context.Background(), raw); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	cached.mu.Lock()
+	defer cached.mu.Unlock()
+	if _, ok := cached.items[raw]; ok {
+		t.Fatal("the cache is indexed by the raw API key")
+	}
+	for key := range cached.items {
+		if strings.Contains(key, raw) {
+			t.Fatalf("the cache holds the raw API key %q", raw)
+		}
+	}
+}
+
+// TestCachedStoreIndexIsPerStore: the index digest is keyed with a
+// secret generated per store, so a digest lifted from one cache's
+// lookup map cannot be replayed against another.
+func TestCachedStoreIndexIsPerStore(t *testing.T) {
+	t.Parallel()
+	inner := &fakeStore{fn: func(string) (Tenant, error) { return testTenant("t1"), nil }}
+	first := NewCachedStore(inner, time.Minute, time.Second)
+	second := NewCachedStore(inner, time.Minute, time.Second)
+	const raw = "bw-super-secret-key"
+
+	if first.index(raw) == second.index(raw) {
+		t.Fatal("two caches index the same key identically: the index key is not per store")
 	}
 }
 

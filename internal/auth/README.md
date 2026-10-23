@@ -26,7 +26,7 @@ administration surface.
 | `limits.go` | `LimitOverride` and `MergeTier`: user-level and key-level override layers folded into the effective tier |
 | `static.go` | `Static` store over the config JSON; keys hashed at build; `Tenants()`/`TenantByID()` feed balance seeding |
 | `pg.go` | `PGStore`: one join over `api_keys`/`tenants`/`tiers` resolved by `key_hash`, `status = 'active'` only |
-| `lru.go` | `CachedStore`: LRU + TTL decoration; caches positives and definitive `ErrUnauthorized` negatives, never transient failures |
+| `lru.go` | `CachedStore`: LRU + TTL decoration; caches positives and definitive `ErrUnauthorized` negatives, never transient failures; indexes by a digest keyed with a per-process secret, so its lookup map holds no usable key |
 | `admin.go` | `AdminStore` port, `MaxKeysPerUser` (5), `GenerateKey` (`bw-` prefix, raw secret shown once) |
 | `pgadmin.go` | PostgreSQL `AdminStore`: user/key lifecycle, override writes, transactional key issuance |
 
@@ -42,9 +42,10 @@ pgadmin integration tests need PostgreSQL (`BREAKWATER_TEST_POSTGRES_DSN`).
   is persisted. Keys issued through `CreateKey` appear once, in that
   response; static-identity keys reach the gateway in raw form through
   `BREAKWATER_IDENTITY`, whose environment or file the operator must
-  protect. Raw keys are otherwise held only in process memory,
-  resolution caches included. Changing the pepper invalidates every
-  persisted key_hash.
+  protect. Raw keys are otherwise held only in process memory. The
+  resolution cache is indexed by its own digest, keyed with a secret
+  generated per process, so a leak of its lookup map yields no usable
+  key. Changing the pepper invalidates every persisted key_hash.
 - Stores return the merged snapshot (`MergeTier`); the governance layers
   never re-merge. Scalars take the nearest set layer (key over user over
   tier); `denied_models` only unions; `allowed_models` only intersects. A
