@@ -21,7 +21,7 @@ own packages that join as middleware or the terminal handler.
 | File | Role |
 | --- | --- |
 | `chain.go` | `Chain`/`Middleware`: ordered composition, first listed stage outermost |
-| `carrier.go` | The `Carrier`: the per-request typed struct (identity, parsed request, token estimate, lease and consumption handles) assembled once at chain entry; `RequireCarrier`, `SetBody` |
+| `carrier.go` | The `Carrier`: the per-request typed struct (identity, parsed request, token estimate and consumption handle) assembled once at chain entry; `RequireCarrier`, `SetBody` |
 | `body.go` | `FormatStage` pins the client format; `EnsureBody` reads the bounded body exactly once (`protocol.MaxBodyBytes` cap) and ingests it through the format's wire |
 | `requestid.go` | `RequestIDStage`: adopt a well-formed client `X-Request-Id` (8–128 printable ASCII) or mint a `req-` id; echoed on every response, rejections included |
 | `obsmiddleware.go` | `ObservationStage`: in-flight gauge, duration histogram, outcome counters, the async access-log entry with the relay's attempt trail mapped into the log schema; the first stage to see the outcome of a finished business request, rejections included |

@@ -4,8 +4,8 @@
  *
  * Responsibilities:
  * - Carry identity, the parsed request subset, the token estimate and
- *   the governance handles (lease, consumed tokens) from the stage that
- *   produces them to the stages that consume them
+ *   the consumed-token handle from the stage that produces them to the
+ *   stages that consume them
  * - Nothing else: stages own their behavior; the carrier is a dumb
  *   typed struct, never a grab-bag of context values
  *
@@ -69,9 +69,6 @@ type Carrier struct {
 	// scan per consumer. Written once, on first use.
 	promptTokens int64
 	promptKnown  bool
-	// LeaseID is the identifier of the quota lease reserved for this
-	// request.
-	LeaseID string
 	// Consumed is the tokens the request actually used; stages that
 	// reject or bypass the upstream leave it at zero, and the refund
 	// stages correct every reservation against it.

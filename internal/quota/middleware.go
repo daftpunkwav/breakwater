@@ -73,7 +73,6 @@ func Middleware(ledger Ledger, metrics *obs.Metrics) pipeline.Middleware {
 					"quota ledger unavailable")
 				return
 			}
-			carrier.LeaseID = lease.ID
 			metrics.QuotaReserved(carrier.Tenant.ID, amount)
 
 			// Settlement converges on every exit path — including a panic
