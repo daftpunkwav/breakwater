@@ -2,19 +2,24 @@
 --
 -- KEYS[1] = rpm bucket hash, KEYS[2] = tpm bucket hash
 -- ARGV[1] = rpm capacity, ARGV[2] = tpm capacity, ARGV[3] = requested
--- tokens
+-- tokens, ARGV[4] = idle horizon in milliseconds
 --
 -- Returns {allowed(0|1), retry_after_ms}.
 -- The clock is Redis TIME, never the application clock. Buckets start
 -- full; refill is continuous from the stored timestamp; capacity 0
 -- disables the dimension. The whole refill-check-deduct sequence is
 -- atomic per invocation.
+--
+-- The idle horizon arrives as an argument: the caller owns the one
+-- retention schedule the in-process backend and this backend share, so
+-- the two cannot drift apart.
 
 local t = redis.call('TIME')
 local now = t[1] * 1000 + math.floor(t[2] / 1000)
 local rpm_cap = tonumber(ARGV[1])
 local tpm_cap = tonumber(ARGV[2])
 local want = tonumber(ARGV[3])
+local idle_ms = tonumber(ARGV[4])
 
 local function refill(key, cap)
     if cap <= 0 then
@@ -24,13 +29,13 @@ local function refill(key, cap)
     local ts = tonumber(redis.call('HGET', key, 'ts'))
     if tokens == nil then
         redis.call('HSET', key, 'tokens', tostring(cap), 'ts', now)
-        redis.call('PEXPIRE', key, 120000)
+        redis.call('PEXPIRE', key, idle_ms)
         return cap
     end
     local rate = cap / 60000
     tokens = math.min(cap, tokens + (now - ts) * rate)
     redis.call('HSET', key, 'tokens', tostring(tokens), 'ts', now)
-    redis.call('PEXPIRE', key, 120000)
+    redis.call('PEXPIRE', key, idle_ms)
     return tokens
 end
 

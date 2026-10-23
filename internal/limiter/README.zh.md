@@ -20,8 +20,8 @@ model authorization → concurrency → limiter → quota → cache；超限请�
 | `limiter.go` | 契约：`Limiter`（`Allow`/`Refund`）、`Limits`（零值即关闭该上限）、`Decision`（`Allowed`、`RetryAfter`） |
 | `memory.go` | `Memory`：初始满格的连续补充 bucket；`Refund` 只会把桶抬向容量 |
 | `redis.go` | `Redis`：`bw:limiter:`（或 `<namespace>:bw:limiter:`）下的 key，脚本经 `go:embed` 内嵌 |
-| `tokenbucket.lua` | 原子的补充-检查-扣减；Redis 时钟；容量 0 即跳过该维度；key 120s 过期 |
-| `refund.lua` | 先补充到当前时刻，再把未消耗的 token 退回 TPM 桶，绝不超过容量 |
+| `tokenbucket.lua` | 原子的补充-检查-扣减；Redis 时钟；容量 0 即跳过该维度；让 key 过期的空闲视界以参数传入 |
+| `refund.lua` | 先补充到当前时刻，再把未消耗的 token 退回 TPM 桶，绝不超过容量；携带同一个空闲视界 |
 | `concurrency.go` | `Concurrency`：手写计数信号量，release 幂等。网关实例化两份：一份作 tier 上限驱动的 per-tenant 闸门，一份作 relay 的 per-upstream in-flight 上限（`relay.WithUpstreamBulkhead`）——relay 经自己的 `Bulkhead` port 消费它 |
 | `middleware.go` | 429 限流阶段：单次 body 读取、token 估算、后端故障即 fail-closed、调用后只退不加 |
 | `concurrencymiddleware.go` | 429 并发阶段：`concurrency_limit_exceeded`，先于任何限流预留执行 |
@@ -41,4 +41,6 @@ Redis（`BREAKWATER_TEST_REDIS_ADDR`）。
   造余量。客户端已离开则退款丢失——这是安全的方向。
 - Redis 脚本的时钟取自 Redis `TIME`，绝不用应用时钟，补充因此不依赖共享的
   应用时钟。
+- 桶的空闲视界只有一个归属：进程内后端按它清扫，Redis 脚本把它作为参数接收，
+  两个后端因此在同一条时间线上保留状态，不会各走各的。
 - 并发闸门的槽位是进程内的；多实例部署不得将其读作全局上限。

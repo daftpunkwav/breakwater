@@ -155,6 +155,45 @@ func TestRedisInsufficientBalanceIsPerTenant(t *testing.T) {
 	}
 }
 
+// TestRedisBucketsExpireOnTheSharedIdleHorizon: the Redis backend's
+// bucket keys must expire on the same horizon the in-process backend
+// sweeps on, so the two implementations of this port retain their
+// state on the same schedule. The horizon reaches the scripts as an
+// argument, so the two cannot drift apart.
+func TestRedisBucketsExpireOnTheSharedIdleHorizon(t *testing.T) {
+	t.Parallel()
+	r, mr := newTestRedis(t)
+	ctx := context.Background()
+	limits := Limits{RPM: 5, TPM: 100}
+
+	if d, err := r.Allow(ctx, "t1", limits, 10); err != nil || !d.Allowed {
+		t.Fatalf("allow: allowed=%v err=%v", d.Allowed, err)
+	}
+	assertBucketHorizon(t, mr)
+
+	// The refund script carries the same horizon: a refunded bucket
+	// must not outlive its neighbours.
+	if err := r.Refund(ctx, "t1", limits, 5); err != nil {
+		t.Fatalf("refund: %v", err)
+	}
+	assertBucketHorizon(t, mr)
+}
+
+// assertBucketHorizon checks that every bucket key expires on the
+// horizon the in-process backend sweeps on.
+func assertBucketHorizon(t *testing.T, mr *miniredis.Miniredis) {
+	t.Helper()
+	keys := mr.Keys()
+	if len(keys) == 0 {
+		t.Fatal("no bucket key was written")
+	}
+	for _, key := range keys {
+		if got := mr.TTL(key); got != bucketIdleTTL {
+			t.Fatalf("bucket %q expires in %v, want the shared horizon %v", key, got, bucketIdleTTL)
+		}
+	}
+}
+
 func TestRedisRefillOverTime(t *testing.T) {
 	t.Parallel()
 	r, mr := newTestRedis(t)

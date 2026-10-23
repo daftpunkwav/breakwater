@@ -1,16 +1,22 @@
 -- Refund unconsumed tokens into the TPM bucket.
 --
 -- KEYS[1] = tpm bucket hash
--- ARGV[1] = tpm capacity, ARGV[2] = tokens to return
+-- ARGV[1] = tpm capacity, ARGV[2] = tokens to return, ARGV[3] = idle
+-- horizon in milliseconds
 --
 -- The refund raises the bucket toward capacity after a refill to now
 -- (Redis TIME); it can never exceed capacity. A missing bucket is
 -- treated as a full one: refunding into a full bucket is a no-op.
+--
+-- The idle horizon arrives as an argument: the caller owns the one
+-- retention schedule the in-process backend and this backend share, so
+-- the two cannot drift apart.
 
 local t = redis.call('TIME')
 local now = t[1] * 1000 + math.floor(t[2] / 1000)
 local cap = tonumber(ARGV[1])
 local refund = tonumber(ARGV[2])
+local idle_ms = tonumber(ARGV[3])
 
 if cap <= 0 or refund <= 0 then
     return 0
@@ -26,5 +32,5 @@ end
 local rate = cap / 60000
 tokens = math.min(cap, tokens + (now - ts) * rate + refund)
 redis.call('HSET', KEYS[1], 'tokens', tostring(tokens), 'ts', now)
-redis.call('PEXPIRE', KEYS[1], 120000)
+redis.call('PEXPIRE', KEYS[1], idle_ms)
 return 1

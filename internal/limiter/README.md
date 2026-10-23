@@ -24,8 +24,8 @@ semaphore by design.
 | `limiter.go` | Contracts: `Limiter` (`Allow`/`Refund`), `Limits` (zero disables a ceiling), `Decision` (`Allowed`, `RetryAfter`) |
 | `memory.go` | `Memory`: continuous-refill buckets that start full; `Refund` only raises a bucket toward capacity |
 | `redis.go` | `Redis`: keys under `bw:limiter:` (or `<namespace>:bw:limiter:`), scripts embedded via `go:embed` |
-| `tokenbucket.lua` | Atomic refill-check-deduct; Redis clock; capacity 0 skips the dimension; 120s key expiry |
-| `refund.lua` | Refunds unconsumed tokens into the TPM bucket after a refill to now, never past capacity |
+| `tokenbucket.lua` | Atomic refill-check-deduct; Redis clock; capacity 0 skips the dimension; the idle horizon that expires the key arrives as an argument |
+| `refund.lua` | Refunds unconsumed tokens into the TPM bucket after a refill to now, never past capacity; carries the same idle horizon |
 | `concurrency.go` | `Concurrency`: hand-written counting semaphore with an idempotent release. The gateway instantiates it twice: once as the per-tenant gate driven by tier ceilings, once as the relay's per-upstream in-flight ceiling (`relay.WithUpstreamBulkhead`), which the relay consumes through its own `Bulkhead` port |
 | `middleware.go` | The 429 rate-limit stage: single body read, token estimate, fail-closed on backend error, refund-only post-call correction |
 | `concurrencymiddleware.go` | The 429 concurrency stage: `concurrency_limit_exceeded`, taken before any rate-limit reservation |
@@ -48,5 +48,8 @@ Bucket refill, edge cases and the middleware pipeline are unit-tested;
   If the client is gone the refund is lost — the safe direction.
 - The Redis scripts clock from Redis `TIME`, never the application clock, so
   refill does not depend on a shared application clock.
+- The bucket idle horizon has one owner: the in-process backend sweeps on it
+  and the Redis scripts receive it as an argument, so the two backends retain
+  their state on the same schedule and cannot drift apart.
 - The concurrency gate's slots are process-local; a multi-instance deployment
   must not read it as a global ceiling.
