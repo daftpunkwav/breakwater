@@ -26,7 +26,8 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package row:
   `BREAKWATER_ALLOW_UNAUTHENTICATED=1`: upstreams with no identity
   source; a PostgreSQL DSN with an empty admin token; armed
   configuration (upstreams, identity, or insights) with an empty admin
-  token. A malformed boolean refuses to boot.
+  token. A malformed boolean refuses to boot. The opt-in is loaded onto
+  `Security.AllowUnauthenticated`, so the composition root can read it.
 - A `file://` identity value with an empty or unreadable path refuses
   to boot.
 - An empty model name or a non-positive entry in

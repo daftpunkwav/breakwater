@@ -206,12 +206,6 @@ func Load() (Config, error) {
 	if cfg.Redis.TLS, err = envBool(envRedisTLS, false); err != nil {
 		return Config{}, err
 	}
-	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
-		return Config{}, err
-	}
-	if cfg.ContextLimits, err = envJSONMap[int64](envContextLimits); err != nil {
-		return Config{}, err
-	}
 	if cfg.Server.ShutdownGrace, err = envDuration(envShutdownGrace, cfg.Server.ShutdownGrace); err != nil {
 		return Config{}, err
 	}
@@ -238,7 +232,13 @@ func Load() (Config, error) {
 	if err := loadProbe(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := loadModelTables(&cfg); err != nil {
+		return Config{}, err
+	}
 	if err := loadRouting(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadSecurity(&cfg); err != nil {
 		return Config{}, err
 	}
 	if err := validate(&cfg); err != nil {
@@ -248,6 +248,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// loadSecurity parses the management-surface settings: the explicit
+// opt-in that accepts the postures guardDeploymentPosture refuses. The
+// admin token itself is a plain string and is read with the defaults.
+func loadSecurity(cfg *Config) error {
+	var err error
+	if cfg.Security.AllowUnauthenticated, err = envBool(envAllowUnauthenticated, false); err != nil {
+		return err
+	}
+	return nil
 }
 
 // loadRetry parses the attempt-loop settings and enforces their
@@ -396,6 +407,21 @@ func loadProbe(cfg *Config) error {
 		return err
 	}
 	if cfg.Probe.BackoffMax, err = envDuration(envProbeBackoff, cfg.Probe.BackoffMax); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadModelTables parses the keyed model tables: the fallback chains
+// and the context ceilings. Their shape is checked by
+// validateModelTables; their membership against the configured model
+// names is checked at assembly, which knows the model set.
+func loadModelTables(cfg *Config) error {
+	var err error
+	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
+		return err
+	}
+	if cfg.ContextLimits, err = envJSONMap[int64](envContextLimits); err != nil {
 		return err
 	}
 	return nil
@@ -698,11 +724,7 @@ func loadIdentitySource(key, raw string) (string, error) {
 // local-development postures, so every refusal names its remedy and the
 // explicit opt-in that overrides it.
 func guardDeploymentPosture(cfg Config) error {
-	insecure, err := envBool(envAllowUnauthenticated, false)
-	if err != nil {
-		return err
-	}
-	if insecure {
+	if cfg.Security.AllowUnauthenticated {
 		return nil
 	}
 	if len(cfg.Upstreams) > 0 && cfg.Identity == "" && cfg.Postgres.DSN == "" {
