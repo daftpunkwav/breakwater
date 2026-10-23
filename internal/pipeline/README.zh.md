@@ -20,7 +20,7 @@ middleware 或末端 handler 的身份接入。
 | File | 职责 |
 | --- | --- |
 | `chain.go` | `Chain`/`Middleware`：有序组合，先列出者最外层 |
-| `carrier.go` | `Carrier`：每请求的类型化结构（身份、已解析请求、token 估算、lease 与消耗句柄），在 chain 入口组装一次；`RequireCarrier`、`SetBody` |
+| `carrier.go` | `Carrier`：每请求的类型化结构（身份、已解析请求、token 估算与消耗句柄），在 chain 入口组装一次；`RequireCarrier`、`SetBody` |
 | `body.go` | `FormatStage` 钉住 client format；`EnsureBody` 把有上限的 body 恰好读一次（`protocol.MaxBodyBytes` 上限）并经该 format 的 wire ingest |
 | `requestid.go` | `RequestIDStage`：采纳格式良好的客户端 `X-Request-Id`（8–128 个可打印 ASCII）或铸造 `req-` 前缀新 id；回显在每一个响应上，拒绝响应也不例外 |
 | `obsmiddleware.go` | `ObservationStage`：in-flight gauge、时长 histogram、按结果计数的 request counter、异步 access log 条目（内含映射为日志 schema 的 relay 尝试轨迹）；第一个看到业务请求最终结果的阶段，被拒请求也不例外 |
