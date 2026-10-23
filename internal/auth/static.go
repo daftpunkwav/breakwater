@@ -188,13 +188,18 @@ func (s *Static) TenantByID(id string) (Tenant, bool) {
 }
 
 // hashKey derives the lookup hash of a raw API key: HMAC-SHA256 keyed
-// by the deployment's pepper. The construction keeps lookups O(1) and
-// cheap like a plain digest, while a non-empty pepper stops offline
-// brute-force of weak keys from a leaked key_hash. The empty-pepper
-// form is the stable default the seed script's digests are pinned to
+// by the given key material. The construction keeps lookups O(1) and
+// cheap like a plain digest, while a non-empty key stops offline
+// brute-force of weak keys from a leaked key_hash. The empty-key form
+// is the stable default the seed script's digests are pinned to
 // (TestSeedKeyHashMatchesHashKey).
-func hashKey(keyPepper, raw string) string {
-	mac := hmac.New(sha256.New, []byte(keyPepper))
+//
+// Two callers key it differently on purpose: the deployment's pepper
+// makes a leaked key_hash resist offline brute-force, while the
+// identity cache keys the digest with a per-process random secret so
+// its own lookup map holds no usable key.
+func hashKey(indexKey, raw string) string {
+	mac := hmac.New(sha256.New, []byte(indexKey))
 	mac.Write([]byte(raw))
 	return hex.EncodeToString(mac.Sum(nil))
 }

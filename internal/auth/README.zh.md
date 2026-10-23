@@ -22,7 +22,7 @@ record）。组合根会将其中任一包进进程内 `CachedStore` LRU，使�
 | `limits.go` | `LimitOverride` 与 `MergeTier`：用户层、key 层覆盖合并为生效 tier |
 | `static.go` | 基于配置 JSON 的 `Static` store；构建时即哈希 key；`Tenants()`/`TenantByID()` 供余额播种使用 |
 | `pg.go` | `PGStore`：按 `key_hash` 一次 join `api_keys`/`tenants`/`tiers`，仅 `status = 'active'` |
-| `lru.go` | `CachedStore`：LRU + TTL 装饰；缓存正向结果与确定性 `ErrUnauthorized` 负结果，绝不缓存瞬时故障 |
+| `lru.go` | `CachedStore`：LRU + TTL 装饰；缓存正向结果与确定性 `ErrUnauthorized` 负结果，绝不缓存瞬时故障；按摘要建索引，摘要密钥每进程随机生成，因此映射表不含可用 key |
 | `admin.go` | `AdminStore` 端口、`MaxKeysPerUser`（5）、`GenerateKey`（`bw-` 前缀，明文只在签发时出现一次） |
 | `pgadmin.go` | PostgreSQL 版 `AdminStore`：用户/key 生命周期、覆盖写入、事务化签发 key |
 
@@ -37,8 +37,9 @@ PostgreSQL（`BREAKWATER_TEST_POSTGRES_DSN`）。
   （数据库与静态集一致）；明文不落任何持久化存储。经 `CreateKey` 签发的
   key 只在该响应中出现一次；静态 identity 的 key 以明文经
   `BREAKWATER_IDENTITY` 进入网关，operator 必须保护好提供它的环境或文件。
-  其余时间明文仅存在于进程内存（含解析缓存）。更换 pepper 会使所有已持久化
-  的 key_hash 失效。
+  其余时间明文仅存在于进程内存。解析缓存按自己的摘要建索引，摘要的密钥为
+  每进程随机生成，因此它的映射表即便泄露也不含可用 key。更换 pepper 会使
+  所有已持久化的 key_hash 失效。
 - store 返回合并后的快照（`MergeTier`）；治理层永不重复合并。标量取最近
   一层设置值（key 覆盖 user 覆盖 tier）；`denied_models` 只做并集；
   `allowed_models` 只做交集。损坏的 overrides 文档会使解析失败，而不是被
