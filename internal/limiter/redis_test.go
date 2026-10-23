@@ -171,12 +171,23 @@ func TestRedisBucketsExpireOnTheSharedIdleHorizon(t *testing.T) {
 	}
 	assertBucketHorizon(t, mr)
 
-	// The refund script carries the same horizon: a refunded bucket
-	// must not outlive its neighbours.
+	// The refund script carries the same horizon too. Age the key
+	// first, so the assertion tells a renewed expiry from the one the
+	// allow already set.
+	mr.FastForward(time.Minute)
+	if got := mr.TTL(r.tpmKey("t1")); got >= bucketIdleTTL {
+		t.Fatalf("the aged bucket expires in %v, want less than the horizon %v", got, bucketIdleTTL)
+	}
+	rpmTTL := mr.TTL(r.rpmKey("t1"))
 	if err := r.Refund(ctx, "t1", limits, 5); err != nil {
 		t.Fatalf("refund: %v", err)
 	}
-	assertBucketHorizon(t, mr)
+	if got := mr.TTL(r.tpmKey("t1")); got != bucketIdleTTL {
+		t.Fatalf("the refunded bucket expires in %v, want the shared horizon %v", got, bucketIdleTTL)
+	}
+	if got := mr.TTL(r.rpmKey("t1")); got != rpmTTL {
+		t.Fatalf("the rpm bucket expires in %v, want the untouched %v", got, rpmTTL)
+	}
 }
 
 // assertBucketHorizon checks that every bucket key expires on the
