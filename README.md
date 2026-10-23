@@ -192,7 +192,7 @@ All configuration is environment-based; core knobs:
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` / `_BACKOFF_MAX` | `30s` / `5s` / `2` / _(off)_ | Active recovery probing of out-of-rotation upstreams; interval `0` disables (recovery then waits for real traffic); an auto-disabled upstream is restored only after `threshold` consecutive healthy probes. `BACKOFF_MAX` spaces an auto-disabled upstream's probes out after failures (wait starts at one interval, doubles per consecutive failure, capped here; a healthy answer forgets the ladder); `0` keeps every tick probing |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(off)_        | JSONL access log file (bounded queue, drop-oldest)         |
 | `BREAKWATER_ACCESS_LOG_QUEUE_SIZE`    | `4096`         | Capacity of the access log's in-memory queue; overflow drops entries and counts the drops |
-| `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*`. Required on any armed deployment (upstreams, identity or insights configured); the unarmed zero-config run boots without it |
+| `BREAKWATER_ADMIN_TOKEN`              | _(none)_       | Bearer token guarding `/admin/*`. Required on any armed deployment (upstreams, identity or insights configured); the unarmed zero-config run boots without it. Without a token the quota balance endpoints are not mounted, so an unauthenticated caller cannot rewrite a tenant's balance |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota ledger reconciliation pacing; needs Redis + PostgreSQL; `0` disables |
 | `BREAKWATER_INSIGHTS_DSN`             | _(main DSN)_   | PostgreSQL the monitoring records persist to; defaults to `BREAKWATER_POSTGRES_DSN`; unset without any DSN |
 
@@ -204,7 +204,7 @@ All configuration is environment-based; core knobs:
 - `GET /metrics` — Prometheus text exposition (hand-written registry). The endpoint is unauthenticated and its `tenant` label carries tenant ids, so it belongs on a scrape-only network path
 - `GET /version` — build identifier and Go version
 - `GET /admin/tenants/{id}/quota` — current balance
-- `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); a PUT to an id with no balance creates it (upsert); the reconcile protocol treats the interval across a correction as skip-by-design
+- `PUT /admin/tenants/{id}/quota` — top-up or correct a balance (`{"balance": N}`); a PUT to an id with no balance creates it (upsert); the reconcile protocol treats the interval across a correction as skip-by-design. Both quota endpoints are mounted only where the admin surface can authenticate the caller — a configured `BREAKWATER_ADMIN_TOKEN`, or the explicit `BREAKWATER_ALLOW_UNAUTHENTICATED=1` opt-in; a run without either answers 404 on them
 - `GET /admin/breakers` — per-upstream breaker states
 - `POST /admin/breakers/{id}/reset` — force an open breaker closed
 - `POST /admin/upstreams/{id}/probe` — one health probe on demand

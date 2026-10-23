@@ -28,6 +28,10 @@ Governance order: observation, auth, model authorization, concurrency,
 rate limit, quota, cache when caching is enabled. With no identity
 store, governance is observation only.
 
+The admin surface mounts the quota balance endpoints only where it can
+authenticate a caller: a configured `BREAKWATER_ADMIN_TOKEN`, or the
+explicit `BREAKWATER_ALLOW_UNAUTHENTICATED=1` opt-in.
+
 ## Startup
 
 - A configured Redis that fails Ping fails startup.

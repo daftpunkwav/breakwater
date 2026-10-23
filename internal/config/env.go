@@ -206,6 +206,9 @@ func Load() (Config, error) {
 	if cfg.Redis.TLS, err = envBool(envRedisTLS, false); err != nil {
 		return Config{}, err
 	}
+	if cfg.Security.AllowUnauthenticated, err = envBool(envAllowUnauthenticated, false); err != nil {
+		return Config{}, err
+	}
 	if cfg.Fallbacks, err = envJSONMap[[]string](envFallbacks); err != nil {
 		return Config{}, err
 	}
@@ -698,11 +701,7 @@ func loadIdentitySource(key, raw string) (string, error) {
 // local-development postures, so every refusal names its remedy and the
 // explicit opt-in that overrides it.
 func guardDeploymentPosture(cfg Config) error {
-	insecure, err := envBool(envAllowUnauthenticated, false)
-	if err != nil {
-		return err
-	}
-	if insecure {
+	if cfg.Security.AllowUnauthenticated {
 		return nil
 	}
 	if len(cfg.Upstreams) > 0 && cfg.Identity == "" && cfg.Postgres.DSN == "" {

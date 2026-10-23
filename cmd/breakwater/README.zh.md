@@ -12,7 +12,7 @@
 | `serve.go` | 组装心脏：装配顺序、每种格式的 middleware 链、运行生命周期（SIGINT/SIGTERM、关闭顺序、drain 超时处理） |
 | `governance.go` | backend 选择：`newGovernanceBackends`（Redis 需通过 fail-fast Ping，或内存实现）、`newAuthStore`（PostgreSQL / 静态 `BREAKWATER_IDENTITY` / 无，均包在 `auth.NewCachedStore` 里，正缓存 60 s、负缓存 5 s）、`seedBalances` |
 | `obsassembly.go` | 观测组装：JSONL access log 文件 sink（`BREAKWATER_ACCESS_LOG_PATH`）、insights store（`BREAKWATER_INSIGHTS_DSN`，默认取 `BREAKWATER_POSTGRES_DSN`）、`combinedSink` 扇出 |
-| `adminassembly.go` | admin surface 组装：`buildAdmin` 把余额、breaker 状态/复位与按需探测端点绑定到 live ledger、breaker registry 与上游 adapter（`adminBindings`） |
+| `adminassembly.go` | admin surface 组装：`buildAdmin` 把余额、breaker 状态/复位与按需探测端点绑定到 live ledger、breaker registry 与上游 adapter（`adminBindings`）；余额端点只在管理面能鉴权调用方时挂载（配置了 admin token，或显式开启未鉴权 opt-in） |
 | `recovery.go` | 主动恢复循环：探测 auto-disabled 的上游（`BREAKWATER_PROBE_THRESHOLD` 次连续健康应答解除禁用；`BREAKWATER_PROBE_BACKOFF_MAX` 用翻倍阶梯拉开失败上游的探测间隔），并为被 breaker 弹出的上游驱动合成探测 |
 
 ## Assembly order

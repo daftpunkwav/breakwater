@@ -104,6 +104,9 @@ func TestLoadAcceptsArmedPostureWithAdminToken(t *testing.T) {
 // TestLoadAcceptsUnarmedDeploymentWithoutAdminToken: the zero-config
 // baseline keeps booting tokenless — with no upstreams, no identity and
 // no insights store the admin surface has no live bindings to expose.
+// The quota balance endpoints are the one binding that exists in every
+// run; the composition root keeps them unmounted while the surface
+// cannot authenticate a caller.
 func TestLoadAcceptsUnarmedDeploymentWithoutAdminToken(t *testing.T) {
 	cleanEnv(t)
 
@@ -126,6 +129,18 @@ func TestLoadOptOutArmsTheUnauthenticatedPosture(t *testing.T) {
 	}
 	if len(cfg.Upstreams) != 1 {
 		t.Fatalf("upstreams = %+v, want the configured entry", cfg.Upstreams)
+	}
+	if !cfg.Security.AllowUnauthenticated {
+		t.Fatal("the opt-in must reach the configuration: the admin surface's mounting depends on it")
+	}
+
+	cleanEnv(t)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load rejected the unarmed deployment: %v", err)
+	}
+	if cfg.Security.AllowUnauthenticated {
+		t.Fatal("the opt-in must default to off")
 	}
 
 	cleanEnv(t)

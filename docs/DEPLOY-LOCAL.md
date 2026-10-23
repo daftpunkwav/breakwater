@@ -132,7 +132,7 @@ the live ones.
 | Deny a model for a user             | `PUT /admin/users/{id}/limits` `{"denied_models":[...]}` |
 | Tighten one key (quota/rpm/concurrency) | `PUT /admin/keys/{id}/limits` `{...}` |
 | Revoke one leaked key               | `PUT /admin/keys/{id}/status` `{"enabled": false}` |
-| Tenant balance / top-up             | `GET`/`PUT /admin/tenants/{id}/quota`              |
+| Tenant balance / top-up             | `GET`/`PUT /admin/tenants/{id}/quota` — mounted only where the admin surface can authenticate the caller (a configured `BREAKWATER_ADMIN_TOKEN`, or the explicit `BREAKWATER_ALLOW_UNAUTHENTICATED=1` opt-in) |
 | Stability report (the assessment view) | `GET /admin/insights?hours=24` — success rate, failure causes, latency percentiles, per-tenant/key/model/upstream slices |
 | Per-request audit trail             | `BREAKWATER_ACCESS_LOG_PATH` JSONL; the `RequestID` member holds the `X-Request-Id` value |
 

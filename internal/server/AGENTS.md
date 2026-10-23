@@ -21,6 +21,9 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Route map: [README.md](README.md).
   handler checks the method.
 - When `BREAKWATER_ADMIN_TOKEN` is non-empty, `/admin/*` requires that
   bearer. Compare SHA-256 digests. An empty token allows every caller.
+- A nil balance lookup or writer omits the quota endpoints. The
+  composition root mounts them only where the admin surface can
+  authenticate a caller.
 - Admin JSON bodies reject unknown fields, trailing values, and bodies
   past the 4 KiB cap with 400 `invalid_request`.
 

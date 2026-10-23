@@ -173,7 +173,7 @@ quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` �
 | `BREAKWATER_PROBE_INTERVAL` / `_TIMEOUT` / `_THRESHOLD` / `_BACKOFF_MAX` | `30s` / `5s` / `2` / _(关)_ | 退出轮换的 upstream 的主动恢复探测；interval `0` 禁用（恢复只能等真实流量）；auto-disable 的 upstream 需要 `threshold` 次连续健康探测才恢复。`BACKOFF_MAX` 在失败后拉开 auto-disable upstream 的探测间隔（等待从一个 interval 起步、每连续失败翻倍、封顶于此；健康应答即忘记阶梯）；`0` 保持每个 tick 都探测 |
 | `BREAKWATER_ACCESS_LOG_PATH`          | _(关)_         | JSONL access log 文件（有界队列、丢最旧）                    |
 | `BREAKWATER_ACCESS_LOG_QUEUE_SIZE`    | `4096`         | access log 内存队列容量；溢出丢弃条目并计数                  |
-| `BREAKWATER_ADMIN_TOKEN`              | _(无)_         | 守护 `/admin/*` 的 Bearer token。凡武装部署（配置了 upstreams、identity 或 insights）必填；零配置空跑可不设 |
+| `BREAKWATER_ADMIN_TOKEN`              | _(无)_         | 守护 `/admin/*` 的 Bearer token。凡武装部署（配置了 upstreams、identity 或 insights）必填；零配置空跑可不设。无 token 时额度余额端点不挂载，未鉴权的调用方改写不了任何 tenant 的余额 |
 | `BREAKWATER_RECONCILE_INTERVAL`       | `1m`           | Quota 台账对账节拍；需要 Redis + PostgreSQL；`0` 禁用        |
 | `BREAKWATER_INSIGHTS_DSN`             | _(主 DSN)_     | 监控记录持久化到的 PostgreSQL；默认取 `BREAKWATER_POSTGRES_DSN`；无任何 DSN 时未设 |
 
@@ -186,7 +186,9 @@ quota 对账快照（≤2）与监控记录（≤4；`BREAKWATER_INSIGHTS_DSN` �
 - `GET /version` — 构建标识与 Go 版本
 - `GET /admin/tenants/{id}/quota` — 当前余额
 - `PUT /admin/tenants/{id}/quota` — 充值或修正余额（`{"balance": N}`）；对无余额
-  的 id 执行 PUT 会创建余额（upsert）；对账协议把修正间隔视为设计内跳过
+  的 id 执行 PUT 会创建余额（upsert）；对账协议把修正间隔视为设计内跳过。两个额度
+  端点只在管理面能够鉴权调用方时挂载——即配置了 `BREAKWATER_ADMIN_TOKEN`，或显式
+  开启 `BREAKWATER_ALLOW_UNAUTHENTICATED=1`；两者皆无时它们返回 404
 - `GET /admin/breakers` — 每 upstream 的 breaker 状态
 - `POST /admin/breakers/{id}/reset` — 强制打开的 breaker 关闭
 - `POST /admin/upstreams/{id}/probe` — 按需做一次健康探测

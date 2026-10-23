@@ -355,4 +355,12 @@ type Security struct {
 	// AdminToken guards the admin API; empty disables authentication
 	// (local development only).
 	AdminToken string
+	// AllowUnauthenticated records the explicit dev opt-in that accepts
+	// a deployment Load would otherwise refuse to start: upstreams
+	// without an identity source, a PostgreSQL identity without an
+	// admin token, or an armed configuration without an admin token.
+	// The composition root reads it to decide whether the admin
+	// surface's privileged endpoints stay mounted on a surface that
+	// cannot authenticate a caller.
+	AllowUnauthenticated bool
 }

@@ -43,12 +43,25 @@ type adminBindings struct {
 // actions are bound here too: reset consults the configured upstream
 // set, the probe consults the probe-capable subset and counts on the
 // same metric the recovery loop records.
+//
+// The quota balance endpoints are mounted only where the admin surface
+// can authenticate the caller. A balance write rewrites money state,
+// and a surface without a bearer token admits every caller — so the
+// endpoints stay unmounted until a token is configured, or until the
+// operator accepted an unauthenticated deployment explicitly. Every
+// armed posture already requires one of the two; the endpoints are
+// therefore mounted wherever a tenant balance can be spent, and absent
+// from the runs where no balance can be.
 func buildAdmin(cfg config.Config, b adminBindings, opts ...server.AdminOption) http.Handler {
-	balances := func(r *http.Request, tenantID string) (int64, error) {
-		return b.gov.ledger.Balance(r.Context(), tenantID)
-	}
-	setBalance := func(r *http.Request, tenantID string, balance int64) error {
-		return b.gov.ledger.SetBalance(r.Context(), tenantID, balance)
+	var balances server.BalanceLookup
+	var setBalance server.BalanceWriter
+	if cfg.Security.AdminToken != "" || cfg.Security.AllowUnauthenticated {
+		balances = func(r *http.Request, tenantID string) (int64, error) {
+			return b.gov.ledger.Balance(r.Context(), tenantID)
+		}
+		setBalance = func(r *http.Request, tenantID string, balance int64) error {
+			return b.gov.ledger.SetBalance(r.Context(), tenantID, balance)
+		}
 	}
 	states := func(r *http.Request) []server.BreakerView {
 		views := make([]server.BreakerView, 0, len(b.upstreamIDs))

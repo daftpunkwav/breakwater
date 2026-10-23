@@ -118,7 +118,7 @@ load-test 场景准备的，它们用 seed key 调用网关。加入 DSN 即可�
 | 对某用户禁用一个模型                | `PUT /admin/users/{id}/limits` `{"denied_models":[...]}` |
 | 收紧单个 key（quota/rpm/concurrency）| `PUT /admin/keys/{id}/limits` `{...}` |
 | 吊销一个泄露的 key                  | `PUT /admin/keys/{id}/status` `{"enabled": false}` |
-| Tenant 余额 / 充值                  | `GET`/`PUT /admin/tenants/{id}/quota`              |
+| Tenant 余额 / 充值                  | `GET`/`PUT /admin/tenants/{id}/quota`——仅在管理面能鉴权调用方时挂载（配置了 `BREAKWATER_ADMIN_TOKEN`，或显式开启 `BREAKWATER_ALLOW_UNAUTHENTICATED=1`） |
 | 稳定性报告（评估视图）              | `GET /admin/insights?hours=24`——成功率、失败原因、延迟分位数、按 tenant/key/model/upstream 切片 |
 | 每请求审计轨迹                      | `BREAKWATER_ACCESS_LOG_PATH` JSONL；`RequestID` 成员即 `X-Request-Id` 的值 |
 
