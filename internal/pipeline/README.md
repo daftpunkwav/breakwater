@@ -27,7 +27,7 @@ own packages that join as middleware or the terminal handler.
 | `obsmiddleware.go` | `ObservationStage`: in-flight gauge, duration histogram, outcome counters, the async access-log entry with the relay's attempt trail mapped into the log schema; the first stage to see the outcome of a finished business request, rejections included |
 | `authstage.go` | `AuthStage`: Bearer / `x-api-key` → tenant through `auth.Store`; 401/503 rendered in the client format — a store outage surfaces as 503, never a silent pass |
 | `authzstage.go` | `ModelAuthzStage` and `AuthorizeModel`: tier model authorization, placed after auth and before any governance spend and before the cache; the one authority the inference handler also calls, so the two verdicts cannot drift |
-| `estimate.go` | `EstimateTokens` / `EstimatePartialTokens` / `PromptTokens`: the single pre-call estimate both the TPM bucket and the quota lease reserve against; a declared `max_tokens` is clamped to the tenant's per-request cap (the self-inflicted DoS guard) |
+| `estimate.go` | `EstimateTokens` / `EstimatePartialTokens` / `PromptTokens`: the single pre-call estimate both the TPM bucket and the quota lease reserve against; the prompt is measured by `protocol.EstimateContentTokens` and a declared `max_tokens` is clamped to the tenant's per-request cap (the self-inflicted DoS guard) |
 | `recovery.go` | `RecoveryStage`: a handler panic becomes a rendered 500 when the response has not started; innermost, immediately around the endpoint handler |
 
 ## Tests

@@ -12,13 +12,15 @@
  * direction: an unknown completion length reserves the safe default, a
  * declared max_tokens is clamped to the tenant's per-request cap so a
  * short prompt with a huge max_tokens cannot monopolize a tenant bucket
- * (the self-inflicted DoS guard).
+ * (the self-inflicted DoS guard), and the prompt itself is measured by
+ * protocol.EstimateContentTokens — the measure the upstream's reported
+ * usage is held to, so a reservation can never price below what the
+ * tenant really spends.
  */
 package pipeline
 
 import (
 	"math"
-	"unicode"
 
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
@@ -28,9 +30,10 @@ import (
 const DefaultCompletionReserve int64 = 256
 
 // EstimateTokens returns the pre-call token estimate of a chat request:
-// prompt words plus the clamped completion budget. One token is
-// approximated as one whitespace-separated word, matching the mock
-// upstream's accounting so evidence runs stay consistent.
+// prompt tokens plus the clamped completion budget. One token is
+// approximated as one whitespace-separated word, floored by the
+// four-bytes-per-token rule, matching the mock upstream's accounting so
+// evidence runs stay consistent.
 //
 // maxRequestTokens is the tenant's per-request cap; values below one
 // disable the clamp.
@@ -43,7 +46,7 @@ func EstimateTokens(req protocol.ChatRequest, maxRequestTokens int64) int64 {
 // bytes converted at the usual rough four bytes per token (the
 // local fallback).
 func EstimatePartialTokens(req protocol.ChatRequest, streamBytes int64) int64 {
-	return promptEstimate(req) + streamBytes/4
+	return promptEstimate(req) + streamBytes/protocol.BytesPerToken
 }
 
 // PromptTokens returns the prompt-only estimate: the input size the
@@ -88,32 +91,12 @@ func (c *Carrier) EstimatePartialTokens(streamBytes int64) int64 {
 func promptEstimate(req protocol.ChatRequest) int64 {
 	prompt := int64(0)
 	for _, m := range req.Messages {
-		prompt += countWords(m.Content)
+		prompt += protocol.EstimateContentTokens(m.Content)
 	}
 	if prompt == 0 {
 		prompt = 1
 	}
 	return prompt
-}
-
-// countWords counts whitespace-separated words — the same number
-// strings.Fields would produce — without materializing the field slice:
-// a large prompt would otherwise allocate a large transient slice on
-// every request just to be counted.
-func countWords(s string) int64 {
-	n := int64(0)
-	inWord := false
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			inWord = false
-			continue
-		}
-		if !inWord {
-			inWord = true
-			n++
-		}
-	}
-	return n
 }
 
 func completionEstimate(req protocol.ChatRequest, maxRequestTokens int64) int64 {

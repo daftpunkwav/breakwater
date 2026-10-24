@@ -34,6 +34,7 @@ are the index — run any of them to check the property directly.
 
 | Property | Owner | Guarding test |
 | -------- | ----- | ------------- |
+| A prompt without whitespace prices by its bytes, never as a single token — a prompt-sized spend must not escape the TPM bucket and the monthly quota | `internal/protocol`, `internal/pipeline` | `TestEstimateContentTokensFloorsWhitespaceFreeContent`, `TestEstimateTokensPricesAWhitespaceFreePrompt` |
 | A rejected request never reaches an upstream | `internal/server`, `internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`, `TestChainRateLimitsWithRetryAfter`, `TestChainQuotaExhaustionIsPaymentRequired`, `TestChainDeniesModelOutsideTier` |
 | An oversized admin body is rejected whole, never truncated into an accepted write | `internal/server` | `TestAdminBodyCapIsARejectionNotATruncation` |
 | The three packages' identifier character sets accept exactly the same strings | `internal/server`, `internal/auth`, `internal/config` | `TestIdentifierCharsetsStayInLockstep` |

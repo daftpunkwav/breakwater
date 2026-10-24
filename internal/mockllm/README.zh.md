@@ -10,12 +10,13 @@
 |---|---|
 | `handler.go` | `Handler`/`Options`/`ServeHTTP`：路由 `POST /v1/chat/completions` 与 `GET /healthz`（方法错误 → 405，未知路径 → 404），应用进程级旋钮（`DefaultDelay`、`ErrorRate` → 500 `injected_failure`），请求体上限 1 MiB |
 | `faults.go` | 每请求的 `X-Mockllm-*` 指令：延迟、注入 status（400..599）、`StreamMode`（`normal`/`slow`/`abort`）、chunk 间隔、省略 usage、补全长度。`slow` 模式未显式给 chunk 间隔时默认 100 ms |
-| `completion.go` | OpenAI 兼容渲染：确定性补全（一个 token = 一个空白分隔的单词，来自固定词表；默认 32 tokens，header 上限 100000）、带最终 usage chunk 的 SSE chunk 流、OpenAI 错误信封 |
+| `completion.go` | OpenAI 兼容渲染：确定性补全（一个 token = 一个空白分隔的单词，来自固定词表；默认 32 tokens，header 上限 100000）、用 `protocol.EstimateContentTokens` 度量的 prompt（与网关预留同一个数）、带最终 usage chunk 的 SSE chunk 流、OpenAI 错误信封 |
 | `health.go` | `GET /healthz` 存活探针，供 compose 健康检查与实验脚本使用 |
 
 ## Invariants
 
 - happy path 保持 OpenAI 兼容：mock 绝不迫使网关添加特殊处理。
+- prompt 用网关自己的度量（`protocol.EstimateContentTokens`）计量：结算会把预留退到上报的用量，计法不同的 mock 会把 tenant 退到一个它从未花掉的数上。
 - 内容刻意保持确定性——固定词表、固定长度——让 load test 各轮可比较。
 - 故障指令大声失败：malformed 或越界的 `X-Mockllm-*` header 返回 `400 invalid_fault_directive`，因为悄悄忽略自身注入的实验只会产出无意义的证据。
 - `abort` 模式在流中途切断连接（panic `http.ErrAbortHandler`）——没有错误信封、没有 `[DONE]`：正是网关的诚实流终止必须存活的截断流。

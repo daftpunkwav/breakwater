@@ -8,6 +8,10 @@ CLI wrapper: [../../cmd/mockllm/AGENTS.md](../../cmd/mockllm/AGENTS.md).
 - Completions are deterministic. One token is one whitespace-separated
   word from the fixed vocabulary. The default length is 32 tokens.
   `X-Mockllm-Completion-Tokens` is capped at 100000.
+- The prompt is measured with `protocol.EstimateContentTokens`, the
+  measure the gateway reserves against: a settlement refunds a
+  reservation down to the reported usage, so a different count would
+  refund a tenant down to a number it never spent.
 - A malformed or out-of-range `X-Mockllm-*` header returns 400
   `invalid_fault_directive`.
 - Apply faults in order: injected delay, process-wide error rate,

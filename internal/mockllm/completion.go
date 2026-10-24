@@ -8,8 +8,12 @@
  * - Keep completion lengths fixed and deterministic so load test runs
  *   stay comparable
  *
- * One token is approximated as one whitespace-separated word; content is
- * drawn from a fixed vocabulary so byte length is deterministic.
+ * The prompt is measured with protocol.EstimateContentTokens — the same
+ * measure the gateway reserves against. A settlement refunds a
+ * reservation down to the reported usage, so a mock that counted
+ * differently would refund a tenant down to a number it never spent.
+ * The completion is one token per whitespace-separated word from a fixed
+ * vocabulary, so byte length is deterministic.
  */
 package mockllm
 
@@ -21,6 +25,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
 // defaultCompletionTokens sizes completions when the request does not pin
@@ -119,16 +125,17 @@ type errorBody struct {
 	Code    string `json:"code"`
 }
 
-// promptTokens counts prompt words across all message contents.
+// promptTokens counts the prompt the way the gateway measures it, so an
+// evidence run settles against the same number the gateway reserved.
 func promptTokens(req completionRequest) int {
-	n := 0
+	n := int64(0)
 	for _, m := range req.Messages {
-		n += len(strings.Fields(m.Content))
+		n += protocol.EstimateContentTokens(m.Content)
 	}
 	if n == 0 {
 		n = 1
 	}
-	return n
+	return int(n)
 }
 
 // buildContent renders completion content of exactly tokens words.

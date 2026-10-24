@@ -10,12 +10,13 @@ The in-process mock OpenAI-compatible upstream used as the fault injector for th
 |---|---|
 | `handler.go` | `Handler`/`Options`/`ServeHTTP`: routes `POST /v1/chat/completions` and `GET /healthz` (wrong method → 405, unknown path → 404), applies the process-wide knobs (`DefaultDelay`, `ErrorRate` → 500 `injected_failure`), caps request bodies at 1 MiB | |
 | `faults.go` | The per-request `X-Mockllm-*` directives: delay, injected status (400..599), `StreamMode` (`normal`/`slow`/`abort`), chunk delay, usage omission, completion length. `slow` mode without an explicit chunk delay defaults to 100 ms |
-| `completion.go` | OpenAI-compatible rendering: deterministic completions (one token = one whitespace-separated word from a fixed vocabulary; default 32 tokens, header-capped at 100000), the SSE chunk stream with its final usage chunk, the OpenAI error envelope |
+| `completion.go` | OpenAI-compatible rendering: deterministic completions (one token = one whitespace-separated word from a fixed vocabulary; default 32 tokens, header-capped at 100000), the prompt measured with `protocol.EstimateContentTokens` so the mock settles against the same number the gateway reserved, the SSE chunk stream with its final usage chunk, the OpenAI error envelope |
 | `health.go` | `GET /healthz` liveness probe for compose checks and experiment scripts |
 
 ## Invariants
 
 - The happy path stays OpenAI-compatible: the mock must never force special-casing into the gateway.
+- The prompt is measured with the gateway's own measure (`protocol.EstimateContentTokens`): a settlement refunds a reservation down to the reported usage, so a mock that counted differently would refund a tenant down to a number it never spent.
 - Content is deterministic on purpose — fixed vocabulary, fixed lengths — so load test runs stay comparable.
 - Fault directives fail loudly: a malformed or out-of-range `X-Mockllm-*` header is `400 invalid_fault_directive`, because an experiment that silently ignored its own injection would produce meaningless evidence.
 - `abort` mode cuts the connection mid-stream (panics with `http.ErrAbortHandler`) — no error envelope, no `[DONE]`: exactly the truncated stream the gateway's honest stream termination has to survive.

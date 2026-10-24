@@ -1,9 +1,8 @@
 /**
  * @file estimate_test
- * @description The token estimate contract: word counting matches
- * strings.Fields exactly (the mock upstream's accounting), the
- * oversized max_tokens clamp holds, and counting never materializes a
- * field slice.
+ * @description The token estimate contract: the prompt is measured by
+ * the shared content measure, the oversized max_tokens clamp holds,
+ * and the estimate saturates instead of wrapping.
  */
 package pipeline
 
@@ -15,24 +14,23 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 )
 
-func TestCountWordsMatchesFields(t *testing.T) {
+// TestEstimateTokensPricesAWhitespaceFreePrompt: a prompt without
+// whitespace carries no word for the word rule to count, so it used to
+// price as a single token however large it was — and a prompt-sized
+// spend that prices as one token escapes the TPM bucket and the
+// monthly quota, the two controls that exist to bound token spend.
+func TestEstimateTokensPricesAWhitespaceFreePrompt(t *testing.T) {
 	t.Parallel()
-	cases := []string{
-		"",
-		" ",
-		"a",
-		"hello world",
-		"  leading and trailing  ",
-		"multiple   spaces\tand\ttabs\nand\nnewlines",
-		"separated\u00a0by\u2003nbsp",
-		"中文 词组 english mix",
-		"\v\fa\vb\fc\r\rd",
+	content := strings.Repeat("中文字幕", 100)
+	req := protocol.ChatRequest{
+		Messages: []protocol.ChatMessage{{Role: "user", Content: content}},
 	}
-	for _, s := range cases {
-		want := int64(len(strings.Fields(s)))
-		if got := countWords(s); got != want {
-			t.Errorf("countWords(%q) = %d, want %d", s, got, want)
-		}
+	want := int64(len(content))/protocol.BytesPerToken + DefaultCompletionReserve
+	if got := EstimateTokens(req, 0); got != want {
+		t.Fatalf("EstimateTokens = %d, want %d", got, want)
+	}
+	if got := PromptTokens(req); got != want-DefaultCompletionReserve {
+		t.Fatalf("PromptTokens = %d, want %d", got, want-DefaultCompletionReserve)
 	}
 }
 

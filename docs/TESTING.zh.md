@@ -31,6 +31,7 @@
 
 | 性质 | 拥有者 | 守护测试 |
 | -------- | ----- | ------------- |
+| 无空白的 prompt 按字节计价，绝不按单个 token 计——prompt 级的花费不能绕过 TPM 桶与月度额度 | `internal/protocol`、`internal/pipeline` | `TestEstimateContentTokensFloorsWhitespaceFreeContent`、`TestEstimateTokensPricesAWhitespaceFreePrompt` |
 | 被拒请求绝不抵达 upstream | `internal/server`、`internal/pipeline` | `TestChainRejectsMissingAndUnknownKeys`、`TestChainRateLimitsWithRetryAfter`、`TestChainQuotaExhaustionIsPaymentRequired`、`TestChainDeniesModelOutsideTier` |
 | 超限的管理端请求体被整体拒绝，绝不截断成一次被接受的写入 | `internal/server` | `TestAdminBodyCapIsARejectionNotATruncation` |
 | 三个包各自执行的标识符字符集接受完全相同的字符串 | `internal/server`、`internal/auth`、`internal/config` | `TestIdentifierCharsetsStayInLockstep` |
