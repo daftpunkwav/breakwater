@@ -51,10 +51,14 @@ jobs:
         image: postgres:18-alpine
         env:
           POSTGRES_USER: breakwater
-          POSTGRES_PASSWORD: breakwater
+          # The database is thrown away with the job and its port is
+          # published on the runner's loopback only, so the service
+          # permits a passwordless local connection instead of demanding
+          # a password that would sit in the repository as a credential.
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: breakwater
         ports:
-          - 5432:5432
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U breakwater -d breakwater"
           --health-interval 5s
@@ -108,10 +112,9 @@ jobs:
           go test -race -cover -timeout 8m ./... | tee /tmp/cover.txt
         env:
           BREAKWATER_TEST_REDIS_ADDR: 127.0.0.1:6379
-          # The credential pair belongs to the ephemeral postgres service
-          # container declared above; it is not a repository secret.
-          #checkov:skip=CKV_SECRET_4:throwaway credential of the ephemeral CI postgres service
-          BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater:breakwater@127.0.0.1:5432/breakwater?sslmode=disable
+          # The service above permits a passwordless local connection, so
+          # the DSN carries the user and no credential.
+          BREAKWATER_TEST_POSTGRES_DSN: postgres://breakwater@127.0.0.1:5432/breakwater?sslmode=disable
 
       # The coverage floor (>=95% per package) is a hard gate, parsed
       # from the run the Test step already produced — the identity and
