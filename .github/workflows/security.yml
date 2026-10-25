@@ -42,13 +42,16 @@ jobs:
 
       # The binary comes from the official release, checksum-verified, instead
       # of gitleaks-action. No automation covers this URL; bump deliberately.
+      # --proto '=https' and --tlsv1.2 pin the redirect target as well: the
+      # release URL is followed, and a redirect to another scheme or to a
+      # TLS version below 1.2 must fail the step instead of downgrading it.
       - name: Install gitleaks
         run: |
           set -euo pipefail
           V=8.30.1
-          curl -sSfL --retry 3 -o /tmp/gitleaks.tgz \
+          curl -sSfL --proto '=https' --tlsv1.2 --retry 3 -o /tmp/gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz"
-          curl -sSfL --retry 3 -o /tmp/checksums.txt \
+          curl -sSfL --proto '=https' --tlsv1.2 --retry 3 -o /tmp/checksums.txt \
             "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_checksums.txt"
           grep "gitleaks_${V}_linux_x64.tar.gz" /tmp/checksums.txt \
             | sed "s|gitleaks_${V}_linux_x64.tar.gz|/tmp/gitleaks.tgz|" | sha256sum -c -
@@ -59,7 +62,7 @@ jobs:
         run: /tmp/gitleaks detect --redact -v
 
   policy:
-    name: dependency policy (denylist)
+    name: policy (denylist, workflow)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -76,6 +79,13 @@ jobs:
       # dependencies included.
       - name: Go denylist
         run: python3 scripts/ci/check_go_deps_policy.py
+
+      # The committed workflows must carry no credential, and the release
+      # download must not fall back to a weaker transport. The check fails
+      # when either property is lost, so the fix cannot be undone by a
+      # later edit that looks harmless.
+      - name: Workflow policy
+        run: python3 scripts/ci/check_workflow_policy.py
 
   security-gate:
     name: security-gate
