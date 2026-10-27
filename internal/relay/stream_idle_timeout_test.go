@@ -110,19 +110,22 @@ func TestIdleWatchdogCutsSilentStream(t *testing.T) {
 // re-arms the watchdog on every body read.
 func TestIdleWatchdogHeldOffByActivity(t *testing.T) {
 	t.Parallel()
-	// Five frames, one every 40ms inside a window ten times that
-	// interval: ~200ms total, past the idle window many times over. The
-	// window is deliberately far above the drip so a scheduler stall
-	// under the race detector cannot read as upstream silence — the
-	// watchdog must only fire when the stream really stops speaking.
-	cand := sseDripUpstream(5, 40*time.Millisecond)
+	// Fifteen frames, one every 40ms inside a window ten times that
+	// interval: ~600ms total, well past the 400ms window, so the run
+	// only survives when the activity resets actually re-arm the
+	// watchdog — a stream that merely finished before the window would
+	// not prove it. The window is deliberately far above the drip so a
+	// scheduler stall under the race detector cannot read as upstream
+	// silence either: the watchdog must only fire when the stream
+	// really stops speaking.
+	cand := sseDripUpstream(15, 40*time.Millisecond)
 	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithStreamIdleTimeout(400*time.Millisecond))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
 	if result.Aborted {
 		t.Fatalf("stream aborted: %q — steady activity must hold the watchdog off", result.Body)
 	}
-	if !strings.Contains(string(result.Body), "c5") {
+	if !strings.Contains(string(result.Body), "c15") {
 		t.Fatalf("late chunks lost: %q", result.Body)
 	}
 }
