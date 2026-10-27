@@ -85,7 +85,7 @@ func (c *Carrier) ReserveTokens(maxRequestTokens int64) int64 {
 // a usage report, from the carrier's cached prompt estimate. It is the
 // carrier form of EstimatePartialTokens.
 func (c *Carrier) EstimatePartialTokens(streamBytes int64) int64 {
-	return c.PromptTokens() + streamBytes/4
+	return c.PromptTokens() + streamBytes/protocol.BytesPerToken
 }
 
 func promptEstimate(req protocol.ChatRequest) int64 {

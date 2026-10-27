@@ -82,12 +82,15 @@ type Carrier struct {
 	// failed at — a real upstream; that upstream's identity then rides
 	// Relay.UpstreamID alone.
 	ServedBy string
-	// RejectCode records the governance rejection code of the stage
-	// that refused the request, for the failure taxonomy. The code set
-	// is the closed rejection vocabulary defined in package protocol
-	// (schema.go): every stage stamps the same constant it renders the
-	// client envelope with, so the carrier and the wire cannot drift.
-	// Empty unless the request was rejected before the forward stage.
+	// RejectCode records the rejection code of the stage that refused
+	// the request, for the failure taxonomy. The governance stages
+	// stamp the closed vocabulary defined in package protocol
+	// (schema.go), each the same constant it renders the client
+	// envelope with, so the carrier and the wire cannot drift; the
+	// inference handler stamps the code its own routing decisions
+	// render (model_not_found, model_disabled, circuit_open,
+	// context_window_exceeded) for the same reason. Empty unless the
+	// request was rejected before the forward stage.
 	RejectCode string
 	// Relay captures the forward stage's outcome for the stages after
 	// it (settlement details, observation dimensions). Holding the
