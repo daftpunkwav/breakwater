@@ -8,10 +8,14 @@ package relay
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"testing"
+	"testing/iotest"
 
 	"github.com/daftpunkwav/breakwater/internal/circuit"
+	"github.com/daftpunkwav/breakwater/internal/retry"
 	"github.com/daftpunkwav/breakwater/internal/upstream"
 )
 
@@ -68,6 +72,39 @@ func TestTrailRecordsUncompletedAttempts(t *testing.T) {
 		{Upstream: "open", CredentialIndex: 0, Status: http.StatusOK},
 	})
 }
+
+// TestTrailRecordsACompletedExchangeWhoseBodyReadFailed: an exchange
+// whose body could not be read still completed with a status, so its
+// trace names the upstream, the credential and that status instead of
+// reading as an attempt that never happened.
+func TestTrailRecordsACompletedExchangeWhoseBodyReadFailed(t *testing.T) {
+	t.Parallel()
+	exec := New(retry.Policy{MaxAttempts: 1}, nil)
+	result := execute(t, exec, []upstream.Upstream{brokenBodyUpstream{}}, false, `{}`)
+	if result.Status != http.StatusBadGateway {
+		t.Fatalf("status = %d, want the unreachable envelope", result.Status)
+	}
+	assertTrail(t, result.Trail, []AttemptTrace{
+		{Upstream: "broken", CredentialIndex: 0, Status: http.StatusInternalServerError},
+	})
+}
+
+// brokenBodyUpstream completes its exchange with a 500 whose body
+// errors on every read.
+type brokenBodyUpstream struct{}
+
+func (brokenBodyUpstream) ID() string { return "broken" }
+
+func (brokenBodyUpstream) Forward(context.Context, upstream.Request) (*upstream.Response, error) {
+	return &upstream.Response{
+		StatusCode:      http.StatusInternalServerError,
+		Header:          http.Header{},
+		Body:            io.NopCloser(iotest.ErrReader(errors.New("body gone"))),
+		CredentialIndex: 0,
+	}, nil
+}
+
+func (brokenBodyUpstream) Probe(context.Context) error { return nil }
 
 // assertTrail pins the recorded attempt trail element for element:
 // same length, same upstream/credential/status sequence.

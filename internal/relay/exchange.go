@@ -96,6 +96,9 @@ func (r *requestRun) exchange(attemptCtx context.Context, cand upstream.Upstream
 		_ = resp.Body.Close()
 		lease.end()
 		if readErr != nil {
+			// The exchange completed — the status is on record — only the
+			// body was lost, so the attempt keeps its trail entry.
+			r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
 			return circuit.OutcomeServerFault, fmt.Errorf("relay: upstream %s read body: %w", cand.ID(), readErr)
 		}
 		return r.stashUpstreamError(cand, resp, body)
@@ -127,6 +130,9 @@ func (r *requestRun) exchangeBuffered(cand upstream.Upstream, resp *upstream.Res
 	body, readErr := readBounded(resp.Body, maxResponseBytes, contentLengthHint(resp.Header))
 	_ = resp.Body.Close()
 	if readErr != nil {
+		// The exchange completed — the status is on record — only the
+		// body was lost, so the attempt keeps its trail entry.
+		r.trace(cand.ID(), resp.CredentialIndex, resp.StatusCode)
 		return circuit.OutcomeServerFault, fmt.Errorf("relay: upstream %s read body: %w", cand.ID(), readErr)
 	}
 
