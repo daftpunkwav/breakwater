@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/daftpunkwav/breakwater/internal/obs"
@@ -31,41 +32,47 @@ func (s *captureSink) Record(entry obs.Entry) { s.entries = append(s.entries, en
 func (s *captureSink) Flush(context.Context) error { return nil }
 
 // TestInferenceRejectionsCarryTheirCode drives the four handler-owned
-// rejections through the observation stage and asserts the access entry
-// names the gateway cause the envelope rendered.
+// rejections through the observation stage and asserts the status, the
+// rendered envelope code and the access entry all name the same gateway
+// cause.
 func TestInferenceRejectionsCarryTheirCode(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name     string
-		router   router.Router
-		limits   map[string]int64
-		chat     protocol.ChatRequest
-		wantCode string
+		name       string
+		router     router.Router
+		limits     map[string]int64
+		chat       protocol.ChatRequest
+		wantStatus int
+		wantCode   string
 	}{
 		{
-			name:     "model disabled by an operator",
-			router:   stubRouter{err: router.ErrDisabled},
-			chat:     protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
-			wantCode: "model_disabled",
+			name:       "model disabled by an operator",
+			router:     stubRouter{err: router.ErrDisabled},
+			chat:       protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "model_disabled",
 		},
 		{
-			name:     "every upstream unavailable",
-			router:   stubRouter{err: router.ErrUnavailable},
-			chat:     protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
-			wantCode: "circuit_open",
+			name:       "every upstream unavailable",
+			router:     stubRouter{err: router.ErrUnavailable},
+			chat:       protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "circuit_open",
 		},
 		{
-			name:     "no upstream serves the model",
-			router:   stubRouter{err: fmt.Errorf("no upstream serves model %q", "m1")},
-			chat:     protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
-			wantCode: "model_not_found",
+			name:       "no upstream serves the model",
+			router:     stubRouter{err: fmt.Errorf("no upstream serves model %q", "m1")},
+			chat:       protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "model_not_found",
 		},
 		{
-			name:     "prompt exceeds the context ceiling",
-			router:   stubRouter{candidates: []upstream.Upstream{usageLessUpstream{}}},
-			limits:   map[string]int64{"m1": 4},
-			chat:     protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
-			wantCode: "context_window_exceeded",
+			name:       "prompt exceeds the context ceiling",
+			router:     stubRouter{candidates: []upstream.Upstream{usageLessUpstream{}}},
+			limits:     map[string]int64{"m1": 4},
+			chat:       protocol.ChatRequest{Model: "m1", Messages: longPrompt()},
+			wantStatus: http.StatusRequestEntityTooLarge,
+			wantCode:   "context_window_exceeded",
 		},
 	}
 	for _, tc := range cases {
@@ -83,8 +90,9 @@ func TestInferenceRejectionsCarryTheirCode(t *testing.T) {
 				relay.New(retry.Policy{MaxAttempts: 1}, nil), WithContextLimits(tc.limits)))
 
 			rec := inferenceRequest(t, handler, tc.chat)
-			if rec.Code < http.StatusBadRequest {
-				t.Fatalf("status = %d body = %s, want a rejection", rec.Code, rec.Body.String())
+			if rec.Code != tc.wantStatus || !strings.Contains(rec.Body.String(), `"code":"`+tc.wantCode+`"`) {
+				t.Fatalf("status = %d body = %s, want %d with code %q",
+					rec.Code, rec.Body.String(), tc.wantStatus, tc.wantCode)
 			}
 			if len(sink.entries) != 1 {
 				t.Fatalf("observed %d access entries, want 1", len(sink.entries))
