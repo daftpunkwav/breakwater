@@ -12,7 +12,7 @@ Wire contracts of the gateway: how each client-facing API format is ingested int
 | `schema.go` | The decoded subset of the chat completion schema (`ChatRequest`, `Usage`), `ParseUsage`, the gateway error envelope (`WriteError`), the shared rejection codes and `MaxBodyBytes` (4 MiB) |
 | `tokens.go` | The shared content measure: `EstimateContentTokens` (one token per whitespace-separated word, floored by the four-bytes-per-token rule) and `BytesPerToken`. The gateway's reservation and the mock upstream's accounting must agree on it, or a settlement refunds a tenant down to a number it never spent |
 | `sse.go` | SSE codecs: `WriteData`/`WriteEvent`, the in-stream error contract (`ErrorType` = `gateway_error`, codes `upstream_reset` / `upstream_timeout` / `budget_exhausted`), `WriteAbort` — exactly one error event, then `data: [DONE]` |
-| `responses.go` | The openai-responses wire: ingest (`input`, `instructions`, `max_output_tokens`), Responses objects, `response.*` events, `response.failed` on abort |
+| `responses.go` | The openai-responses wire: ingest (`input`, `instructions`, `max_output_tokens`), Responses objects, `response.*` events, `response.failed` on abort. The completed event's text is accumulated for the whole stream and bounded by `maxStreamTextBytes` (32 MiB), so an upstream that never stops producing fails the stream instead of growing the heap without a bound |
 | `anthropic.go` | The anthropic-messages wire: ingest (`system`, text blocks, required `max_tokens`), Messages objects, `message_*` events, the `error` event on abort, stop-reason and error-type mapping |
 
 ## Invariants

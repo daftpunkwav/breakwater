@@ -167,6 +167,26 @@ func TestResponsesStreamAbort(t *testing.T) {
 	}
 }
 
+// TestResponsesStreamTextCap: the Responses transcoder retains the
+// completion text for its completion event, so an upstream that never
+// stops producing must fail the stream at the cap instead of growing
+// the gateway's heap without a bound.
+func TestResponsesStreamTextCap(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	transcoder := startResponsesStream(t, rec)
+
+	payload := []byte(`{"choices":[{"delta":{"content":"` + strings.Repeat("a", 1<<20) + `"}}]}`)
+	for i := 0; i < 32; i++ {
+		if err := transcoder.Delta(rec, payload); err != nil {
+			t.Fatalf("delta %d within the cap: %v", i, err)
+		}
+	}
+	if err := transcoder.Delta(rec, payload); err == nil {
+		t.Fatalf("delta past the cap: err = nil, want the size refusal")
+	}
+}
+
 // TestIngestResponsesRejectsNonPositiveMaxOutputTokens: the Responses
 // wire re-encodes the field, so a non-positive budget is refused at
 // ingest — the same refusal the Messages wire makes — instead of being

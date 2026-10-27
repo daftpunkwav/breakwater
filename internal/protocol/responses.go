@@ -224,6 +224,15 @@ type responsesStream struct {
 	text  []byte
 }
 
+// maxStreamTextBytes bounds the text a Responses stream accumulates for
+// its completion event: this transcoder is the one place in the stream
+// path that retains what it forwards, and an upstream that never stops
+// producing would otherwise grow the gateway's heap without a bound —
+// the same failure mode the SSE line cap and the buffered exchange cap
+// close elsewhere on this path. The bound matches the buffered exchange
+// cap: a completion that large cannot be buffered or replayed anyway.
+const maxStreamTextBytes = 32 << 20
+
 // Start implements StreamTranscoder: response.created.
 func (s *responsesStream) Start(w ioWriter, model string) error {
 	s.model = model
@@ -249,6 +258,13 @@ func (s *responsesStream) Delta(w ioWriter, payload []byte) error {
 		return nil
 	}
 	if text := chunk.Choices[0].Delta.Content; text != "" {
+		if len(s.text)+len(text) > maxStreamTextBytes {
+			// Failing the transcriber ends the stream through the honest
+			// abort contract: the completion event could never be rendered
+			// whole, so pretending otherwise would dress a broken stream
+			// up as a completed answer.
+			return fmt.Errorf("protocol: responses stream text exceeds %d bytes", maxStreamTextBytes)
+		}
 		s.text = append(s.text, text...)
 		return WriteEvent(w, "response.output_text.delta", map[string]any{
 			"type":  "response.output_text.delta",
