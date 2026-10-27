@@ -110,10 +110,13 @@ func TestIdleWatchdogCutsSilentStream(t *testing.T) {
 // re-arms the watchdog on every body read.
 func TestIdleWatchdogHeldOffByActivity(t *testing.T) {
 	t.Parallel()
-	// Five frames, one every 40ms inside the 150ms window: ~200ms
-	// total, past the idle window many times over.
+	// Five frames, one every 40ms inside a window ten times that
+	// interval: ~200ms total, past the idle window many times over. The
+	// window is deliberately far above the drip so a scheduler stall
+	// under the race detector cannot read as upstream silence — the
+	// watchdog must only fire when the stream really stops speaking.
 	cand := sseDripUpstream(5, 40*time.Millisecond)
-	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithStreamIdleTimeout(150*time.Millisecond))
+	exec := New(retry.Policy{MaxAttempts: 1}, nil, WithStreamIdleTimeout(400*time.Millisecond))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, true, "{}")
 	if result.Aborted {
