@@ -142,7 +142,7 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := s.router.Candidates(r.Context(), carrier.Chat.Model)
 	if err != nil {
-		renderCandidatesError(w, wire, carrier.Chat.Model, err)
+		renderCandidatesError(w, wire, carrier, carrier.Chat.Model, err)
 		return
 	}
 
@@ -154,6 +154,11 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// already scanned the prompt for its reservation.
 	inputTokens := carrier.PromptTokens()
 	if overContext(s.contextLimits, carrier.Chat.Model, inputTokens) {
+		// The pre-filter's refusal rides the same failure taxonomy as the
+		// governance rejections: without the stamp the access log carries
+		// an empty code, which the stability report reads as an upstream
+		// error passthrough instead of this gateway-side decision.
+		carrier.RejectCode = "context_window_exceeded"
 		wire.RenderError(w, http.StatusRequestEntityTooLarge, "context_window_exceeded",
 			"prompt does not fit any candidate model for "+carrier.Chat.Model)
 		return
@@ -216,13 +221,18 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // renderCandidatesError maps the router's candidate lookup failures
 // onto the inference endpoints' status codes, so every format renders
-// the same condition identically.
-func renderCandidatesError(w http.ResponseWriter, wire protocol.Wire, model string, err error) {
+// the same condition identically. Each branch stamps the code it
+// renders onto the carrier's rejection slot: these are gateway-side
+// decisions (routing, operation, the context pre-filter), and an
+// unstamped rejection would surface in the stability report as an
+// upstream error passthrough of its status class.
+func renderCandidatesError(w http.ResponseWriter, wire protocol.Wire, carrier *pipeline.Carrier, model string, err error) {
 	switch {
 	case errors.Is(err, router.ErrDisabled):
 		// An operator switched the model off: a deliberate refusal,
 		// distinct from a configuration gap (404) and a health
 		// condition (503).
+		carrier.RejectCode = "model_disabled"
 		wire.RenderError(w, http.StatusForbidden, "model_disabled",
 			"model "+model+" is disabled by the operator")
 	case errors.Is(err, router.ErrUnavailable):
@@ -230,9 +240,11 @@ func renderCandidatesError(w http.ResponseWriter, wire protocol.Wire, model stri
 		// same fast-fail contract the executor renders at attempt
 		// time, so the condition reads identically wherever it is
 		// detected.
+		carrier.RejectCode = "circuit_open"
 		wire.RenderError(w, http.StatusServiceUnavailable, "circuit_open",
 			"every upstream serving model "+model+" is unavailable")
 	default:
+		carrier.RejectCode = "model_not_found"
 		wire.RenderError(w, http.StatusNotFound, "model_not_found",
 			"no upstream serves model "+model)
 	}
