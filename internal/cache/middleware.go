@@ -179,35 +179,19 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 	}
 }
 
-// replay forwards a stored entry's headers through the relay's single
-// passthrough set (protocol.PassthroughHeaderNames): the body's media
-// type, and the Retry-After a negatively cached 429/5xx owes its
-// client — a hit that drops it invites the immediate retry the upstream
-// asked to wait out. One list, two consumers: neither can drift.
-//
-// Nothing is copied verbatim. A store is an injected port, so an entry is
-// not provably one this gateway captured: every value goes through the
-// legality check the live passthrough applies, and the media type through
-// its policy as well. The body is opaque upstream bytes replayed
-// unchanged — the label above them is what keeps them from executing in a
-// browser, and the gateway never relays a document media type.
+// replay forwards a stored entry as a completed exchange through the
+// canonical wire's renderer, then flushes. Rendering through
+// protocol.WireFor keeps replay on exactly the live passthrough rules
+// — the forwarded header set, the legality check on every stored
+// value, the media-type policy — so a rule that tightens on the
+// forward path tightens on the replay path with it. Nothing is copied
+// verbatim: a store is an injected port, so an entry is not provably
+// one this gateway captured, and the renderer applies those checks to
+// every value it forwards. The trailing flush matches the streaming
+// contract the live path keeps: a replayed reply is complete the
+// moment its body is written.
 func replay(w http.ResponseWriter, entry Entry) {
-	header := w.Header()
-	for _, name := range protocol.PassthroughHeaderNames() {
-		if name == "Content-Type" {
-			continue
-		}
-		if v := entry.Header.Get(name); v != "" && protocol.ValidHeaderValue(v) {
-			header.Set(name, v)
-		}
-	}
-	// Set explicitly rather than leaving it to net/http's sniffing,
-	// which would read the stored bytes and put them back in charge of
-	// the label.
-	header.Set("Content-Type", protocol.ForwardedContentType(entry.Header.Get("Content-Type"), protocol.PlainContentType))
-	w.WriteHeader(entry.Status)
-	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- stored upstream payload replayed byte-for-byte under a media type that is never a document; the gateway renders no HTML
-	_, _ = w.Write(entry.Body)
+	protocol.WireFor(protocol.FormatOpenAIChat).RenderSuccess(w, entry.Status, entry.Header, entry.Body)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
