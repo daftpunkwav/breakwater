@@ -71,7 +71,9 @@ type Carrier struct {
 	promptKnown  bool
 	// Consumed is the tokens the request actually used; stages that
 	// reject or bypass the upstream leave it at zero, and the refund
-	// stages correct every reservation against it.
+	// stages correct every reservation against it. SettleConsumed is
+	// its single writer after the forward: the cache stage pre-sets it
+	// to zero on the paths that never reach the upstream.
 	Consumed int64
 	// CacheHit reports a response served from the cache (a hit replay
 	// or a shared singleflight fetch), for observation and refund.
@@ -102,6 +104,43 @@ type Carrier struct {
 	// way, from the governance chain to the execution engine it
 	// invokes.
 	Forward *Outcome
+}
+
+// SettleConsumed records how many tokens the completed exchange
+// consumed against the carrier's reservation, reading the forward
+// outcome the inference handler projected:
+//
+//   - real usage when the reply carried a usable accounting answer,
+//   - the byte-derived estimate for a stream that ended without one,
+//   - the reservation itself as the last resort for a delivered 2xx
+//     reply,
+//   - zero for a failure — an error reply served no tokens, so its
+//     reservation refunds in full.
+//
+// A usage object reporting nothing spent (or less than nothing) is no
+// accounting answer: the gateway cannot tell a provider's own cache
+// hit from a reply it simply failed to meter. The zero rung is
+// reserved for requests that served nothing — a rejection, a cache
+// hit, a failed exchange — and a delivered 2xx landing there hands the
+// tenant its whole reservation back for tokens the upstream really
+// charged. The cache stage pre-sets Consumed to zero on its own paths
+// (a replay, a shared fetch) and the terminal handler never runs
+// there; a forward that never ran leaves Consumed untouched for the
+// same reason.
+func (c *Carrier) SettleConsumed() {
+	if c.Forward == nil {
+		return
+	}
+	switch {
+	case c.Forward.Status < 200 || c.Forward.Status > 299:
+		c.Consumed = 0
+	case c.Forward.UsageKnown && c.Forward.Usage.TotalTokens > 0:
+		c.Consumed = c.Forward.Usage.TotalTokens
+	case c.Forward.Streamed:
+		c.Consumed = c.EstimatePartialTokens(c.Forward.StreamBytes)
+	default:
+		c.Consumed = c.Tokens
+	}
 }
 
 // Outcome is the forward stage's projected result: what the stages

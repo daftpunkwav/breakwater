@@ -217,16 +217,12 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Out:        w,
 	})
 
-	// Settlement input: real usage when the reply carried a usable
-	// accounting answer, the byte-derived estimate for a stream that ended
-	// without one, the reservation itself as the last resort for a
-	// delivered 2xx reply, and zero for a failure — an error reply served
-	// no tokens, so its reservation refunds in full.
-	settleConsumption(carrier, result)
 	// The stages after forward read the pipeline's own projection, not
 	// the relay engine's result type: the conversion happens once,
-	// here at the only assignment point.
+	// here at the only assignment point. Settlement then reads the
+	// same projection.
 	carrier.Forward = projectOutcome(result)
+	carrier.SettleConsumed()
 }
 
 // projectOutcome converts the relay engine's result into the carrier's
@@ -283,29 +279,5 @@ func candidatesRejection(model string, err error) (int, protocol.Code, string) {
 	default:
 		return http.StatusNotFound, protocol.CodeModelNotFound,
 			"no upstream serves model " + model
-	}
-}
-
-// settleConsumption records how many tokens the completed exchange
-// consumed against the carrier's reservation.
-func settleConsumption(carrier *pipeline.Carrier, result relay.Result) {
-	switch {
-	case result.Status < 200 || result.Status > 299:
-		carrier.Consumed = 0
-	case result.UsageKnown && result.Usage.TotalTokens > 0:
-		carrier.Consumed = result.Usage.TotalTokens
-	case result.Streamed:
-		// A usage object reporting nothing spent (or less than nothing) is
-		// no accounting answer: the gateway cannot tell a provider's own
-		// cache hit from a reply it simply failed to meter. The zero rung
-		// above is reserved for requests that served nothing — a
-		// rejection, a cache hit, a failed exchange — and a delivered 2xx
-		// landing there hands the tenant its whole reservation back for
-		// tokens the upstream really charged. A streamed reply settles
-		// here on the partial-stream estimate; a non-streamed one
-		// settles in the default case below on the reservation.
-		carrier.Consumed = carrier.EstimatePartialTokens(result.StreamBytes)
-	default:
-		carrier.Consumed = carrier.Tokens
 	}
 }
