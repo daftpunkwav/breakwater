@@ -29,34 +29,6 @@ import (
 // request declares no max_tokens. A provisioning default, not a law.
 const DefaultCompletionReserve int64 = 256
 
-// EstimateTokens returns the pre-call token estimate of a chat request:
-// prompt tokens plus the clamped completion budget. One token is
-// approximated as one whitespace-separated word, floored by the
-// four-bytes-per-token rule, matching the mock upstream's accounting so
-// evidence runs stay consistent.
-//
-// maxRequestTokens is the tenant's per-request cap; values below one
-// disable the clamp.
-func EstimateTokens(req protocol.ChatRequest, maxRequestTokens int64) int64 {
-	return addSaturating(promptEstimate(req), completionEstimate(req, maxRequestTokens))
-}
-
-// EstimatePartialTokens estimates usage for a stream that ended
-// without a usage report: the full prompt estimate plus the delivered
-// bytes converted at the usual rough four bytes per token (the
-// local fallback).
-func EstimatePartialTokens(req protocol.ChatRequest, streamBytes int64) int64 {
-	return promptEstimate(req) + streamBytes/protocol.BytesPerToken
-}
-
-// PromptTokens returns the prompt-only estimate: the input size the
-// context-window pre-filter compares against per-model ceilings. The
-// reservation math stays in EstimateTokens, which adds the completion
-// budget on top.
-func PromptTokens(req protocol.ChatRequest) int64 {
-	return promptEstimate(req)
-}
-
 // PromptTokens returns the prompt-only estimate, scanning the canonical
 // messages at most once per request and caching the result on the
 // carrier. The reservation estimate, the context-window pre-filter and
@@ -74,16 +46,17 @@ func (c *Carrier) PromptTokens() int64 {
 
 // ReserveTokens returns the pre-call token estimate of the request on
 // the carrier: the cached prompt estimate plus the clamped completion
-// budget. It is the carrier form of EstimateTokens — the reservation
-// stages' entry point, so the prompt scan is shared instead of
-// repeated.
+// budget. It is the single pre-call estimate — the TPM bucket and the
+// quota lease both reserve against it — and it prices through the one
+// cached prompt scan instead of repeating it.
 func (c *Carrier) ReserveTokens(maxRequestTokens int64) int64 {
 	return addSaturating(c.PromptTokens(), completionEstimate(c.Chat, maxRequestTokens))
 }
 
 // EstimatePartialTokens estimates usage for a stream that ended without
-// a usage report, from the carrier's cached prompt estimate. It is the
-// carrier form of EstimatePartialTokens.
+// a usage report, from the carrier's cached prompt estimate: the full
+// prompt estimate plus the delivered bytes converted at the usual rough
+// four bytes per token (the local fallback).
 func (c *Carrier) EstimatePartialTokens(streamBytes int64) int64 {
 	return c.PromptTokens() + streamBytes/protocol.BytesPerToken
 }
