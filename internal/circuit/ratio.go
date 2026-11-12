@@ -39,13 +39,13 @@ import (
 	"time"
 )
 
-// Window geometry and formula constants. The window covers ten seconds
-// in forty buckets, mirroring the slow strategy's window — change the
-// geometry on both sides together; the constants shape how aggressively
-// the deny probability rises and how much healthy history forgives.
+// Window geometry and formula constants. The window derives from the
+// shared geometry (window.go), mirroring the slow strategy's window by
+// construction; the remaining constants shape how aggressively the
+// deny probability rises and how much healthy history forgives.
 const (
-	ratioBuckets    = 40
-	ratioBucketSpan = 250 * time.Millisecond
+	ratioBuckets    = windowBuckets
+	ratioBucketSpan = windowBucketSpan
 	// ratioK is the accept multiplier a fully healthy window grants:
 	// accepts are trusted to justify more traffic than they observed.
 	ratioK = 1.5
