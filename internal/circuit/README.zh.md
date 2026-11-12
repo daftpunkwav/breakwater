@@ -25,6 +25,7 @@
 | `breaker.go` | `Registry`：每个 upstream id 一份连续失败策略的进程内状态机——cooldown → 唯一的 half-open probe、结果记账、操作员 `Reset`、状态迁移观察者 |
 | `ratio.go` | `RatioRegistry`：每个 upstream id 一份 ratio 策略守卫——10s 滚动窗口（40 × 250ms bucket），记录健康应答、上游故障与守卫自身产生的拒绝；`Allow` 按窗口计算拒绝概率（极小窗口受保护、尾部失败折扣过往成功、健康 bucket 稀释拒绝率），且每秒强制放行一个调用，恢复永远不需要操作员介入。`StateOf` 恒读 closed——守卫是一个概率，不是一个位置 |
 | `slow.go` | `SlowRegistry`：每个 upstream id 一份 slow-call 策略状态机——以 {慢, 总数} 的 10s 滚动窗口驱动 consecutive 纪律；server fault 是最强的慢证据，样本不足的窗口永不开路，健康探测在清空后的窗口上关闭 breaker。breaker 从不自行判断快慢：慢完成以 `OutcomeSlow` 到达，由 relay 依照配置阈值分类（流式取首字节，其余取全程） |
+| `window.go` | 两个策略窗口共同派生的滚动窗口几何（40 × 250ms bucket），只定义一次，ratio 与 slow-call 的窗口因此不可能各漂各的 |
 | `nop.go` | `NopBreaker`：无条件放行、忘记一切结果；不持有任何状态 |
 | `prober.go` | `ActiveProbe`：让一次合成健康检查走 breaker 的 Allow/Report 协议，恢复不必等待真实流量来充当探测 |
 

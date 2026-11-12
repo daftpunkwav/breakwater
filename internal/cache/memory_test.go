@@ -47,7 +47,7 @@ func TestMemoryExpiry(t *testing.T) {
 	t.Parallel()
 	var now atomic.Value
 	now.Store(time.Now())
-	m := NewMemory(WithClock(func() time.Time { return now.Load().(time.Time) }))
+	m := NewMemory(withClock(func() time.Time { return now.Load().(time.Time) }))
 	ctx := context.Background()
 
 	_ = m.Set(ctx, "k", testEntry(), time.Minute)
@@ -129,7 +129,7 @@ func TestMemoryCapacityEvicts(t *testing.T) {
 func TestSetSaturatesHugeTTL(t *testing.T) {
 	t.Parallel()
 	var now time.Time
-	m := NewMemory(WithClock(func() time.Time { return now }))
+	m := NewMemory(withClock(func() time.Time { return now }))
 	ctx := context.Background()
 
 	if err := m.Set(ctx, "k", testEntry(), time.Duration(math.MaxInt64)); err != nil {

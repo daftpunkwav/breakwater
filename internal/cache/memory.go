@@ -76,8 +76,8 @@ func WithCapacity(n int) MemoryOption {
 	}
 }
 
-// WithClock overrides the clock for tests.
-func WithClock(now func() time.Time) MemoryOption {
+// withClock overrides the clock for tests.
+func withClock(now func() time.Time) MemoryOption {
 	return func(m *Memory) { m.now = now }
 }
 

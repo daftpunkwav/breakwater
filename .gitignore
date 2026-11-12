@@ -24,3 +24,6 @@ coverage.html
 Thumbs.db
 __pycache__/
 .zcodeignore
+
+# Local browser-session logs from MCP tooling
+.playwright-mcp/

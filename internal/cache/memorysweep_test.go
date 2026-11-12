@@ -19,7 +19,7 @@ func sweepFixture(t *testing.T, capacity int) (*Memory, func(time.Duration), fun
 	t.Helper()
 	var now atomic.Value
 	now.Store(time.Unix(0, 0))
-	m := NewMemory(WithCapacity(capacity), WithClock(func() time.Time { return now.Load().(time.Time) }))
+	m := NewMemory(WithCapacity(capacity), withClock(func() time.Time { return now.Load().(time.Time) }))
 	return m, func(d time.Duration) { now.Store(now.Load().(time.Time).Add(d)) }, func() time.Time { return now.Load().(time.Time) }
 }
 

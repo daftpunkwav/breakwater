@@ -29,13 +29,17 @@ A stage that reserves before `next` settles after `next` returns.
 - The carrier is a typed struct used on the request goroutine. Do not
   add a lock. Do not store request fields in context values. One stage
   writes each field.
+- The forward outcome rides the carrier as `Forward *Outcome`, a
+  pipeline-owned projection. Do not put the relay engine's result type
+  on the carrier; the inference handler converts at its single
+  assignment point.
 - `AuthorizeModel` is the only model-authorization rule. The pipeline
   stage and the inference handler both call it.
-- `EstimateTokens` is the only pre-call estimate. The TPM bucket and
-  the quota lease both reserve against it. Clamp a declared
-  `max_tokens` to the tenant per-request cap. The prompt itself is
-  measured by `protocol.EstimateContentTokens`, the measure the
-  upstream's reported usage is held to.
+- `ReserveTokens` on the carrier is the only pre-call estimate. The
+  TPM bucket and the quota lease both reserve against it. Clamp a
+  declared `max_tokens` to the tenant per-request cap. The prompt
+  itself is measured by `protocol.EstimateContentTokens`, the measure
+  the upstream's reported usage is held to.
 - An auth-store outage is 503. Do not continue the chain.
 - Adopt a client `X-Request-Id` of 8–128 printable ASCII, or mint a
   `req-` id. Echo it on every inference response, including rejections.

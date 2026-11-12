@@ -33,8 +33,8 @@ func newRatioFixture(t *testing.T, extra ...RatioOption) (*RatioRegistry, *ratio
 	clock := &ratioClock{t: time.Unix(0, 0)}
 	draw := &ratioRandom{v: 1}
 	reg := NewRatioRegistry(append([]RatioOption{
-		RatioClock(clock.Now),
-		RatioRandomSource(draw.Float64),
+		ratioTestClock(clock.Now),
+		ratioRandomSource(draw.Float64),
 	}, extra...)...)
 	return reg, clock, draw
 }

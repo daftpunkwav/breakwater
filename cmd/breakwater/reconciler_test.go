@@ -9,12 +9,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/redis/go-redis/v9"
@@ -49,7 +51,7 @@ func TestStartReconcilerRejectsBadDSN(t *testing.T) {
 	cfg := testConfig("127.0.0.1:0")
 	cfg.Postgres.DSN = "not a valid dsn"
 	cfg.ReconcileInterval = time.Hour
-	if err := startReconciler(context.Background(), cfg, nil, []string{"t"}, obs.NewMetrics(), slog.New(slog.DiscardHandler)); err == nil {
+	if err := startReconciler(context.Background(), cfg, nil, staticTenants("t"), obs.NewMetrics(), slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("an invalid DSN must fail the snapshot store assembly")
 	}
 }
@@ -72,8 +74,50 @@ func TestStartReconcilerStartup(t *testing.T) {
 	// immediately: assembly is what is under test here.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := startReconciler(ctx, cfg, redisLedger, []string{"t"}, obs.NewMetrics(), slog.New(slog.DiscardHandler)); err != nil {
+	if err := startReconciler(ctx, cfg, redisLedger, staticTenants("t"), obs.NewMetrics(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("startReconciler: %v", err)
+	}
+}
+
+// staticTenants adapts a fixed tenant list to the reconciler's
+// per-round discovery contract.
+func staticTenants(ids ...string) func(context.Context) ([]string, error) {
+	return func(context.Context) ([]string, error) {
+		return ids, nil
+	}
+}
+
+// adminStub answers Users only; the other admin methods are never
+// reached through the reconciler's discovery.
+type adminStub struct {
+	auth.AdminStore
+	users []auth.UserView
+	err   error
+}
+
+func (s adminStub) Users(context.Context) ([]auth.UserView, error) {
+	return s.users, s.err
+}
+
+// TestTenantListerAdaptsTheAdminStore: the reconciler's per-round
+// discovery sees every user id in order, and a store failure
+// propagates instead of reading as an empty tenant set.
+func TestTenantListerAdaptsTheAdminStore(t *testing.T) {
+	t.Parallel()
+	stub := adminStub{users: []auth.UserView{{ID: "u1"}, {ID: "u2"}}}
+	list := tenantLister(stub)
+
+	ids, err := list(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != "u1" || ids[1] != "u2" {
+		t.Fatalf("ids = %v, want u1 then u2", ids)
+	}
+
+	failing := tenantLister(adminStub{err: context.DeadlineExceeded})
+	if _, err := failing(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the store failure itself propagated", err)
 	}
 }
 

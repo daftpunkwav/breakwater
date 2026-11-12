@@ -25,7 +25,6 @@ import (
 
 	"github.com/daftpunkwav/breakwater/internal/httpserver"
 	"github.com/daftpunkwav/breakwater/internal/obs"
-	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // ObservationStage returns the metrics and access log stage. Both
@@ -51,37 +50,37 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 				requestID = carrier.RequestID
 				rejectCode = carrier.RejectCode
 			}
-			upstream := "-"
+			upstream := obs.SourceNone
 			aborted, clientGone, cacheHit, streamed := false, false, false, false
 			var tokens int64
-			var trail []relay.AttemptTrace
+			var trail []obs.AttemptTrace
 			errorCode := rejectCode
 			if carrier != nil {
 				cacheHit = carrier.CacheHit
 				// The upstream dimension: a response origin that is
 				// not an upstream (a cache replay, a shared fetch)
 				// owns it, so the pseudo origins never read as real
-				// upstreams; a relay outcome then names the upstream
+				// upstreams; a forward outcome then names the upstream
 				// that actually served.
 				if carrier.ServedBy != "" {
 					upstream = carrier.ServedBy
 				}
-				if carrier.Relay != nil {
-					if upstream == "-" {
-						upstream = carrier.Relay.UpstreamID
+				if carrier.Forward != nil {
+					if upstream == obs.SourceNone {
+						upstream = carrier.Forward.UpstreamID
 					}
-					aborted = carrier.Relay.Aborted
-					clientGone = carrier.Relay.ClientGone
-					streamed = carrier.Relay.Streamed
+					aborted = carrier.Forward.Aborted
+					clientGone = carrier.Forward.ClientGone
+					streamed = carrier.Forward.Streamed
 					tokens = carrier.Consumed
-					trail = carrier.Relay.Trail
+					trail = carrier.Forward.Trail
 					// A forward-stage failure refines the rejection code:
 					// upstream passthroughs classify by status, gateway
 					// envelopes and stream aborts by their code. An
 					// aborted stream already committed a 200, so the
 					// abort flag is what carries its failure code.
-					if errorCode == "" && (carrier.Relay.Status < 200 || carrier.Relay.Status > 299 || carrier.Relay.Aborted) {
-						errorCode = carrier.Relay.ErrorCode
+					if errorCode == "" && (carrier.Forward.Status < 200 || carrier.Forward.Status > 299 || carrier.Forward.Aborted) {
+						errorCode = carrier.Forward.ErrorCode
 					}
 				}
 			}
@@ -123,22 +122,9 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					Tokens:    tokens,
 					Streamed:  streamed,
 					ErrorCode: errorCode,
-					Attempts:  attemptsToObs(trail),
+					Attempts:  trail,
 				})
 			}
 		})
 	}
-}
-
-// attemptsToObs converts the relay's attempt trail into the access
-// log's shape; the log schema stays independent of the relay's.
-func attemptsToObs(trail []relay.AttemptTrace) []obs.AttemptTrace {
-	if len(trail) == 0 {
-		return nil
-	}
-	out := make([]obs.AttemptTrace, len(trail))
-	for i, a := range trail {
-		out[i] = obs.AttemptTrace{Upstream: a.Upstream, Credential: a.CredentialIndex, Status: a.Status}
-	}
-	return out
 }

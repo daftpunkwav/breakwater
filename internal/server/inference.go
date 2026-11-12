@@ -21,6 +21,7 @@ import (
 	"net/http"
 
 	"github.com/daftpunkwav/breakwater/internal/affinity"
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -123,8 +124,8 @@ func NewInference(format protocol.Format, priority router.Router, relayer *relay
 func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	carrier := pipeline.CarrierFrom(r.Context())
 	if carrier == nil {
-		protocol.WireFor(s.format).RenderError(w, http.StatusInternalServerError, "pipeline_misconfigured",
-			"no request carrier assembled")
+		protocol.WireFor(s.format).RenderError(w, http.StatusInternalServerError,
+			string(protocol.CodePipelineMisconfigured), "no request carrier assembled")
 		return
 	}
 	wire := protocol.WireFor(carrier.Format)
@@ -147,8 +148,8 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// rejections: the access log carries the code the envelope
 		// rendered, so the stability report records the gateway cause
 		// instead of reading an empty code as an upstream passthrough.
-		carrier.RejectCode = code
-		wire.RenderError(w, status, code, message)
+		carrier.RejectCode = string(code)
+		wire.RenderError(w, status, string(code), message)
 		return
 	}
 
@@ -164,8 +165,8 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// governance rejections: without the stamp the access log carries
 		// an empty code, which the stability report reads as an upstream
 		// error passthrough instead of this gateway-side decision.
-		carrier.RejectCode = "context_window_exceeded"
-		wire.RenderError(w, http.StatusRequestEntityTooLarge, "context_window_exceeded",
+		carrier.RejectCode = string(protocol.CodeContextWindowExceeded)
+		wire.RenderError(w, http.StatusRequestEntityTooLarge, string(protocol.CodeContextWindowExceeded),
 			"prompt does not fit any candidate model for "+carrier.Chat.Model)
 		return
 	}
@@ -216,60 +217,67 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Out:        w,
 	})
 
-	// Settlement input: real usage when the reply carried a usable
-	// accounting answer, the byte-derived estimate for a stream that ended
-	// without one, the reservation itself as the last resort for a
-	// delivered 2xx reply, and zero for a failure — an error reply served
-	// no tokens, so its reservation refunds in full.
-	settleConsumption(carrier, result)
-	carrier.Relay = &result
+	// The stages after forward read the pipeline's own projection, not
+	// the relay engine's result type: the conversion happens once,
+	// here at the only assignment point. Settlement then reads the
+	// same projection.
+	carrier.Forward = projectOutcome(result)
+	carrier.SettleConsumed()
+}
+
+// projectOutcome converts the relay engine's result into the carrier's
+// forward record. It is the one place the relay's shape meets the
+// pipeline's contract; the governance stages downstream read only the
+// projection.
+func projectOutcome(result relay.Result) *pipeline.Outcome {
+	return &pipeline.Outcome{
+		UpstreamID:  result.UpstreamID,
+		Status:      result.Status,
+		ErrorCode:   result.ErrorCode,
+		Aborted:     result.Aborted,
+		ClientGone:  result.ClientGone,
+		Streamed:    result.Streamed,
+		StreamBytes: result.StreamBytes,
+		Usage:       result.Usage,
+		UsageKnown:  result.UsageKnown,
+		Trail:       attemptsToObs(result.Trail),
+	}
+}
+
+// attemptsToObs converts the relay's attempt trail into the access
+// log's shape; the log schema stays independent of the relay's.
+func attemptsToObs(trail []relay.AttemptTrace) []obs.AttemptTrace {
+	if len(trail) == 0 {
+		return nil
+	}
+	out := make([]obs.AttemptTrace, len(trail))
+	for i, a := range trail {
+		out[i] = obs.AttemptTrace{Upstream: a.Upstream, Credential: a.CredentialIndex, Status: a.Status}
+	}
+	return out
 }
 
 // candidatesRejection maps the router's candidate lookup failures onto
 // the status, code and message the inference endpoints render, so every
 // format renders the same condition identically. It is a pure mapping:
 // the caller stamps the code on the carrier at the decision point.
-func candidatesRejection(model string, err error) (int, string, string) {
+func candidatesRejection(model string, err error) (int, protocol.Code, string) {
 	switch {
 	case errors.Is(err, router.ErrDisabled):
 		// An operator switched the model off: a deliberate refusal,
 		// distinct from a configuration gap (404) and a health
 		// condition (503).
-		return http.StatusForbidden, "model_disabled",
+		return http.StatusForbidden, protocol.CodeModelDisabled,
 			"model " + model + " is disabled by the operator"
 	case errors.Is(err, router.ErrUnavailable):
 		// The model exists but every binding is ineligible: the
 		// same fast-fail contract the executor renders at attempt
 		// time, so the condition reads identically wherever it is
 		// detected.
-		return http.StatusServiceUnavailable, "circuit_open",
+		return http.StatusServiceUnavailable, protocol.CodeCircuitOpen,
 			"every upstream serving model " + model + " is unavailable"
 	default:
-		return http.StatusNotFound, "model_not_found",
+		return http.StatusNotFound, protocol.CodeModelNotFound,
 			"no upstream serves model " + model
-	}
-}
-
-// settleConsumption records how many tokens the completed exchange
-// consumed against the carrier's reservation.
-func settleConsumption(carrier *pipeline.Carrier, result relay.Result) {
-	switch {
-	case result.Status < 200 || result.Status > 299:
-		carrier.Consumed = 0
-	case result.UsageKnown && result.Usage.TotalTokens > 0:
-		carrier.Consumed = result.Usage.TotalTokens
-	case result.Streamed:
-		// A usage object reporting nothing spent (or less than nothing) is
-		// no accounting answer: the gateway cannot tell a provider's own
-		// cache hit from a reply it simply failed to meter. The zero rung
-		// above is reserved for requests that served nothing — a
-		// rejection, a cache hit, a failed exchange — and a delivered 2xx
-		// landing there hands the tenant its whole reservation back for
-		// tokens the upstream really charged. A streamed reply settles
-		// here on the partial-stream estimate; a non-streamed one
-		// settles in the default case below on the reservation.
-		carrier.Consumed = carrier.EstimatePartialTokens(result.StreamBytes)
-	default:
-		carrier.Consumed = carrier.Tokens
 	}
 }

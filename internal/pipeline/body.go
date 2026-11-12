@@ -42,7 +42,7 @@ func FormatStage(format protocol.Format) Middleware {
 // is already written.
 func EnsureBody(w http.ResponseWriter, r *http.Request, carrier *Carrier) bool {
 	if carrier == nil {
-		protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+		protocol.WriteError(w, http.StatusInternalServerError, string(protocol.CodePipelineMisconfigured),
 			"no request carrier assembled")
 		return false
 	}

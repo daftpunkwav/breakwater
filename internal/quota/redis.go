@@ -52,7 +52,7 @@ const defaultKeyPrefix = "bw:quota:"
 
 // Redis is the Redis-backed Ledger. It is safe for concurrent use.
 type Redis struct {
-	rdb           *redis.Client
+	rdb           redis.UniversalClient
 	reserveScript *redis.Script
 	settleScript  *redis.Script
 	releaseScript *redis.Script
@@ -60,13 +60,24 @@ type Redis struct {
 	leaseTTL      time.Duration
 }
 
-// NewRedis builds the ledger over a ready client. namespace scopes this
-// deployment's keys inside a shared Redis instance; empty means this
-// gateway owns the instance outright. leaseTTL is how long a RESERVED
-// lease may live before the sweeper reclaims it; it must outlast the
-// longest request the gateway will run, or a live request's reservation
-// is refunded while it is still spending tokens.
-func NewRedis(client *redis.Client, namespace string, leaseTTL time.Duration) *Redis {
+// NewRedis builds the ledger over a ready client. The universal
+// interface keeps the ledger honest about its narrow call surface and
+// admits cluster and sentinel wiring. The scripts are single-slot and
+// each one touches several keys together — the tenant's balance,
+// lease and refund records, plus the deployment-wide sweep index —
+// so a cluster deployment needs a hash-tagged namespace placing every
+// key of the deployment in one slot; an untagged namespace fails the
+// script with CROSSSLOT. Sentinel is unaffected. One further cluster
+// caveat: SetBalance writes its balance and epoch keys through
+// TxPipeline, whose transaction semantics hold on single-instance and
+// sentinel deployments; cluster mode does not restore them even with a
+// hash-tagged namespace. namespace scopes this deployment's keys
+// inside a shared Redis instance; empty means this gateway owns the
+// instance outright. leaseTTL is how long a RESERVED lease may live
+// before the sweeper reclaims it; it must outlast the longest request
+// the gateway will run, or a live request's reservation is refunded
+// while it is still spending tokens.
+func NewRedis(client redis.UniversalClient, namespace string, leaseTTL time.Duration) *Redis {
 	return &Redis{
 		rdb:           client,
 		reserveScript: redis.NewScript(reserveScriptSrc),

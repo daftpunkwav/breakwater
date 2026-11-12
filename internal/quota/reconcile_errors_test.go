@@ -45,11 +45,28 @@ func (f *failingStore) Append(ctx context.Context, snap Snapshot) error {
 func TestReconcileOnceSurfacesSourceFailure(t *testing.T) {
 	t.Parallel()
 	sourceErr := errors.New("snapshot read: backend down")
-	rec := NewReconciler(failingSource{err: sourceErr}, []string{"t"}, newMemSnapshotStore())
+	rec := NewReconciler(failingSource{err: sourceErr}, staticTenants("t"), newMemSnapshotStore())
 
 	_, _, _, err := rec.ReconcileOnce(context.Background())
 	if !errors.Is(err, sourceErr) {
 		t.Fatalf("err = %v, want the source failure surfaced", err)
+	}
+}
+
+// TestReconcileOnceSurfacesDiscoveryFailure: a tenant-discovery failure
+// fails the whole round — reconciling against a list the gateway could
+// not see would read as clean rounds over an unobservable system of
+// record.
+func TestReconcileOnceSurfacesDiscoveryFailure(t *testing.T) {
+	t.Parallel()
+	discoveryErr := errors.New("identity store down")
+	rec := NewReconciler(&scriptedSnapshotSource{snap: &Snapshot{}}, func(context.Context) ([]string, error) {
+		return nil, discoveryErr
+	}, newMemSnapshotStore())
+
+	_, _, _, err := rec.ReconcileOnce(context.Background())
+	if !errors.Is(err, discoveryErr) {
+		t.Fatalf("err = %v, want the discovery failure surfaced", err)
 	}
 }
 
@@ -59,7 +76,7 @@ func TestReconcileOnceSurfacesSourceFailure(t *testing.T) {
 func assertStoreFailureSurfaces(t *testing.T, store *failingStore, want error) {
 	t.Helper()
 	source := &scriptedSnapshotSource{snap: &Snapshot{TenantID: "t", Epoch: 1}}
-	rec := NewReconciler(source, []string{"t"}, store)
+	rec := NewReconciler(source, staticTenants("t"), store)
 	if _, _, _, err := rec.ReconcileOnce(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want %v surfaced", err, want)
 	}

@@ -6,7 +6,7 @@
  * carry — the drift would otherwise surface as a silently missing log
  * column.
  */
-package pipeline
+package server
 
 import (
 	"reflect"

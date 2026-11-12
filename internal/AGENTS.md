@@ -14,6 +14,11 @@ Package map: [README.md](README.md). Test taxonomy:
   provider.
 - HTTP endpoint shapes belong to `server/`. Wire-format shapes belong
   to `protocol/`.
+- A pipeline stage that only reads and writes the carrier and renders
+  an envelope lives in `pipeline/` (auth, model authorization,
+  observation, recovery). A stage backed by its own state or store
+  lives in its domain package (`limiter/`, `quota/`, `cache/`); keep
+  the split when adding one.
 - `httpserver/` imports only the standard library.
 - `config/` imports no other project package.
 - Store, backend, and option selection belongs to `cmd/*`.
@@ -35,6 +40,11 @@ Retry, circuit breaking, and failover run inside the forward stage
 observation record run once per client request.
 
 ## Dependencies
+
+- `pipeline` does not import `relay`. The inference handler projects
+  the relay result into `pipeline.Outcome` (the carrier's `Forward`
+  field) at its single assignment point; governance packages read the
+  projection, never the relay's result type.
 
 `no-off-the-shelf-governance` in [.golangci.yml](../.golangci.yml) denies:
 

@@ -34,12 +34,21 @@ func (m *memSnapshotStore) Append(_ context.Context, snap Snapshot) error {
 	return nil
 }
 
+// staticTenants adapts a fixed tenant list to the reconciler's
+// per-round discovery contract, the way the composition root adapts
+// the identity store.
+func staticTenants(ids ...string) func(context.Context) ([]string, error) {
+	return func(context.Context) ([]string, error) {
+		return ids, nil
+	}
+}
+
 // newReconciledLedger seeds a Redis ledger and wires its reconciler
 // over the in-memory snapshot store.
 func newReconciledLedger(t *testing.T, balance int64) (*Redis, *miniredis.Miniredis, *Reconciler, context.Context) {
 	t.Helper()
 	r, mr, ctx := newSeededRedisLedger(t, balance)
-	return r, mr, NewReconciler(r, []string{"t"}, newMemSnapshotStore()), ctx
+	return r, mr, NewReconciler(r, staticTenants("t"), newMemSnapshotStore()), ctx
 }
 
 // requireCleanInterval reconciles once and fails when the interval
@@ -193,7 +202,7 @@ func TestReconcileSkipsUnprovisionedTenants(t *testing.T) {
 	t.Parallel()
 	r, _ := newTestLedger(t)
 	store := newMemSnapshotStore()
-	rec := NewReconciler(r, []string{"ghost"}, store)
+	rec := NewReconciler(r, staticTenants("ghost"), store)
 
 	checked, drifted, drifts, err := rec.ReconcileOnce(context.Background())
 	if err != nil {

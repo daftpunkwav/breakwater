@@ -17,6 +17,13 @@ import (
 	"time"
 )
 
+// SourceNone is the upstream dimension recorded when no upstream
+// served the response — a request rejected before the forward, a
+// failed forward, or a forward that never named a candidate. One
+// constant for every writer keeps the dimension's "no upstream" value
+// from drifting into two spellings.
+const SourceNone = "-"
+
 // Entry is one access record for a finished request. Fields are append
 // only across releases; consumers must tolerate additions.
 type Entry struct {

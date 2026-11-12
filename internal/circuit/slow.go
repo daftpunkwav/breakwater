@@ -35,11 +35,12 @@ import (
 	"time"
 )
 
-// Window geometry and trigger constants. The window covers ten seconds
-// in forty buckets, matching the ratio strategy's granularity.
+// Window geometry and trigger constants. The window derives from the
+// shared geometry (window.go), matching the ratio strategy's
+// granularity by construction.
 const (
-	slowBuckets    = 40
-	slowBucketSpan = 250 * time.Millisecond
+	slowBuckets    = windowBuckets
+	slowBucketSpan = windowBucketSpan
 	// slowMinSamples is the smallest window that may open the breaker:
 	// below it, a few slow calls in light traffic are noise, not a
 	// degradation signal.
@@ -79,8 +80,8 @@ type SlowRegistry struct {
 // SlowOption customizes a SlowRegistry.
 type SlowOption func(*SlowRegistry)
 
-// SlowClock overrides the clock for tests.
-func SlowClock(now func() time.Time) SlowOption {
+// slowClock overrides the clock for tests.
+func slowClock(now func() time.Time) SlowOption {
 	return func(s *SlowRegistry) { s.gov.now = now }
 }
 

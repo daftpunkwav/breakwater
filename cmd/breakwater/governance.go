@@ -40,7 +40,7 @@ type governanceBackends struct {
 	// snapshotSource exposes the Redis ledger's reconcile readings; nil
 	// in memory mode.
 	snapshotSource quota.SnapshotSource
-	redisClient    *redis.Client
+	redisClient    redis.UniversalClient
 	// readiness gates business traffic on the backend the fail-closed
 	// limiter depends on; nil in memory mode (always ready).
 	readiness func() error

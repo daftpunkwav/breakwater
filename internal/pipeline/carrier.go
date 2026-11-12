@@ -20,13 +20,13 @@ import (
 	"net/http"
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
-	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // Response origins a request can be served from without an upstream
-// touching it. They ride Carrier.ServedBy, never Relay.UpstreamID: the
-// relay result's upstream field keeps naming real upstreams only, and
+// touching it. They ride Carrier.ServedBy, never Forward.UpstreamID: the
+// forward outcome's upstream field keeps naming real upstreams only, and
 // the observation stage prefers ServedBy when it is set.
 const (
 	// SourceCache marks a response replayed from the cache store.
@@ -71,7 +71,9 @@ type Carrier struct {
 	promptKnown  bool
 	// Consumed is the tokens the request actually used; stages that
 	// reject or bypass the upstream leave it at zero, and the refund
-	// stages correct every reservation against it.
+	// stages correct every reservation against it. SettleConsumed is
+	// its single writer after the forward: the cache stage pre-sets it
+	// to zero on the paths that never reach the upstream.
 	Consumed int64
 	// CacheHit reports a response served from the cache (a hit replay
 	// or a shared singleflight fetch), for observation and refund.
@@ -80,7 +82,7 @@ type Carrier struct {
 	// cache replay (SourceCache) or a shared fetch the request waited
 	// on (SourceSharedFetch). Empty when the reply came from — or
 	// failed at — a real upstream; that upstream's identity then rides
-	// Relay.UpstreamID alone.
+	// Forward.UpstreamID alone.
 	ServedBy string
 	// RejectCode records the rejection code of the stage that refused
 	// the request, for the failure taxonomy. The governance stages
@@ -92,14 +94,97 @@ type Carrier struct {
 	// context_window_exceeded) for the same reason. Empty unless the
 	// request was rejected before the forward stage.
 	RejectCode string
-	// Relay captures the forward stage's outcome for the stages after
-	// it (settlement details, observation dimensions). Holding the
-	// relay engine's concrete result type is deliberate: the pipeline
-	// orchestrates the forward call and hands its outcome to the
-	// settlement and observation stages, and relay never imports
-	// pipeline — the dependency runs one way, from the governance
-	// chain to the execution engine it invokes.
-	Relay *relay.Result
+	// Forward captures the forward stage's outcome for the stages after
+	// it (settlement details, cache eligibility, observation
+	// dimensions). It holds a pipeline-owned projection, not the relay
+	// engine's own result type: the inference handler that runs the
+	// forward call converts once at the boundary, so this contract and
+	// every governance stage reading it stay free of the relay's shape
+	// while relay never imports pipeline — the dependency runs one
+	// way, from the governance chain to the execution engine it
+	// invokes.
+	Forward *Outcome
+}
+
+// SettleConsumed records how many tokens the completed exchange
+// consumed against the carrier's reservation, reading the forward
+// outcome the inference handler projected:
+//
+//   - real usage when the reply carried a usable accounting answer,
+//   - the byte-derived estimate for a stream that ended without one,
+//   - the reservation itself as the last resort for a delivered 2xx
+//     reply,
+//   - zero for a failure — an error reply served no tokens, so its
+//     reservation refunds in full.
+//
+// A usage object reporting nothing spent (or less than nothing) is no
+// accounting answer: the gateway cannot tell a provider's own cache
+// hit from a reply it simply failed to meter. The zero rung is
+// reserved for requests that served nothing — a rejection, a cache
+// hit, a failed exchange — and a delivered 2xx landing there hands the
+// tenant its whole reservation back for tokens the upstream really
+// charged. The cache stage pre-sets Consumed to zero on its own paths
+// (a replay, a shared fetch) and the terminal handler never runs
+// there; a forward that never ran leaves Consumed untouched for the
+// same reason.
+func (c *Carrier) SettleConsumed() {
+	if c.Forward == nil {
+		return
+	}
+	switch {
+	case c.Forward.Status < 200 || c.Forward.Status > 299:
+		c.Consumed = 0
+	case c.Forward.UsageKnown && c.Forward.Usage.TotalTokens > 0:
+		c.Consumed = c.Forward.Usage.TotalTokens
+	case c.Forward.Streamed:
+		c.Consumed = c.EstimatePartialTokens(c.Forward.StreamBytes)
+	default:
+		c.Consumed = c.Tokens
+	}
+}
+
+// Outcome is the forward stage's projected result: what the stages
+// after the forward (settlement, cache write, observation) need from
+// the exchange, in the pipeline's own vocabulary. The inference
+// handler projects the relay engine's result into it at the single
+// assignment point, so a relay field change stops at the server
+// package and never re-shapes the carrier contract the governance
+// packages read.
+type Outcome struct {
+	// UpstreamID names the upstream that produced the delivered reply;
+	// empty when no upstream did.
+	UpstreamID string
+	// Status is the client status the forward stage sent (or intended,
+	// when the client was already gone).
+	Status int
+	// ErrorCode is the gateway-originated failure code of a
+	// gateway-rendered error (the closed vocabulary of package
+	// protocol); empty for upstream error passthroughs, whose status
+	// classifies them.
+	ErrorCode string
+	// Aborted reports a stream terminated honestly through the error
+	// event contract after bytes had already reached the client: its
+	// bytes are never a replayable completion.
+	Aborted bool
+	// ClientGone reports that the client disconnected before the
+	// response completed.
+	ClientGone bool
+	// Streamed reports whether a streaming passthrough started;
+	// StreamBytes is the byte count it delivered — the fallback
+	// metering input when the stream ended without a usage report.
+	Streamed    bool
+	StreamBytes int64
+	// Usage carries the token usage extracted from the reply;
+	// UsageKnown is false when the reply carried none (settlement then
+	// falls back to estimation).
+	Usage      protocol.Usage
+	UsageKnown bool
+	// Trail is the per-attempt record of the forward walk, in the
+	// access log's own shape: one entry per upstream attempt, in
+	// order. The projection allocates it fresh per request, and the
+	// observation stage hands it to the async sink by reference —
+	// nothing may mutate it in place once projected.
+	Trail []obs.AttemptTrace
 }
 
 // SetBody stores the request body and its ingest result exactly once;
@@ -139,7 +224,7 @@ func CarrierFrom(ctx context.Context) *Carrier {
 func RequireCarrier(w http.ResponseWriter, r *http.Request) (*Carrier, bool) {
 	carrier := CarrierFrom(r.Context())
 	if carrier == nil {
-		protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+		protocol.WriteError(w, http.StatusInternalServerError, string(protocol.CodePipelineMisconfigured),
 			"no request carrier assembled")
 		return nil, false
 	}

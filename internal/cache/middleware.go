@@ -96,7 +96,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r)
 				metrics.CacheFetch(upstreamOf(carrier))
-				if storeWorthy(tee) && !relayAborted(carrier) {
+				if storeWorthy(tee) && !forwardAborted(carrier) {
 					_ = store.Set(r.Context(), key, capture(tee), ttl)
 				}
 				return
@@ -147,7 +147,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				// response-less fetch, and every waiter, still owes one.
 				if (!owner || fetch.Status() < 100) && r.Context().Err() == nil {
 					protocol.WireFor(carrier.Format).RenderError(w, http.StatusBadGateway,
-						"upstream_unreachable", "the shared fetch for this request failed")
+						string(protocol.CodeUpstreamUnreachable), "the shared fetch for this request failed")
 				}
 				return
 			}
@@ -179,35 +179,19 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 	}
 }
 
-// replay forwards a stored entry's headers through the relay's single
-// passthrough set (protocol.PassthroughHeaderNames): the body's media
-// type, and the Retry-After a negatively cached 429/5xx owes its
-// client — a hit that drops it invites the immediate retry the upstream
-// asked to wait out. One list, two consumers: neither can drift.
-//
-// Nothing is copied verbatim. A store is an injected port, so an entry is
-// not provably one this gateway captured: every value goes through the
-// legality check the live passthrough applies, and the media type through
-// its policy as well. The body is opaque upstream bytes replayed
-// unchanged — the label above them is what keeps them from executing in a
-// browser, and the gateway never relays a document media type.
+// replay forwards a stored entry as a completed exchange through the
+// canonical wire's renderer, then flushes. Rendering through
+// protocol.WireFor keeps replay on exactly the live passthrough rules
+// — the forwarded header set, the legality check on every stored
+// value, the media-type policy — so a rule that tightens on the
+// forward path tightens on the replay path with it. Nothing is copied
+// verbatim: a store is an injected port, so an entry is not provably
+// one this gateway captured, and the renderer applies those checks to
+// every value it forwards. The trailing flush matches the streaming
+// contract the live path keeps: a replayed reply is complete the
+// moment its body is written.
 func replay(w http.ResponseWriter, entry Entry) {
-	header := w.Header()
-	for _, name := range protocol.PassthroughHeaderNames() {
-		if name == "Content-Type" {
-			continue
-		}
-		if v := entry.Header.Get(name); v != "" && protocol.ValidHeaderValue(v) {
-			header.Set(name, v)
-		}
-	}
-	// Set explicitly rather than leaving it to net/http's sniffing,
-	// which would read the stored bytes and put them back in charge of
-	// the label.
-	header.Set("Content-Type", protocol.ForwardedContentType(entry.Header.Get("Content-Type"), protocol.PlainContentType))
-	w.WriteHeader(entry.Status)
-	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- stored upstream payload replayed byte-for-byte under a media type that is never a document; the gateway renders no HTML
-	_, _ = w.Write(entry.Body)
+	protocol.WireFor(protocol.FormatOpenAIChat).RenderSuccess(w, entry.Status, entry.Header, entry.Body)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -225,10 +209,10 @@ func capture(tee *httpserver.TeeResponseWriter) Entry {
 // upstreamOf names the upstream that served the request, as reported
 // by the forward stage through the carrier.
 func upstreamOf(carrier *pipeline.Carrier) string {
-	if carrier.Relay != nil {
-		return carrier.Relay.UpstreamID
+	if carrier.Forward != nil {
+		return carrier.Forward.UpstreamID
 	}
-	return "-"
+	return obs.SourceNone
 }
 
 // storeWorthy reports whether a completed response should be stored:
@@ -237,11 +221,12 @@ func storeWorthy(tee *httpserver.TeeResponseWriter) bool {
 	return tee.Status() >= 200 && tee.Status() < 300 && !tee.Truncated()
 }
 
-// relayAborted reports a stream the forward stage terminated through the
-// error event contract: its bytes are a partial reply plus the error
-// frame — never a replayable completion, whatever the HTTP status says.
-func relayAborted(carrier *pipeline.Carrier) bool {
-	return carrier.Relay != nil && carrier.Relay.Aborted
+// forwardAborted reports a stream the forward stage terminated through
+// the error event contract: its bytes are a partial reply plus the
+// error frame — never a replayable completion, whatever the HTTP
+// status says.
+func forwardAborted(carrier *pipeline.Carrier) bool {
+	return carrier.Forward != nil && carrier.Forward.Aborted
 }
 
 // negativelyCacheable reports whether a failed exchange is a fact about
@@ -252,8 +237,8 @@ func relayAborted(carrier *pipeline.Carrier) bool {
 // that is not an upstream (a cache replay, a shared fetch), and a
 // forward that never named an upstream, are equally not facts.
 func negativelyCacheable(entry Entry, carrier *pipeline.Carrier) bool {
-	relayResult := carrier.Relay
-	if carrier.ServedBy != "" || relayResult == nil || relayResult.UpstreamID == "" {
+	forward := carrier.Forward
+	if carrier.ServedBy != "" || forward == nil || forward.UpstreamID == "" {
 		return false
 	}
 	switch {

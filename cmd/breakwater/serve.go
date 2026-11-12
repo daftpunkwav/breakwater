@@ -231,15 +231,13 @@ func buildGovernance(ctx context.Context, cfg config.Config, gov *governanceBack
 	reconcileArmed := gov.snapshotSource != nil && identity.admin != nil && cfg.Postgres.DSN != ""
 	switch {
 	case reconcileArmed && cfg.ReconcileInterval > 0:
-		users, err := identity.admin.Users(ctx)
-		if err != nil {
+		// The startup listing is a canary: an identity store that
+		// cannot list tenants fails the boot here instead of surfacing
+		// as silently empty reconcile rounds.
+		if _, err := identity.admin.Users(ctx); err != nil {
 			return nil, fmt.Errorf("reconciler: list tenants: %w", err)
 		}
-		tenants := make([]string, 0, len(users))
-		for _, u := range users {
-			tenants = append(tenants, u.ID)
-		}
-		if err := startReconciler(ctx, cfg, gov.snapshotSource, tenants, metrics, logger); err != nil {
+		if err := startReconciler(ctx, cfg, gov.snapshotSource, tenantLister(identity.admin), metrics, logger); err != nil {
 			return nil, err
 		}
 	case cfg.ReconcileInterval > 0:
@@ -415,9 +413,11 @@ func adminAuthState(token string) string {
 }
 
 // startReconciler wires the quota reconciliation protocol:
-// the Redis hot ledger is snapshotted into PostgreSQL on an interval
-// and consecutive snapshots must satisfy the balance identity.
-func startReconciler(ctx context.Context, cfg config.Config, source quota.SnapshotSource, tenants []string, metrics *obs.Metrics, logger *slog.Logger) error {
+// the Redis hot ledger is snapshotted into PostgreSQL on an interval,
+// consecutive snapshots must satisfy the balance identity, and the
+// tenant list is rediscovered every round — a tenant provisioned after
+// startup reconciles from the next round on.
+func startReconciler(ctx context.Context, cfg config.Config, source quota.SnapshotSource, tenantList func(context.Context) ([]string, error), metrics *obs.Metrics, logger *slog.Logger) error {
 	store, err := quota.NewPGSnapshotStore(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		return err
@@ -427,11 +427,27 @@ func startReconciler(ctx context.Context, cfg config.Config, source quota.Snapsh
 		store.Close()
 	}()
 
-	reconciler := quota.NewReconciler(source, tenants, store)
+	reconciler := quota.NewReconciler(source, tenantList, store)
 	quota.StartReconciler(ctx, reconciler, cfg.ReconcileInterval, driftHook(metrics))
 	logger.Info("quota reconciliation enabled",
-		"interval", cfg.ReconcileInterval, "tenants", len(tenants))
+		"interval", cfg.ReconcileInterval, "tenant_discovery", "rediscovered every round")
 	return nil
+}
+
+// tenantLister adapts the identity admin store to the reconciler's
+// per-round tenant discovery.
+func tenantLister(admin auth.AdminStore) func(ctx context.Context) ([]string, error) {
+	return func(ctx context.Context) ([]string, error) {
+		users, err := admin.Users(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(users))
+		for _, u := range users {
+			ids = append(ids, u.ID)
+		}
+		return ids, nil
+	}
 }
 
 // expiredHook counts reclaimed lease batches on the metrics.
@@ -442,6 +458,23 @@ func expiredHook(metrics *obs.Metrics) func(int) {
 // driftHook counts detected ledger drifts on the metrics.
 func driftHook(metrics *obs.Metrics) func(quota.TenantDrift) {
 	return func(quota.TenantDrift) { metrics.QuotaReconciliationError() }
+}
+
+// transitionObserver maps breaker transitions onto the circuit metrics:
+// the opened and half-open counters, plus the state gauge. Both
+// state-machine strategies (consecutive and slow-call) observe through
+// this one mapping, so a new state or a changed counter reaches both
+// strategies together instead of one drifting from the other.
+func transitionObserver(metrics *obs.Metrics) func(id string, _, to circuit.State) {
+	return func(id string, _, to circuit.State) {
+		switch to {
+		case circuit.StateOpen:
+			metrics.CircuitOpened(id)
+		case circuit.StateHalfOpen:
+			metrics.CircuitHalfOpen(id)
+		}
+		metrics.CircuitState(id, stateValue(to))
+	}
 }
 
 // buildBreaker assembles the breaker for the configured strategy: the
@@ -464,29 +497,13 @@ func buildBreaker(cfg config.Circuit, metrics *obs.Metrics, opts ...circuit.Opti
 			Cooldown:     cfg.Cooldown,
 			ProbeTimeout: cfg.ProbeTimeout,
 			SlowRatio:    cfg.SlowRatio,
-		}, circuit.SlowOnTransition(func(id string, _, to circuit.State) {
-			switch to {
-			case circuit.StateOpen:
-				metrics.CircuitOpened(id)
-			case circuit.StateHalfOpen:
-				metrics.CircuitHalfOpen(id)
-			}
-			metrics.CircuitState(id, stateValue(to))
-		}))
+		}, circuit.SlowOnTransition(transitionObserver(metrics)))
 	}
 	return circuit.NewRegistry(circuit.Config{
 		FailThreshold: cfg.FailThreshold,
 		Cooldown:      cfg.Cooldown,
 		ProbeTimeout:  cfg.ProbeTimeout,
-	}, append([]circuit.Option{circuit.OnTransition(func(id string, _, to circuit.State) {
-		switch to {
-		case circuit.StateOpen:
-			metrics.CircuitOpened(id)
-		case circuit.StateHalfOpen:
-			metrics.CircuitHalfOpen(id)
-		}
-		metrics.CircuitState(id, stateValue(to))
-	})}, opts...)...)
+	}, append([]circuit.Option{circuit.OnTransition(transitionObserver(metrics))}, opts...)...)
 }
 
 // stateValue maps breaker states onto the published gauge.

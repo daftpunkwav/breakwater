@@ -65,7 +65,7 @@ func TestCachedStoreTTLExpiry(t *testing.T) {
 	t.Parallel()
 	inner := &fakeStore{fn: func(string) (Tenant, error) { return testTenant("t1"), nil }}
 	now := time.Now()
-	cached := NewCachedStore(inner, time.Minute, time.Second, WithCacheClock(func() time.Time { return now }))
+	cached := NewCachedStore(inner, time.Minute, time.Second, withCacheClock(func() time.Time { return now }))
 
 	if _, err := cached.Resolve(context.Background(), "key"); err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -82,7 +82,7 @@ func TestCachedStoreTTLExpiry(t *testing.T) {
 func TestCachedStoreEvictsLeastRecentlyUsed(t *testing.T) {
 	t.Parallel()
 	inner := &fakeStore{fn: func(key string) (Tenant, error) { return testTenant(key), nil }}
-	cached := NewCachedStore(inner, time.Minute, time.Second, WithCacheCapacity(2))
+	cached := NewCachedStore(inner, time.Minute, time.Second, withCacheCapacity(2))
 
 	ctx := context.Background()
 	for _, key := range []string{"a", "b"} {

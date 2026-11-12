@@ -95,7 +95,7 @@ func AuthStage(store auth.Store) Middleware {
 			}
 
 			if carrier == nil {
-				protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+				protocol.WriteError(w, http.StatusInternalServerError, string(protocol.CodePipelineMisconfigured),
 					"no request carrier assembled")
 				return
 			}

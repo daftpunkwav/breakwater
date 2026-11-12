@@ -48,7 +48,7 @@ func TestStartReconcilerReportsDriftUntilCancelled(t *testing.T) {
 	t.Parallel()
 	source := &driftingSource{}
 	store := newMemSnapshotStore()
-	rec := NewReconciler(source, []string{"t"}, store)
+	rec := NewReconciler(source, staticTenants("t"), store)
 
 	var mu sync.Mutex
 	var drifts []TenantDrift
@@ -150,7 +150,7 @@ func (s *wedgedSource) attemptCount() int {
 func TestStartReconcilerBoundsAWedgedRound(t *testing.T) {
 	t.Parallel()
 	source := &wedgedSource{}
-	rec := NewReconciler(source, []string{"t"}, newMemSnapshotStore())
+	rec := NewReconciler(source, staticTenants("t"), newMemSnapshotStore())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
