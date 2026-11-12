@@ -444,6 +444,23 @@ func driftHook(metrics *obs.Metrics) func(quota.TenantDrift) {
 	return func(quota.TenantDrift) { metrics.QuotaReconciliationError() }
 }
 
+// transitionObserver maps breaker transitions onto the circuit metrics:
+// the opened and half-open counters, plus the state gauge. Both
+// state-machine strategies (consecutive and slow-call) observe through
+// this one mapping, so a new state or a changed counter reaches both
+// strategies together instead of one drifting from the other.
+func transitionObserver(metrics *obs.Metrics) func(id string, _, to circuit.State) {
+	return func(id string, _, to circuit.State) {
+		switch to {
+		case circuit.StateOpen:
+			metrics.CircuitOpened(id)
+		case circuit.StateHalfOpen:
+			metrics.CircuitHalfOpen(id)
+		}
+		metrics.CircuitState(id, stateValue(to))
+	}
+}
+
 // buildBreaker assembles the breaker for the configured strategy: the
 // consecutive machine with its transition hooks, the ratio guard (no
 // transitions ever fire, so the denial counter carries that mode's
@@ -464,29 +481,13 @@ func buildBreaker(cfg config.Circuit, metrics *obs.Metrics, opts ...circuit.Opti
 			Cooldown:     cfg.Cooldown,
 			ProbeTimeout: cfg.ProbeTimeout,
 			SlowRatio:    cfg.SlowRatio,
-		}, circuit.SlowOnTransition(func(id string, _, to circuit.State) {
-			switch to {
-			case circuit.StateOpen:
-				metrics.CircuitOpened(id)
-			case circuit.StateHalfOpen:
-				metrics.CircuitHalfOpen(id)
-			}
-			metrics.CircuitState(id, stateValue(to))
-		}))
+		}, circuit.SlowOnTransition(transitionObserver(metrics)))
 	}
 	return circuit.NewRegistry(circuit.Config{
 		FailThreshold: cfg.FailThreshold,
 		Cooldown:      cfg.Cooldown,
 		ProbeTimeout:  cfg.ProbeTimeout,
-	}, append([]circuit.Option{circuit.OnTransition(func(id string, _, to circuit.State) {
-		switch to {
-		case circuit.StateOpen:
-			metrics.CircuitOpened(id)
-		case circuit.StateHalfOpen:
-			metrics.CircuitHalfOpen(id)
-		}
-		metrics.CircuitState(id, stateValue(to))
-	})}, opts...)...)
+	}, append([]circuit.Option{circuit.OnTransition(transitionObserver(metrics))}, opts...)...)
 }
 
 // stateValue maps breaker states onto the published gauge.
