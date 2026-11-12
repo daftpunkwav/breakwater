@@ -212,7 +212,7 @@ func upstreamOf(carrier *pipeline.Carrier) string {
 	if carrier.Forward != nil {
 		return carrier.Forward.UpstreamID
 	}
-	return "-"
+	return obs.SourceNone
 }
 
 // storeWorthy reports whether a completed response should be stored:

@@ -50,7 +50,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 				requestID = carrier.RequestID
 				rejectCode = carrier.RejectCode
 			}
-			upstream := "-"
+			upstream := obs.SourceNone
 			aborted, clientGone, cacheHit, streamed := false, false, false, false
 			var tokens int64
 			var trail []obs.AttemptTrace
@@ -66,7 +66,7 @@ func ObservationStage(metrics *obs.Metrics, sink obs.Sink) Middleware {
 					upstream = carrier.ServedBy
 				}
 				if carrier.Forward != nil {
-					if upstream == "-" {
+					if upstream == obs.SourceNone {
 						upstream = carrier.Forward.UpstreamID
 					}
 					aborted = carrier.Forward.Aborted
