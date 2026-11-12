@@ -70,17 +70,21 @@ type SnapshotStore interface {
 }
 
 // Reconciler diffs consecutive ledger snapshots. It is safe for
-// concurrent use.
+// concurrent use; the tenant discovery it calls must be too.
 type Reconciler struct {
-	source  SnapshotSource
-	tenants []string
-	store   SnapshotStore
-	now     func() time.Time
+	source SnapshotSource
+	// tenantList discovers the tenants to reconcile, once per round: a
+	// tenant provisioned after startup enters the snapshot chain from
+	// the next round on instead of never being reconciled because a
+	// startup-time list missed it.
+	tenantList func(ctx context.Context) ([]string, error)
+	store      SnapshotStore
+	now        func() time.Time
 }
 
-// NewReconciler builds the reconciler over the given tenants.
-func NewReconciler(source SnapshotSource, tenants []string, store SnapshotStore) *Reconciler {
-	return &Reconciler{source: source, tenants: tenants, store: store, now: time.Now}
+// NewReconciler builds the reconciler over the given tenant discovery.
+func NewReconciler(source SnapshotSource, tenantList func(ctx context.Context) ([]string, error), store SnapshotStore) *Reconciler {
+	return &Reconciler{source: source, tenantList: tenantList, store: store, now: time.Now}
 }
 
 // ReconcileOnce snapshots every tenant and diffs against the previous
@@ -89,11 +93,17 @@ func NewReconciler(source SnapshotSource, tenants []string, store SnapshotStore)
 // One tenant's failure skips only that tenant: a poisoned ledger must
 // not silence the drift detection of every tenant after it — the
 // aggregated errors come back so the caller still sees the round was
-// incomplete.
+// incomplete. A tenant-discovery failure fails the whole round:
+// reconciling against a tenant list the gateway could not see would
+// read as clean rounds over a system of record it cannot observe.
 func (r *Reconciler) ReconcileOnce(ctx context.Context) (checked, drifted int, drifts []TenantDrift, err error) {
 	takenAt := r.now()
+	tenants, err := r.tenantList(ctx)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("list tenants: %w", err)
+	}
 	var failures []error
-	for _, tenantID := range r.tenants {
+	for _, tenantID := range tenants {
 		snap, err := r.source.TenantSnapshot(ctx, tenantID, takenAt)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("tenant %s: %w", tenantID, err))

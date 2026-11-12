@@ -49,7 +49,7 @@ func TestStartReconcilerRejectsBadDSN(t *testing.T) {
 	cfg := testConfig("127.0.0.1:0")
 	cfg.Postgres.DSN = "not a valid dsn"
 	cfg.ReconcileInterval = time.Hour
-	if err := startReconciler(context.Background(), cfg, nil, []string{"t"}, obs.NewMetrics(), slog.New(slog.DiscardHandler)); err == nil {
+	if err := startReconciler(context.Background(), cfg, nil, staticTenants("t"), obs.NewMetrics(), slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("an invalid DSN must fail the snapshot store assembly")
 	}
 }
@@ -72,8 +72,16 @@ func TestStartReconcilerStartup(t *testing.T) {
 	// immediately: assembly is what is under test here.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := startReconciler(ctx, cfg, redisLedger, []string{"t"}, obs.NewMetrics(), slog.New(slog.DiscardHandler)); err != nil {
+	if err := startReconciler(ctx, cfg, redisLedger, staticTenants("t"), obs.NewMetrics(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("startReconciler: %v", err)
+	}
+}
+
+// staticTenants adapts a fixed tenant list to the reconciler's
+// per-round discovery contract.
+func staticTenants(ids ...string) func(context.Context) ([]string, error) {
+	return func(context.Context) ([]string, error) {
+		return ids, nil
 	}
 }
 
