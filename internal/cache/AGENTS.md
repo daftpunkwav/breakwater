@@ -25,7 +25,7 @@ Shared rules: [../AGENTS.md](../AGENTS.md). Package map: [README.md](README.md).
   are not stored.
 - Negative caching is the non-streaming shared fetch. Store at `ttl/10`
   when `negativelyCacheable`: status 400–507, or an empty 2xx, and
-  only when the relay names an upstream. Do not store gateway
+  only when the forward outcome names an upstream. Do not store gateway
   envelopes.
 - Store a stream only when it is a complete 2xx within
   `maxCacheableBytes` and `Aborted` is false. Streams have no negative

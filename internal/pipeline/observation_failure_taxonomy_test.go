@@ -14,7 +14,6 @@ import (
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/obs"
-	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // observedEntries pushes the carrier through a fresh observation stage
@@ -48,32 +47,32 @@ func TestObservationRecordsRejectionTaxonomy(t *testing.T) {
 	}
 }
 
-// TestObservationRefinesWithRelayErrorCode: a gateway-rendered forward
-// failure (circuit open, budget exhausted, stream abort) overrides the
-// empty rejection code; an upstream passthrough leaves the code empty
-// so its status classifies it.
-func TestObservationRefinesWithRelayErrorCode(t *testing.T) {
+// TestObservationRefinesWithForwardErrorCode: a gateway-rendered
+// forward failure (circuit open, budget exhausted, stream abort)
+// overrides the empty rejection code; an upstream passthrough leaves
+// the code empty so its status classifies it.
+func TestObservationRefinesWithForwardErrorCode(t *testing.T) {
 	t.Parallel()
 	if got := observedEntries(t, &Carrier{
-		Tenant: auth.Tenant{ID: "t"},
-		Relay:  &relay.Result{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
+		Tenant:  auth.Tenant{ID: "t"},
+		Forward: &Outcome{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
 	}, http.StatusServiceUnavailable)[0].ErrorCode; got != "circuit_open" {
 		t.Fatalf("gateway code = %q, want circuit_open", got)
 	}
 
 	if got := observedEntries(t, &Carrier{
-		Tenant: auth.Tenant{ID: "t"},
-		Relay:  &relay.Result{UpstreamID: "u", Status: 502},
+		Tenant:  auth.Tenant{ID: "t"},
+		Forward: &Outcome{UpstreamID: "u", Status: 502},
 	}, http.StatusBadGateway)[0].ErrorCode; got != "" {
 		t.Fatalf("passthrough code = %q, want empty (status classifies)", got)
 	}
 
-	// A rejection code wins over the relay's: the earlier verdict is
+	// A rejection code wins over the forward's: the earlier verdict is
 	// the cause, the forward never happened.
 	if got := observedEntries(t, &Carrier{
 		Tenant:     auth.Tenant{ID: "t"},
 		RejectCode: "insufficient_quota",
-		Relay:      &relay.Result{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
+		Forward:    &Outcome{UpstreamID: "u", Status: 503, ErrorCode: "circuit_open"},
 	}, http.StatusPaymentRequired)[0].ErrorCode; got != "insufficient_quota" {
 		t.Fatalf("code = %q, want the rejection's insufficient_quota", got)
 	}
@@ -107,13 +106,13 @@ func TestObservationCarriesSettlementAndStream(t *testing.T) {
 	e := observedEntries(t, &Carrier{
 		Tenant:   auth.Tenant{ID: "t"},
 		Consumed: 137,
-		Relay:    &relay.Result{UpstreamID: "u", Status: 200, Streamed: true},
+		Forward:  &Outcome{UpstreamID: "u", Status: 200, Streamed: true},
 	}, http.StatusOK)[0]
 
 	if e.Tokens != 137 {
 		t.Fatalf("tokens = %d, want 137", e.Tokens)
 	}
 	if !e.Streamed {
-		t.Fatal("streamed = false, want the relay's streaming report")
+		t.Fatal("streamed = false, want the forward stage's streaming report")
 	}
 }

@@ -126,10 +126,10 @@ func TestInferenceSettlesByReservationWithoutUsage(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
 	}
-	if carrier.Relay == nil {
-		t.Fatal("relay outcome not captured on the carrier")
+	if carrier.Forward == nil {
+		t.Fatal("forward outcome not captured on the carrier")
 	}
-	if carrier.Relay.UsageKnown {
+	if carrier.Forward.UsageKnown {
 		t.Fatal("unexpected usage extraction on a usage-less reply")
 	}
 	if carrier.Consumed != 51 {
@@ -184,7 +184,7 @@ func TestInferenceSettlesByReservationOnNonPositiveUsage(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
 			}
-			if !carrier.Relay.UsageKnown {
+			if !carrier.Forward.UsageKnown {
 				t.Fatal("the usage object was present; extraction should have reported it")
 			}
 			if carrier.Consumed != 51 {

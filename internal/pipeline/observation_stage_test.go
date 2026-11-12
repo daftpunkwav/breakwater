@@ -16,7 +16,6 @@ import (
 	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
-	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // renderMetrics renders the registry to a string for substring
@@ -61,7 +60,7 @@ func TestObservationStageRecordsRequestDimensions(t *testing.T) {
 		Tenant:   auth.Tenant{ID: "tenant-1"},
 		Chat:     protocol.ChatRequest{Model: "model-1"},
 		CacheHit: true,
-		Relay:    &relay.Result{UpstreamID: "up-1"},
+		Forward:  &Outcome{UpstreamID: "up-1"},
 	}
 
 	rec := serveThroughObservation(t, metrics, sink, carrier, http.StatusCreated)
@@ -106,7 +105,7 @@ func TestObservationStageRecordsStreamAbort(t *testing.T) {
 	t.Parallel()
 
 	metrics := obs.NewMetrics()
-	carrier := &Carrier{Relay: &relay.Result{UpstreamID: "up-1", Aborted: true}}
+	carrier := &Carrier{Forward: &Outcome{UpstreamID: "up-1", Aborted: true}}
 
 	serveThroughObservation(t, metrics, nil, carrier, http.StatusOK)
 
@@ -124,7 +123,7 @@ func TestObservationStageSkipsAbortCounterWhenClientGone(t *testing.T) {
 	t.Parallel()
 
 	metrics := obs.NewMetrics()
-	carrier := &Carrier{Relay: &relay.Result{UpstreamID: "up-1", Aborted: true, ClientGone: true}}
+	carrier := &Carrier{Forward: &Outcome{UpstreamID: "up-1", Aborted: true, ClientGone: true}}
 
 	serveThroughObservation(t, metrics, nil, carrier, http.StatusOK)
 
@@ -134,19 +133,19 @@ func TestObservationStageSkipsAbortCounterWhenClientGone(t *testing.T) {
 	}
 }
 
-// TestObservationStageRecordsAttemptTrail: the relay's attempt trail
-// rides into the access entry as the failover walk the request took;
-// a request without a trail records none.
+// TestObservationStageRecordsAttemptTrail: the forward outcome's
+// attempt trail rides into the access entry as the failover walk the
+// request took; a request without a trail records none.
 func TestObservationStageRecordsAttemptTrail(t *testing.T) {
 	t.Parallel()
 
 	metrics := obs.NewMetrics()
 	sink := &recordingSink{}
-	carrier := &Carrier{Relay: &relay.Result{
+	carrier := &Carrier{Forward: &Outcome{
 		UpstreamID: "up-2",
-		Trail: []relay.AttemptTrace{
-			{Upstream: "up-1", CredentialIndex: 0, Status: http.StatusTooManyRequests},
-			{Upstream: "up-2", CredentialIndex: 1, Status: http.StatusOK},
+		Trail: []obs.AttemptTrace{
+			{Upstream: "up-1", Credential: 0, Status: http.StatusTooManyRequests},
+			{Upstream: "up-2", Credential: 1, Status: http.StatusOK},
 		},
 	}}
 
@@ -164,9 +163,9 @@ func TestObservationStageRecordsAttemptTrail(t *testing.T) {
 	}
 }
 
-// TestObservationStageWithoutRelay: a carrier with no relay outcome
+// TestObservationStageWithoutForward: a carrier with no forward outcome
 // observes the placeholder upstream.
-func TestObservationStageWithoutRelay(t *testing.T) {
+func TestObservationStageWithoutForward(t *testing.T) {
 	t.Parallel()
 
 	metrics := obs.NewMetrics()
@@ -185,8 +184,8 @@ func TestObservationStageWithoutRelay(t *testing.T) {
 
 // TestObservationStagePrefersServedByForUpstream: a response origin
 // that is not an upstream (a cache replay, a shared fetch) owns the
-// upstream dimension; the relay outcome's upstream id is consulted only
-// when no such origin is recorded.
+// upstream dimension; the forward outcome's upstream id is consulted
+// only when no such origin is recorded.
 func TestObservationStagePrefersServedByForUpstream(t *testing.T) {
 	t.Parallel()
 

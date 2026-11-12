@@ -96,7 +96,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				tee := httpserver.NewBufferingTee(w, maxCacheableBytes)
 				next.ServeHTTP(tee, r)
 				metrics.CacheFetch(upstreamOf(carrier))
-				if storeWorthy(tee) && !relayAborted(carrier) {
+				if storeWorthy(tee) && !forwardAborted(carrier) {
 					_ = store.Set(r.Context(), key, capture(tee), ttl)
 				}
 				return
@@ -225,8 +225,8 @@ func capture(tee *httpserver.TeeResponseWriter) Entry {
 // upstreamOf names the upstream that served the request, as reported
 // by the forward stage through the carrier.
 func upstreamOf(carrier *pipeline.Carrier) string {
-	if carrier.Relay != nil {
-		return carrier.Relay.UpstreamID
+	if carrier.Forward != nil {
+		return carrier.Forward.UpstreamID
 	}
 	return "-"
 }
@@ -237,11 +237,12 @@ func storeWorthy(tee *httpserver.TeeResponseWriter) bool {
 	return tee.Status() >= 200 && tee.Status() < 300 && !tee.Truncated()
 }
 
-// relayAborted reports a stream the forward stage terminated through the
-// error event contract: its bytes are a partial reply plus the error
-// frame — never a replayable completion, whatever the HTTP status says.
-func relayAborted(carrier *pipeline.Carrier) bool {
-	return carrier.Relay != nil && carrier.Relay.Aborted
+// forwardAborted reports a stream the forward stage terminated through
+// the error event contract: its bytes are a partial reply plus the
+// error frame — never a replayable completion, whatever the HTTP
+// status says.
+func forwardAborted(carrier *pipeline.Carrier) bool {
+	return carrier.Forward != nil && carrier.Forward.Aborted
 }
 
 // negativelyCacheable reports whether a failed exchange is a fact about
@@ -252,8 +253,8 @@ func relayAborted(carrier *pipeline.Carrier) bool {
 // that is not an upstream (a cache replay, a shared fetch), and a
 // forward that never named an upstream, are equally not facts.
 func negativelyCacheable(entry Entry, carrier *pipeline.Carrier) bool {
-	relayResult := carrier.Relay
-	if carrier.ServedBy != "" || relayResult == nil || relayResult.UpstreamID == "" {
+	forward := carrier.Forward
+	if carrier.ServedBy != "" || forward == nil || forward.UpstreamID == "" {
 		return false
 	}
 	switch {

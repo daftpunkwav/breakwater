@@ -29,6 +29,10 @@ A stage that reserves before `next` settles after `next` returns.
 - The carrier is a typed struct used on the request goroutine. Do not
   add a lock. Do not store request fields in context values. One stage
   writes each field.
+- The forward outcome rides the carrier as `Forward *Outcome`, a
+  pipeline-owned projection. Do not put the relay engine's result type
+  on the carrier; the inference handler converts at its single
+  assignment point.
 - `AuthorizeModel` is the only model-authorization rule. The pipeline
   stage and the inference handler both call it.
 - `EstimateTokens` is the only pre-call estimate. The TPM bucket and

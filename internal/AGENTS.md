@@ -36,6 +36,11 @@ observation record run once per client request.
 
 ## Dependencies
 
+- `pipeline` does not import `relay`. The inference handler projects
+  the relay result into `pipeline.Outcome` (the carrier's `Forward`
+  field) at its single assignment point; governance packages read the
+  projection, never the relay's result type.
+
 `no-off-the-shelf-governance` in [.golangci.yml](../.golangci.yml) denies:
 
 - `github.com/sony/gobreaker`

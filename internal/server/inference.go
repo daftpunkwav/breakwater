@@ -21,6 +21,7 @@ import (
 	"net/http"
 
 	"github.com/daftpunkwav/breakwater/internal/affinity"
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/pipeline"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
 	"github.com/daftpunkwav/breakwater/internal/relay"
@@ -222,7 +223,42 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// delivered 2xx reply, and zero for a failure — an error reply served
 	// no tokens, so its reservation refunds in full.
 	settleConsumption(carrier, result)
-	carrier.Relay = &result
+	// The stages after forward read the pipeline's own projection, not
+	// the relay engine's result type: the conversion happens once,
+	// here at the only assignment point.
+	carrier.Forward = projectOutcome(result)
+}
+
+// projectOutcome converts the relay engine's result into the carrier's
+// forward record. It is the one place the relay's shape meets the
+// pipeline's contract; the governance stages downstream read only the
+// projection.
+func projectOutcome(result relay.Result) *pipeline.Outcome {
+	return &pipeline.Outcome{
+		UpstreamID:  result.UpstreamID,
+		Status:      result.Status,
+		ErrorCode:   result.ErrorCode,
+		Aborted:     result.Aborted,
+		ClientGone:  result.ClientGone,
+		Streamed:    result.Streamed,
+		StreamBytes: result.StreamBytes,
+		Usage:       result.Usage,
+		UsageKnown:  result.UsageKnown,
+		Trail:       attemptsToObs(result.Trail),
+	}
+}
+
+// attemptsToObs converts the relay's attempt trail into the access
+// log's shape; the log schema stays independent of the relay's.
+func attemptsToObs(trail []relay.AttemptTrace) []obs.AttemptTrace {
+	if len(trail) == 0 {
+		return nil
+	}
+	out := make([]obs.AttemptTrace, len(trail))
+	for i, a := range trail {
+		out[i] = obs.AttemptTrace{Upstream: a.Upstream, Credential: a.CredentialIndex, Status: a.Status}
+	}
+	return out
 }
 
 // candidatesRejection maps the router's candidate lookup failures onto

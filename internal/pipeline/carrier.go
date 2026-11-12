@@ -20,13 +20,13 @@ import (
 	"net/http"
 
 	"github.com/daftpunkwav/breakwater/internal/auth"
+	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/protocol"
-	"github.com/daftpunkwav/breakwater/internal/relay"
 )
 
 // Response origins a request can be served from without an upstream
-// touching it. They ride Carrier.ServedBy, never Relay.UpstreamID: the
-// relay result's upstream field keeps naming real upstreams only, and
+// touching it. They ride Carrier.ServedBy, never Forward.UpstreamID: the
+// forward outcome's upstream field keeps naming real upstreams only, and
 // the observation stage prefers ServedBy when it is set.
 const (
 	// SourceCache marks a response replayed from the cache store.
@@ -80,7 +80,7 @@ type Carrier struct {
 	// cache replay (SourceCache) or a shared fetch the request waited
 	// on (SourceSharedFetch). Empty when the reply came from — or
 	// failed at — a real upstream; that upstream's identity then rides
-	// Relay.UpstreamID alone.
+	// Forward.UpstreamID alone.
 	ServedBy string
 	// RejectCode records the rejection code of the stage that refused
 	// the request, for the failure taxonomy. The governance stages
@@ -92,14 +92,58 @@ type Carrier struct {
 	// context_window_exceeded) for the same reason. Empty unless the
 	// request was rejected before the forward stage.
 	RejectCode string
-	// Relay captures the forward stage's outcome for the stages after
-	// it (settlement details, observation dimensions). Holding the
-	// relay engine's concrete result type is deliberate: the pipeline
-	// orchestrates the forward call and hands its outcome to the
-	// settlement and observation stages, and relay never imports
-	// pipeline — the dependency runs one way, from the governance
-	// chain to the execution engine it invokes.
-	Relay *relay.Result
+	// Forward captures the forward stage's outcome for the stages after
+	// it (settlement details, cache eligibility, observation
+	// dimensions). It holds a pipeline-owned projection, not the relay
+	// engine's own result type: the inference handler that runs the
+	// forward call converts once at the boundary, so this contract and
+	// every governance stage reading it stay free of the relay's shape
+	// while relay never imports pipeline — the dependency runs one
+	// way, from the governance chain to the execution engine it
+	// invokes.
+	Forward *Outcome
+}
+
+// Outcome is the forward stage's projected result: what the stages
+// after the forward (settlement, cache write, observation) need from
+// the exchange, in the pipeline's own vocabulary. The inference
+// handler projects the relay engine's result into it at the single
+// assignment point, so a relay field change stops at the server
+// package and never re-shapes the carrier contract the governance
+// packages read.
+type Outcome struct {
+	// UpstreamID names the upstream that produced the delivered reply;
+	// empty when no upstream did.
+	UpstreamID string
+	// Status is the client status the forward stage sent (or intended,
+	// when the client was already gone).
+	Status int
+	// ErrorCode is the gateway-originated failure code of a
+	// gateway-rendered error (the closed vocabulary of package
+	// protocol); empty for upstream error passthroughs, whose status
+	// classifies them.
+	ErrorCode string
+	// Aborted reports a stream terminated honestly through the error
+	// event contract after bytes had already reached the client: its
+	// bytes are never a replayable completion.
+	Aborted bool
+	// ClientGone reports that the client disconnected before the
+	// response completed.
+	ClientGone bool
+	// Streamed reports whether a streaming passthrough started;
+	// StreamBytes is the byte count it delivered — the fallback
+	// metering input when the stream ended without a usage report.
+	Streamed    bool
+	StreamBytes int64
+	// Usage carries the token usage extracted from the reply;
+	// UsageKnown is false when the reply carried none (settlement then
+	// falls back to estimation).
+	Usage      protocol.Usage
+	UsageKnown bool
+	// Trail is the per-attempt record of the forward walk, in the
+	// access log's own shape: one entry per upstream attempt, in
+	// order.
+	Trail []obs.AttemptTrace
 }
 
 // SetBody stores the request body and its ingest result exactly once;
