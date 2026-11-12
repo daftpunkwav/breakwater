@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/daftpunkwav/breakwater/internal/auth"
 	"github.com/daftpunkwav/breakwater/internal/obs"
 	"github.com/daftpunkwav/breakwater/internal/quota"
 	"github.com/redis/go-redis/v9"
@@ -82,6 +83,40 @@ func TestStartReconcilerStartup(t *testing.T) {
 func staticTenants(ids ...string) func(context.Context) ([]string, error) {
 	return func(context.Context) ([]string, error) {
 		return ids, nil
+	}
+}
+
+// adminStub answers Users only; the other admin methods are never
+// reached through the reconciler's discovery.
+type adminStub struct {
+	auth.AdminStore
+	users []auth.UserView
+	err   error
+}
+
+func (s adminStub) Users(context.Context) ([]auth.UserView, error) {
+	return s.users, s.err
+}
+
+// TestTenantListerAdaptsTheAdminStore: the reconciler's per-round
+// discovery sees every user id in order, and a store failure
+// propagates instead of reading as an empty tenant set.
+func TestTenantListerAdaptsTheAdminStore(t *testing.T) {
+	t.Parallel()
+	stub := adminStub{users: []auth.UserView{{ID: "u1"}, {ID: "u2"}}}
+	list := tenantLister(stub)
+
+	ids, err := list(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != "u1" || ids[1] != "u2" {
+		t.Fatalf("ids = %v, want u1 then u2", ids)
+	}
+
+	failing := tenantLister(adminStub{err: context.DeadlineExceeded})
+	if _, err := failing(context.Background()); err == nil {
+		t.Fatal("a store failure must surface, never masquerade as zero tenants")
 	}
 }
 
