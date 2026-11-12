@@ -41,16 +41,19 @@ const defaultKeyPrefix = "bw:limiter:"
 
 // Redis is the Redis-backed Limiter. It is safe for concurrent use.
 type Redis struct {
-	rdb       *redis.Client
+	rdb       redis.UniversalClient
 	allow     *redis.Script
 	refund    *redis.Script
 	keyPrefix string
 }
 
-// NewRedis builds the backend over a ready client. namespace scopes this
-// deployment's buckets inside a shared Redis instance; empty means this
-// gateway owns the instance outright.
-func NewRedis(client *redis.Client, namespace string) *Redis {
+// NewRedis builds the backend over a ready client. The universal
+// interface keeps the backend honest about its narrow call surface and
+// lets a cluster or sentinel deployment serve the same scripts without
+// a signature change. namespace scopes this deployment's buckets inside
+// a shared Redis instance; empty means this gateway owns the instance
+// outright.
+func NewRedis(client redis.UniversalClient, namespace string) *Redis {
 	return &Redis{
 		rdb:       client,
 		allow:     redis.NewScript(allowScriptSrc),
