@@ -181,7 +181,9 @@ type Outcome struct {
 	UsageKnown bool
 	// Trail is the per-attempt record of the forward walk, in the
 	// access log's own shape: one entry per upstream attempt, in
-	// order.
+	// order. The projection allocates it fresh per request, and the
+	// observation stage hands it to the async sink by reference —
+	// nothing may mutate it in place once projected.
 	Trail []obs.AttemptTrace
 }
 

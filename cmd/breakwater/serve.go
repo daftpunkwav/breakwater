@@ -430,7 +430,7 @@ func startReconciler(ctx context.Context, cfg config.Config, source quota.Snapsh
 	reconciler := quota.NewReconciler(source, tenantList, store)
 	quota.StartReconciler(ctx, reconciler, cfg.ReconcileInterval, driftHook(metrics))
 	logger.Info("quota reconciliation enabled",
-		"interval", cfg.ReconcileInterval, "tenants", "rediscovered every round")
+		"interval", cfg.ReconcileInterval, "tenant_discovery", "rediscovered every round")
 	return nil
 }
 
