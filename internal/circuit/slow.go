@@ -80,8 +80,8 @@ type SlowRegistry struct {
 // SlowOption customizes a SlowRegistry.
 type SlowOption func(*SlowRegistry)
 
-// SlowClock overrides the clock for tests.
-func SlowClock(now func() time.Time) SlowOption {
+// slowClock overrides the clock for tests.
+func slowClock(now func() time.Time) SlowOption {
 	return func(s *SlowRegistry) { s.gov.now = now }
 }
 

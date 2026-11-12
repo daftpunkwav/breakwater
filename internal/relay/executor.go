@@ -111,8 +111,8 @@ func WithBreaker(b circuit.Breaker) Option {
 	return func(e *Executor) { e.breaker = b }
 }
 
-// WithClassifier overrides the standard retryability table.
-func WithClassifier(c retry.Classifier) Option {
+// withClassifier overrides the standard retryability table.
+func withClassifier(c retry.Classifier) Option {
 	return func(e *Executor) { e.classifier = c }
 }
 
@@ -179,10 +179,10 @@ func WithUpstreamBulkhead(gate Bulkhead, limit int64) Option {
 	return func(e *Executor) { e.bulkhead = gate; e.bulkheadMax = limit }
 }
 
-// WithClock overrides the attempt clock for tests: the instant an
+// withClock overrides the attempt clock for tests: the instant an
 // attempt starts and the instant its responsiveness is measured
 // against. The default is the wall clock.
-func WithClock(now func() time.Time) Option {
+func withClock(now func() time.Time) Option {
 	return func(e *Executor) { e.now = now }
 }
 

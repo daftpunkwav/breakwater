@@ -48,7 +48,7 @@ func TestWriteDoneSurfacesWriteFailure(t *testing.T) {
 
 func TestWriteDataSurfacesWriteFailure(t *testing.T) {
 	t.Parallel()
-	if err := WriteData(failingWriter{}, map[string]any{"seq": 1}); err == nil {
+	if err := writeData(failingWriter{}, map[string]any{"seq": 1}); err == nil {
 		t.Fatal("a failed data write must surface")
 	}
 }

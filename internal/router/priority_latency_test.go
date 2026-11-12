@@ -117,7 +117,7 @@ func TestCandidatesLatencyJittersNearTies(t *testing.T) {
 			{Models: []string{"m1"}, Upstream: stubUp{id: "a"}},
 			{Models: []string{"m1"}, Upstream: stubUp{id: "b"}},
 		}, WithStrategy(StrategyLatency), WithTracker(tr),
-			WithRandomSource(rand.New(rand.NewPCG(seed, seed))))
+			withRandomSource(rand.New(rand.NewPCG(seed, seed))))
 	}
 
 	leaders := map[string]bool{}
@@ -146,7 +146,7 @@ func TestCandidatesLatencyTieCutHonorsBuffer(t *testing.T) {
 		{Models: []string{"m1"}, Upstream: stubUp{id: "fast"}},
 		{Models: []string{"m1"}, Upstream: stubUp{id: "slow"}},
 	}, WithStrategy(StrategyLatency), WithTracker(tr),
-		WithRandomSource(rand.New(rand.NewPCG(1, 1))))
+		withRandomSource(rand.New(rand.NewPCG(1, 1))))
 	for i := 0; i < 20; i++ {
 		if got := candidateIDs(resolveCandidates(t, priority, "m1")); got[0] != "fast" {
 			t.Fatalf("order = %v; a candidate outside the tie buffer must never lead", got)

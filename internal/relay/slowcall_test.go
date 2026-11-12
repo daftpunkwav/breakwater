@@ -94,7 +94,7 @@ func bufferedAttemptOutcome(t *testing.T, delay time.Duration, opts ...Option) c
 		clock.advance(delay)
 		return jsonResponse(t, http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
 	}}
-	exec := New(testPolicy(), nil, append([]Option{WithBreaker(br), WithClock(clock.Now)}, opts...)...)
+	exec := New(testPolicy(), nil, append([]Option{WithBreaker(br), withClock(clock.Now)}, opts...)...)
 
 	execute(t, exec, []upstream.Upstream{up}, false, `{"model":"m","messages":[]}`)
 	return br.last()
@@ -157,7 +157,7 @@ func TestSlowStreamTTFTReportsSlow(t *testing.T) {
 		resp.Header.Set("Content-Type", "text/event-stream")
 		return resp, nil
 	}}
-	exec := New(testPolicy(), nil, WithBreaker(br), WithClock(clock.Now), WithSlowCallThreshold(20*time.Millisecond))
+	exec := New(testPolicy(), nil, WithBreaker(br), withClock(clock.Now), WithSlowCallThreshold(20*time.Millisecond))
 
 	execute(t, exec, []upstream.Upstream{slow}, true, `{"model":"m","stream":true,"messages":[]}`)
 	if got := br.last(); got != circuit.OutcomeSlow {

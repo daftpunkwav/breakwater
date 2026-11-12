@@ -22,7 +22,7 @@ func newSlowFixture(t *testing.T, ratio float64) (*SlowRegistry, func(int), func
 	t.Helper()
 	step := 0
 	now := func() time.Time { return time.Unix(0, 0).Add(time.Duration(step) * slowBucketSpan) }
-	reg := NewSlowRegistry(Config{Cooldown: 30 * time.Second, ProbeTimeout: 5 * time.Second, SlowRatio: ratio}, SlowClock(now))
+	reg := NewSlowRegistry(Config{Cooldown: 30 * time.Second, ProbeTimeout: 5 * time.Second, SlowRatio: ratio}, slowClock(now))
 	advance := func(n int) { step += n }
 	return reg, advance, now
 }
@@ -235,7 +235,7 @@ func TestSlowResetFiresTheTransitionObserver(t *testing.T) {
 	now := func() time.Time { return time.Unix(0, 0).Add(time.Duration(step) * slowBucketSpan) }
 	type transition struct{ from, to State }
 	var got []transition
-	reg := NewSlowRegistry(Config{SlowRatio: 0.5}, SlowClock(now),
+	reg := NewSlowRegistry(Config{SlowRatio: 0.5}, slowClock(now),
 		SlowOnTransition(func(id string, from, to State) {
 			got = append(got, transition{from, to})
 		}))
@@ -330,7 +330,7 @@ func TestSlowAbsorbedAndExpiredPaths(t *testing.T) {
 	t.Parallel()
 	var transitions []string
 	reg := NewSlowRegistry(Config{Cooldown: 30 * time.Second, ProbeTimeout: 5 * time.Second, SlowRatio: 0.5},
-		SlowClock(func() time.Time { return time.Unix(0, 0).Add(time.Duration(clockStep) * slowBucketSpan) }),
+		slowClock(func() time.Time { return time.Unix(0, 0).Add(time.Duration(clockStep) * slowBucketSpan) }),
 		SlowOnTransition(func(_ string, from, to State) {
 			transitions = append(transitions, string(from)+"->"+string(to))
 		}))
@@ -434,5 +434,5 @@ func TestSlowProbeReportsThatReclaim(t *testing.T) {
 	}
 }
 
-// clockStep backs the SlowClock of TestSlowAbsorbedAndExpiredPaths.
+// clockStep backs the slowClock of TestSlowAbsorbedAndExpiredPaths.
 var clockStep int

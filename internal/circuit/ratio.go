@@ -102,14 +102,14 @@ type RatioRegistry struct {
 // RatioOption customizes a RatioRegistry.
 type RatioOption func(*RatioRegistry)
 
-// RatioClock overrides the clock for tests.
-func RatioClock(now func() time.Time) RatioOption {
+// ratioTestClock overrides the clock for tests.
+func ratioTestClock(now func() time.Time) RatioOption {
 	return func(r *RatioRegistry) { r.now = now }
 }
 
-// RatioRandomSource overrides the uniform sampler for tests; a draw
+// ratioRandomSource overrides the uniform sampler for tests; a draw
 // below the computed deny ratio denies the call.
-func RatioRandomSource(random func() float64) RatioOption {
+func ratioRandomSource(random func() float64) RatioOption {
 	return func(r *RatioRegistry) { r.random = random }
 }
 

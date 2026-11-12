@@ -58,7 +58,7 @@ func TestWriteDataAndDone(t *testing.T) {
 	payload := struct {
 		Seq int `json:"seq"`
 	}{Seq: 7}
-	if err := WriteData(&buf, payload); err != nil {
+	if err := writeData(&buf, payload); err != nil {
 		t.Fatalf("write data: %v", err)
 	}
 	if err := WriteDone(&buf); err != nil {
@@ -75,7 +75,7 @@ func TestWriteDataRejectsUnencodablePayload(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := WriteData(&buf, func() {})
+	err := writeData(&buf, func() {})
 	if err == nil {
 		t.Fatal("expected error for unencodable payload")
 	}

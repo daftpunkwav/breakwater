@@ -63,9 +63,9 @@ type CachedStore struct {
 // CachedStoreOption customizes a CachedStore.
 type CachedStoreOption func(*CachedStore)
 
-// WithCacheCapacity caps the cache; least recently used entries evict
+// withCacheCapacity caps the cache; least recently used entries evict
 // first. Defaults to 4096 keys.
-func WithCacheCapacity(n int) CachedStoreOption {
+func withCacheCapacity(n int) CachedStoreOption {
 	return func(c *CachedStore) {
 		if n >= 1 {
 			c.max = n
@@ -73,8 +73,8 @@ func WithCacheCapacity(n int) CachedStoreOption {
 	}
 }
 
-// WithCacheClock overrides the clock for tests.
-func WithCacheClock(now func() time.Time) CachedStoreOption {
+// withCacheClock overrides the clock for tests.
+func withCacheClock(now func() time.Time) CachedStoreOption {
 	return func(c *CachedStore) { c.now = now }
 }
 

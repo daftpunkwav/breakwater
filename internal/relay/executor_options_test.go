@@ -1,6 +1,6 @@
 /**
  * @file executor_options_test
- * @description Executor option wiring: WithClassifier replaces the
+ * @description Executor option wiring: withClassifier replaces the
  * retryability table, visibly changing the attempt loop's decisions.
  * (WithBreaker, WithMetrics and WithStreamTimeout are exercised by the
  * failover, gateway-error-rendering and stream-time-budget files.)
@@ -25,7 +25,7 @@ func TestWithClassifierOverridesRetryability(t *testing.T) {
 	t.Parallel()
 	calls := 0
 	cand := countedStubUpstream(t, &calls, "a", http.StatusInternalServerError, `{}`)
-	exec := New(testPolicy(), nil, WithClassifier(neverRetry{}))
+	exec := New(testPolicy(), nil, withClassifier(neverRetry{}))
 
 	result := execute(t, exec, []upstream.Upstream{cand}, false, "{}")
 	if result.Status != http.StatusInternalServerError {

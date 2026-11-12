@@ -66,9 +66,9 @@ func NewStreamError(code Code, message string) StreamError {
 	}}
 }
 
-// WriteData writes one nameless SSE data event carrying a JSON payload;
+// writeData writes one nameless SSE data event carrying a JSON payload;
 // chunk streaming uses this shape.
-func WriteData(w io.Writer, payload any) error {
+func writeData(w io.Writer, payload any) error {
 	return WriteEvent(w, "", payload)
 }
 

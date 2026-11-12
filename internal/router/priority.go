@@ -99,9 +99,9 @@ func WithTracker(t *Tracker) PriorityOption {
 	return func(p *Priority) { p.tracker = t }
 }
 
-// WithRandomSource installs the source for the near-tie leader draw;
+// withRandomSource installs the source for the near-tie leader draw;
 // nil (the default) uses the global source.
-func WithRandomSource(rng *rand.Rand) PriorityOption {
+func withRandomSource(rng *rand.Rand) PriorityOption {
 	return func(p *Priority) { p.rng = rng }
 }
 
