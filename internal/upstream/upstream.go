@@ -12,6 +12,16 @@
  * Adding a provider means adding an implementation of this port; the
  * governance layers above must not change.
  *
+ * Response dialect: the relay decodes every reply in the OpenAI
+ * chat-completions dialect — a non-streaming body is a chat completion
+ * JSON object; a streaming body is chat-completion SSE whose data
+ * frames end with the [DONE] sentinel and whose usage rides the OpenAI
+ * usage object; an error body follows the OpenAI error envelope (the
+ * relay's fatal classifier reads its code and type). An adapter whose
+ * provider does not speak that dialect must translate both directions
+ * itself: the stream pump's terminator, the usage extraction and the
+ * fatal classification all share this assumption.
+ *
  * Result convention:
  * - Forward reports every completed HTTP exchange — including 4xx and
  *   5xx responses — as a non-nil Response. A non-nil error means the
@@ -59,7 +69,10 @@ type Request struct {
 // Response is an upstream reply. Body is streamed and must be closed by
 // the caller; for SSE responses the caller consumes it chunk by chunk.
 // Header must be treated as read-only by callers; implementations that
-// reuse internal buffers must return a private copy.
+// reuse internal buffers must return a private copy. The body speaks
+// the OpenAI chat-completions dialect the relay decodes (see the file
+// header's response dialect); producing it is part of the adapter's
+// contract, not the caller's guess.
 type Response struct {
 	StatusCode int
 	Header     http.Header

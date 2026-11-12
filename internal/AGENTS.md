@@ -14,6 +14,11 @@ Package map: [README.md](README.md). Test taxonomy:
   provider.
 - HTTP endpoint shapes belong to `server/`. Wire-format shapes belong
   to `protocol/`.
+- A pipeline stage that only reads and writes the carrier and renders
+  an envelope lives in `pipeline/` (auth, model authorization,
+  observation, recovery). A stage backed by its own state or store
+  lives in its domain package (`limiter/`, `quota/`, `cache/`); keep
+  the split when adding one.
 - `httpserver/` imports only the standard library.
 - `config/` imports no other project package.
 - Store, backend, and option selection belongs to `cmd/*`.
