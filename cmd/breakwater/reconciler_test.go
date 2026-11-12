@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -115,8 +116,8 @@ func TestTenantListerAdaptsTheAdminStore(t *testing.T) {
 	}
 
 	failing := tenantLister(adminStub{err: context.DeadlineExceeded})
-	if _, err := failing(context.Background()); err == nil {
-		t.Fatal("a store failure must surface, never masquerade as zero tenants")
+	if _, err := failing(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the store failure itself propagated", err)
 	}
 }
 

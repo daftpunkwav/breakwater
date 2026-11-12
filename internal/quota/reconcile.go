@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -70,8 +71,16 @@ type SnapshotStore interface {
 }
 
 // Reconciler diffs consecutive ledger snapshots. It is safe for
-// concurrent use; the tenant discovery it calls must be too.
+// concurrent use; rounds are serialized, so a caller that overlaps
+// another waits instead of interleaving snapshots out of TakenAt
+// order. The tenant discovery it calls must be safe for concurrent
+// use.
 type Reconciler struct {
+	// mu serializes rounds: Latest/Append must interleave as
+	// append-after-read per tenant, or an older snapshot can land
+	// after a newer one and make the next round diff against stale
+	// state.
+	mu     sync.Mutex
 	source SnapshotSource
 	// tenantList discovers the tenants to reconcile, once per round: a
 	// tenant provisioned after startup enters the snapshot chain from
@@ -97,6 +106,8 @@ func NewReconciler(source SnapshotSource, tenantList func(ctx context.Context) (
 // reconciling against a tenant list the gateway could not see would
 // read as clean rounds over a system of record it cannot observe.
 func (r *Reconciler) ReconcileOnce(ctx context.Context) (checked, drifted int, drifts []TenantDrift, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	takenAt := r.now()
 	tenants, err := r.tenantList(ctx)
 	if err != nil {
