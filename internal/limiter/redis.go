@@ -49,10 +49,14 @@ type Redis struct {
 
 // NewRedis builds the backend over a ready client. The universal
 // interface keeps the backend honest about its narrow call surface and
-// lets a cluster or sentinel deployment serve the same scripts without
-// a signature change. namespace scopes this deployment's buckets inside
-// a shared Redis instance; empty means this gateway owns the instance
-// outright.
+// admits cluster and sentinel wiring. The scripts are single-slot:
+// Allow passes one tenant's RPM and TPM bucket keys in a single
+// invocation, so a cluster deployment needs a hash-tagged namespace
+// (one placing every key of the deployment in one slot) — an untagged
+// namespace scatters the buckets across slots and the script fails
+// with CROSSSLOT. Sentinel is unaffected. namespace scopes this
+// deployment's buckets inside a shared Redis instance; empty means
+// this gateway owns the instance outright.
 func NewRedis(client redis.UniversalClient, namespace string) *Redis {
 	return &Redis{
 		rdb:       client,
