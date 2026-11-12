@@ -139,7 +139,7 @@ func CarrierFrom(ctx context.Context) *Carrier {
 func RequireCarrier(w http.ResponseWriter, r *http.Request) (*Carrier, bool) {
 	carrier := CarrierFrom(r.Context())
 	if carrier == nil {
-		protocol.WriteError(w, http.StatusInternalServerError, "pipeline_misconfigured",
+		protocol.WriteError(w, http.StatusInternalServerError, string(protocol.CodePipelineMisconfigured),
 			"no request carrier assembled")
 		return nil, false
 	}

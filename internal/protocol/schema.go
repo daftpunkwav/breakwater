@@ -139,6 +139,41 @@ const (
 	CodeGovernanceUnavailable Code = "governance_unavailable"
 )
 
+// Gateway failure codes close the rest of the vocabulary: the codes
+// the relay and the inference handler render when the gateway itself
+// fails a request (no route, breaker open, candidates saturated, retry
+// budget spent, upstream unreachable), refuses it at routing time
+// (model disabled or unknown, prompt over the input ceiling), or
+// detects an inconsistently assembled chain. They join the governance
+// rejections above and the in-stream codes in sse.go in one Code
+// vocabulary; budget exhaustion shares its code with the in-stream
+// abort (CodeBudgetExhausted) because the condition is the same. Every
+// render site stamps the same constant into the envelope it writes and
+// the failure code it reports, so the wire and the access log cannot
+// drift. The values are pinned by TestGatewayFailureCodeValues.
+const (
+	// CodeNoUpstream marks a 502: the model has no upstream candidate.
+	CodeNoUpstream Code = "no_upstream"
+	// CodeCircuitOpen marks a 503: every candidate is unavailable —
+	// breaker-open at attempt time, or ineligible at routing time.
+	CodeCircuitOpen Code = "circuit_open"
+	// CodeUpstreamSaturated marks a 503: every candidate sits at its
+	// in-flight ceiling.
+	CodeUpstreamSaturated Code = "upstream_saturated"
+	// CodeUpstreamUnreachable marks a 502: the upstream did not answer.
+	CodeUpstreamUnreachable Code = "upstream_unreachable"
+	// CodeModelDisabled marks a 403: an operator switched the model off.
+	CodeModelDisabled Code = "model_disabled"
+	// CodeModelNotFound marks a 404: no upstream serves the model.
+	CodeModelNotFound Code = "model_not_found"
+	// CodeContextWindowExceeded marks a 413: the prompt exceeds the
+	// model's declared input ceiling.
+	CodeContextWindowExceeded Code = "context_window_exceeded"
+	// CodePipelineMisconfigured marks a 500: a route was assembled
+	// without the per-request carrier the chain contract provides.
+	CodePipelineMisconfigured Code = "pipeline_misconfigured"
+)
+
 // WriteError renders an error envelope with the given HTTP status.
 func WriteError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")

@@ -147,7 +147,7 @@ func Middleware(store Cache, flight *Flight, ttl time.Duration, metrics *obs.Met
 				// response-less fetch, and every waiter, still owes one.
 				if (!owner || fetch.Status() < 100) && r.Context().Err() == nil {
 					protocol.WireFor(carrier.Format).RenderError(w, http.StatusBadGateway,
-						"upstream_unreachable", "the shared fetch for this request failed")
+						string(protocol.CodeUpstreamUnreachable), "the shared fetch for this request failed")
 				}
 				return
 			}

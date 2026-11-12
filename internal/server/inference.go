@@ -123,8 +123,8 @@ func NewInference(format protocol.Format, priority router.Router, relayer *relay
 func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	carrier := pipeline.CarrierFrom(r.Context())
 	if carrier == nil {
-		protocol.WireFor(s.format).RenderError(w, http.StatusInternalServerError, "pipeline_misconfigured",
-			"no request carrier assembled")
+		protocol.WireFor(s.format).RenderError(w, http.StatusInternalServerError,
+			string(protocol.CodePipelineMisconfigured), "no request carrier assembled")
 		return
 	}
 	wire := protocol.WireFor(carrier.Format)
@@ -147,8 +147,8 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// rejections: the access log carries the code the envelope
 		// rendered, so the stability report records the gateway cause
 		// instead of reading an empty code as an upstream passthrough.
-		carrier.RejectCode = code
-		wire.RenderError(w, status, code, message)
+		carrier.RejectCode = string(code)
+		wire.RenderError(w, status, string(code), message)
 		return
 	}
 
@@ -164,8 +164,8 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// governance rejections: without the stamp the access log carries
 		// an empty code, which the stability report reads as an upstream
 		// error passthrough instead of this gateway-side decision.
-		carrier.RejectCode = "context_window_exceeded"
-		wire.RenderError(w, http.StatusRequestEntityTooLarge, "context_window_exceeded",
+		carrier.RejectCode = string(protocol.CodeContextWindowExceeded)
+		wire.RenderError(w, http.StatusRequestEntityTooLarge, string(protocol.CodeContextWindowExceeded),
 			"prompt does not fit any candidate model for "+carrier.Chat.Model)
 		return
 	}
@@ -229,23 +229,23 @@ func (s *Inference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // the status, code and message the inference endpoints render, so every
 // format renders the same condition identically. It is a pure mapping:
 // the caller stamps the code on the carrier at the decision point.
-func candidatesRejection(model string, err error) (int, string, string) {
+func candidatesRejection(model string, err error) (int, protocol.Code, string) {
 	switch {
 	case errors.Is(err, router.ErrDisabled):
 		// An operator switched the model off: a deliberate refusal,
 		// distinct from a configuration gap (404) and a health
 		// condition (503).
-		return http.StatusForbidden, "model_disabled",
+		return http.StatusForbidden, protocol.CodeModelDisabled,
 			"model " + model + " is disabled by the operator"
 	case errors.Is(err, router.ErrUnavailable):
 		// The model exists but every binding is ineligible: the
 		// same fast-fail contract the executor renders at attempt
 		// time, so the condition reads identically wherever it is
 		// detected.
-		return http.StatusServiceUnavailable, "circuit_open",
+		return http.StatusServiceUnavailable, protocol.CodeCircuitOpen,
 			"every upstream serving model " + model + " is unavailable"
 	default:
-		return http.StatusNotFound, "model_not_found",
+		return http.StatusNotFound, protocol.CodeModelNotFound,
 			"no upstream serves model " + model
 	}
 }

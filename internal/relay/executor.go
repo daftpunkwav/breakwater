@@ -277,11 +277,11 @@ type Result struct {
 	// response completed.
 	ClientGone bool
 	// ErrorCode is the gateway-originated failure code when the gateway
-	// itself rendered the error: no_upstream, circuit_open,
-	// upstream_saturated, budget_exhausted, upstream_unreachable, or the
-	// in-stream abort code of a broken stream. Upstream error
-	// passthroughs leave it empty — their status code is the failure
-	// classification.
+	// itself rendered the error: one of the gateway failure constants
+	// of package protocol (no_upstream, circuit_open, upstream_saturated,
+	// budget_exhausted, upstream_unreachable), or the in-stream abort
+	// code of a broken stream. Upstream error passthroughs leave it
+	// empty — their status code is the failure classification.
 	ErrorCode string
 }
 
@@ -366,9 +366,9 @@ func (e *Executor) Execute(ctx context.Context, job Job) Result {
 		if wire == nil {
 			wire = protocol.WireFor("")
 		}
-		wire.RenderError(job.Out, http.StatusBadGateway, "no_upstream",
+		wire.RenderError(job.Out, http.StatusBadGateway, string(protocol.CodeNoUpstream),
 			"no upstream candidate available for model "+job.Model)
-		return Result{Status: http.StatusBadGateway, ErrorCode: "no_upstream"}
+		return Result{Status: http.StatusBadGateway, ErrorCode: string(protocol.CodeNoUpstream)}
 	}
 
 	wire := job.Wire
@@ -565,23 +565,17 @@ func (r *requestRun) finish(err error) Result {
 			Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes}
 
 	case errors.Is(err, errCircuitOpen):
-		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "circuit_open",
-			"all upstream candidates are unavailable")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			Trail: r.trail, ErrorCode: "circuit_open"}
+		return r.fail(gatewayFailure{status: http.StatusServiceUnavailable, code: protocol.CodeCircuitOpen,
+			message: "all upstream candidates are unavailable"})
 
 	case errors.Is(err, errUpstreamSaturated):
-		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "upstream_saturated",
-			"every upstream candidate for model "+job.Model+" is at its in-flight ceiling")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			Trail: r.trail, ErrorCode: "upstream_saturated"}
+		return r.fail(gatewayFailure{status: http.StatusServiceUnavailable, code: protocol.CodeUpstreamSaturated,
+			message: "every upstream candidate for model " + job.Model + " is at its in-flight ceiling"})
 
 	case errors.Is(err, retry.ErrBudgetExhausted):
 		r.exec.metrics.RetryBudgetExhausted()
-		r.wire.RenderError(job.Out, http.StatusServiceUnavailable, "budget_exhausted",
-			"retry budget exhausted before an upstream answered")
-		return Result{Status: http.StatusServiceUnavailable, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			Trail: r.trail, ErrorCode: "budget_exhausted"}
+		return r.fail(gatewayFailure{status: http.StatusServiceUnavailable, code: protocol.CodeBudgetExhausted,
+			message: "retry budget exhausted before an upstream answered"})
 
 	case r.lastFailed != nil && errors.Is(err, r.lastFailedErr):
 		r.wire.RenderUpstreamError(job.Out, r.lastFailed.status, r.lastFailed.header, r.lastFailed.body)
@@ -592,10 +586,30 @@ func (r *requestRun) finish(err error) Result {
 		// The transport error's text carries the upstream URL and
 		// network internals; the client gets the stable code only, the
 		// details stay with the server side (correlate via request id).
-		r.wire.RenderError(job.Out, http.StatusBadGateway, "upstream_unreachable",
-			"upstream did not answer")
-		return Result{Status: http.StatusBadGateway, Attempts: r.attempts, Retries: r.retries, StreamBytes: r.streamBytes,
-			Trail: r.trail, ErrorCode: "upstream_unreachable"}
+		return r.fail(gatewayFailure{status: http.StatusBadGateway, code: protocol.CodeUpstreamUnreachable,
+			message: "upstream did not answer"})
+	}
+}
+
+// gatewayFailure is one gateway-originated failure branch of the
+// attempt loop: the client envelope it renders and the classification
+// the observation stages record, decided in one place.
+type gatewayFailure struct {
+	status  int
+	code    protocol.Code
+	message string
+}
+
+// fail renders the failure envelope and closes the Result from the
+// same decision: the code the client sees and the ErrorCode the access
+// log records are one value, so the wire and the taxonomy cannot
+// drift.
+func (r *requestRun) fail(f gatewayFailure) Result {
+	r.wire.RenderError(r.job.Out, f.status, string(f.code), f.message)
+	return Result{
+		Status: f.status, Attempts: r.attempts, Retries: r.retries,
+		StreamBytes: r.streamBytes, Trail: r.trail,
+		ErrorCode: string(f.code),
 	}
 }
 
